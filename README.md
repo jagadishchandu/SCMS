@@ -1,1 +1,1 @@
-# SCMS
+# SCMS (School Child Monitoring system)
