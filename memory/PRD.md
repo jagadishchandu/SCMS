@@ -228,15 +228,50 @@ See `/app/memory/test_credentials.md`.
 
 **Verified live**: trigger sent 2 messages (WhatsApp + Email) in Hindi to `principal@sunrise.edu`, with subject *"Your SCMS subscription expires in 5 day(s)"*.
 
+## v1.8 — Subscription expiry guard ENABLED + grace period + UI banner (2026-05-15)
+
+**P2 — Auto-disable school features after `valid_until`**
+- `ENABLE_SUBSCRIPTION_GUARD` is now **enabled by default** (was opt-in).
+- New env var `SUBSCRIPTION_GRACE_DAYS` (default 3): writes still pass during this window after `valid_until`; only beyond grace are they blocked with `402`.
+- Middleware response includes both `valid_until` AND `grace_until` plus a `renew_url`.
+
+**`/auth/me` and `/auth/login` enriched**
+- Both now return a compact `subscription_state` snapshot for the UI:
+  ```json
+  {"status":"active","valid_until":"...","grace_until":"...","days_left":5,
+   "is_expiring_soon":true,"is_in_grace":false,"is_expired":false}
+  ```
+- Also includes `school_name`, `school_language`, `school_branding` (saves an extra fetch).
+
+**Frontend banner**
+- New `SubscriptionBanner.jsx` component, mounted in `AppLayout` below the topbar.
+- Three states (amber/red/red): expiring soon (≤7d), in grace, expired.
+- "Renew now" button (school admin only) links to `/school/subscription`.
+- `data-testid="subscription-banner"` and `data-testid="banner-renew-btn"`.
+
+**Axios interceptor**
+- On `402 + code='subscription_expired'`, the app now auto-redirects school admins to `/school/subscription` after a short delay so they can pay without hunting through the menu.
+
+**Bug fixes (uncovered by new tests)**
+- `routes/auth.py:login()` now normalises naive `locked_until` from Mongo to UTC-aware before comparison (was throwing 500 instead of 401/429 for stale lock rows).
+- `tests/backend_test.py::test_login_invalid` now uses a unique random email per run so previous lock state doesn't bleed in.
+- `tests/backend_test.py::test_audit_after_create_student` uses `limit=1000` so audit growth is visible past the default 200-row page cap.
+
+**New tests**
+- `backend/tests/test_subscription_guard.py` — 9 tests covering healthy / grace / expired / read-pass / auth-pass / sub-pass / payment-still-submittable / platform-admin-never-gated / state-flag-correctness.
+
+### Test status (cumulative)
+- **Backend: 162/162** (was 145; +17 new, fixed 2 pre-existing brittle tests).
+- **Frontend smoke**: banner renders correctly in amber for 5-days-left, red for expired (screenshot verified).
+
 ## Prioritized Backlog (refreshed)
 ### P1
-- Stripe / Razorpay automated subscription payments (replace manual confirmation + nudge for self-renewal)
+- Stripe / Razorpay automated subscription payments (replace manual confirmation)
 
 ### P2
-- Wire uploads (photos, medical certs, PDF receipts) to Azure Blob once `AZURE_STORAGE_CONNECTION_STRING` is filled
-- "Send test email" button on /school/settings to validate SMTP creds before relying on digest/nudge
-- Per-school WhatsApp template editing UI (if needed later)
-- Auto-disable school features after `valid_until` (toggle `ENABLE_SUBSCRIPTION_GUARD=true` to switch on)
+- Wire uploads (photos, medical certs, PDF receipts) to Azure Blob once `AZURE_STORAGE_CONNECTION_STRING` is set
+- "Send test email" button on /school/settings to validate SMTP creds
+- Recovery nudges post-expiry (day 1 / 3 / 7) before full lockout
 
 ### P3
 - React Native shell reusing the same API

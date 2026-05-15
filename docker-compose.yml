@@ -27,7 +27,8 @@ services:
       CORS_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000"
       # Feature gates (default off; flip to "true" in your env to enable)
       ENABLE_DIGEST_SCHEDULER: "${ENABLE_DIGEST_SCHEDULER:-false}"
-      ENABLE_SUBSCRIPTION_GUARD: "${ENABLE_SUBSCRIPTION_GUARD:-false}"
+      ENABLE_SUBSCRIPTION_GUARD: "${ENABLE_SUBSCRIPTION_GUARD:-true}"
+      SUBSCRIPTION_GRACE_DAYS: "${SUBSCRIPTION_GRACE_DAYS:-3}"
       # Twilio (optional — leave blank to keep notifications queued)
       TWILIO_ACCOUNT_SID: "${TWILIO_ACCOUNT_SID:-}"
       TWILIO_AUTH_TOKEN: "${TWILIO_AUTH_TOKEN:-}"

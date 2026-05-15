@@ -11,7 +11,7 @@ from core.utils import clean_doc, utc_now
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-@router.post("/login", response_model=UserOut)
+@router.post("/login")
 async def login(payload: LoginRequest, response: Response, request: Request):
     db = get_db()
     email = payload.email.lower()
@@ -19,13 +19,25 @@ async def login(payload: LoginRequest, response: Response, request: Request):
     ip = request.client.host if request.client else "unknown"
     identifier = f"{ip}:{email}"
     attempt = await db.login_attempts.find_one({"identifier": identifier})
-    if attempt and attempt.get("locked_until") and attempt["locked_until"] > utc_now():
-        raise HTTPException(status_code=429, detail="Too many failed attempts. Try again later.")
+    if attempt and attempt.get("locked_until"):
+        from datetime import timezone as _tz
+        lu = attempt["locked_until"]
+        if lu.tzinfo is None:
+            lu = lu.replace(tzinfo=_tz.utc)
+        if lu > utc_now():
+            raise HTTPException(status_code=429, detail="Too many failed attempts. Try again later.")
 
     user = await db.users.find_one({"email": email})
     if not user or not verify_password(payload.password, user["password_hash"]):
         # increment failures
-        from datetime import timedelta
+        from datetime import timedelta, timezone
+        # Normalise lock time to UTC-aware before comparison (Mongo may return naive)
+        if attempt and attempt.get("locked_until"):
+            lu = attempt["locked_until"]
+            if lu.tzinfo is None:
+                lu = lu.replace(tzinfo=timezone.utc)
+            if lu > utc_now():
+                raise HTTPException(status_code=429, detail="Too many failed attempts. Try again later.")
         fails = (attempt["fails"] if attempt else 0) + 1
         update = {"fails": fails, "last_at": utc_now()}
         if fails >= 5:
@@ -47,7 +59,19 @@ async def login(payload: LoginRequest, response: Response, request: Request):
     access = create_access_token(user["id"], user["email"], user["role"], user.get("school_id"))
     refresh = create_refresh_token(user["id"])
     set_auth_cookies(response, access, refresh)
-    return clean_doc(user)
+    out = clean_doc(user)
+    # Attach subscription state + school metadata so the UI banner renders immediately on login
+    if user.get("school_id"):
+        school = await db.schools.find_one(
+            {"id": user["school_id"]},
+            {"_id": 0, "subscription": 1, "name": 1, "language": 1, "branding": 1},
+        ) or {}
+        from core.subscription_guard import compute_subscription_state
+        out["subscription_state"] = compute_subscription_state(school.get("subscription"))
+        out["school_name"] = school.get("name")
+        out["school_language"] = school.get("language") or "en"
+        out["school_branding"] = school.get("branding") or {}
+    return out
 
 
 @router.post("/logout")
@@ -56,6 +80,19 @@ async def logout(response: Response, user: dict = Depends(get_current_user)):
     return {"ok": True}
 
 
-@router.get("/me", response_model=UserOut)
+@router.get("/me")
 async def me(user: dict = Depends(get_current_user)):
-    return user
+    db = get_db()
+    out = dict(user)
+    # Attach a compact subscription snapshot so the UI can render an expiry banner.
+    if user.get("school_id"):
+        school = await db.schools.find_one(
+            {"id": user["school_id"]},
+            {"_id": 0, "subscription": 1, "name": 1, "language": 1, "branding": 1},
+        ) or {}
+        from core.subscription_guard import compute_subscription_state
+        out["subscription_state"] = compute_subscription_state(school.get("subscription"))
+        out["school_name"] = school.get("name")
+        out["school_language"] = school.get("language") or "en"
+        out["school_branding"] = school.get("branding") or {}
+    return clean_doc(out)

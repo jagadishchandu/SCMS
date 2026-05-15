@@ -62,8 +62,11 @@ def test_health():
 
 class TestAuth:
     def test_login_invalid(self):
-        r = requests.post(f"{API}/auth/login", json={"email": "x@y.com", "password": "bad"}, timeout=15)
-        assert r.status_code in (400, 401)
+        # Use a unique fake email so we never hit the brute-force lock from previous runs/tests
+        import uuid
+        fake = f"nobody-{uuid.uuid4().hex[:8]}@example.com"
+        r = requests.post(f"{API}/auth/login", json={"email": fake, "password": "bad"}, timeout=15)
+        assert r.status_code in (400, 401), r.status_code
 
     @pytest.mark.parametrize("role", [r for r in CREDS.keys() if r != "platform_admin_old"])
     def test_login_all_roles(self, role):
@@ -425,8 +428,8 @@ class TestAudit:
         assert isinstance(r.json(), list)
 
     def test_audit_after_create_student(self, school_session):
-        # Capture current count
-        before = school_session.get(f"{API}/audit", timeout=15).json()
+        # Capture current count (limit high so growth is visible past the default page cap)
+        before = school_session.get(f"{API}/audit", params={"limit": 1000}, timeout=15).json()
         before_n = len(before)
 
         classes = school_session.get(f"{API}/academic/classes", timeout=15).json()
@@ -442,7 +445,7 @@ class TestAudit:
         r = school_session.post(f"{API}/students", json=payload, timeout=20)
         assert r.status_code in (200, 201), r.text
 
-        after = school_session.get(f"{API}/audit", timeout=15).json()
+        after = school_session.get(f"{API}/audit", params={"limit": 1000}, timeout=15).json()
         assert len(after) > before_n, f"audit should grow, before={before_n} after={len(after)}"
         # at least one create / student entry
         match = [a for a in after if a.get("action") == "create" and a.get("resource") == "student"
