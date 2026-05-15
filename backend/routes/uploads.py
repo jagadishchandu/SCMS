@@ -73,12 +73,25 @@ async def template(kind: str, _: dict = Depends(require_roles("school_admin", "t
 
 # ---------- Students ----------
 @router.post("/students")
-async def upload_students(file: UploadFile = File(...), user: dict = Depends(require_roles("school_admin"))):
+async def upload_students(file: UploadFile = File(...), user: dict = Depends(require_roles("school_admin", "teacher"))):
     db = get_db()
+    # If teacher, restrict to their assigned (class_id, section) pairs
+    allowed_class_sections = None
+    if user["role"] == "teacher":
+        from routes.students import _teacher_class_filter
+        tflt = await _teacher_class_filter(db, user)
+        if not tflt or tflt.get("_blocked_"):
+            raise HTTPException(status_code=403, detail="You are not assigned to any class yet")
+        allowed_class_sections = {(c["class_id"], c["section"]) for c in tflt.get("$or", [])}
     rows = _read_excel(await file.read())
     inserted, errors = 0, []
     for idx, r in enumerate(rows, start=2):
         try:
+            row_class = r.get("class_id")
+            row_section = r.get("section") or "A"
+            if allowed_class_sections is not None and (row_class, row_section) not in allowed_class_sections:
+                errors.append({"row": idx, "error": "Class/section not in your assigned classes"})
+                continue
             from core.auth import hash_password
             count = await db.students.count_documents({"school_id": user["school_id"]})
             uid = f"STU-{(count + 1):05d}"

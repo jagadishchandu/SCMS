@@ -59,8 +59,16 @@ async def list_students(
 
 
 @router.post("")
-async def create_student(payload: StudentCreate, user: dict = Depends(require_roles("school_admin"))):
+async def create_student(payload: StudentCreate, user: dict = Depends(require_roles("school_admin", "teacher"))):
     db = get_db()
+    # Teachers can only create students in classes/sections they teach
+    if user["role"] == "teacher":
+        tflt = await _teacher_class_filter(db, user)
+        if not tflt or tflt.get("_blocked_"):
+            raise HTTPException(status_code=403, detail="You are not assigned to any class yet")
+        allowed = {(c["class_id"], c["section"]) for c in tflt.get("$or", [])}
+        if (payload.class_id, payload.section) not in allowed:
+            raise HTTPException(status_code=403, detail="You can only add students to classes you teach")
     uid = payload.student_uid or await _gen_uid(db, user["school_id"])
     if await db.students.find_one({"school_id": user["school_id"], "student_uid": uid}):
         raise HTTPException(status_code=400, detail="Student UID already exists")

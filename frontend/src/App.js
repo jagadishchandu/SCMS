@@ -20,6 +20,7 @@ import StudentAnalytics from "./pages/shared/StudentAnalytics";
 import NotificationsLog from "./pages/shared/NotificationsLog";
 import CalendarPage from "./pages/shared/CalendarPage";
 import AuditLogPage from "./pages/shared/AuditLogPage";
+import SickLeavesPage from "./pages/shared/SickLeavesPage";
 
 // School Admin
 import SchoolDashboard from "./pages/school/SchoolDashboard";
@@ -96,6 +97,7 @@ export default function App() {
       <Route path="/school/audit" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(AuditLogPage)}</ProtectedRoute>} />
       <Route path="/school/settings" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(SchoolSettings)}</ProtectedRoute>} />
       <Route path="/school/subscription" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(SchoolSubscription)}</ProtectedRoute>} />
+      <Route path="/school/sick-leaves" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(SickLeavesPage)}</ProtectedRoute>} />
 
       {/* Teacher */}
       <Route path="/teacher" element={<ProtectedRoute allow={["teacher"]}>{withLayout(TeacherDashboard)}</ProtectedRoute>} />
@@ -106,9 +108,12 @@ export default function App() {
       <Route path="/teacher/timetable" element={<ProtectedRoute allow={["teacher"]}>{withLayout(MyTimetable)}</ProtectedRoute>} />
       <Route path="/teacher/performance" element={<ProtectedRoute allow={["teacher"]}>{withLayout(() => <TeacherPerformancePage self />)}</ProtectedRoute>} />
       <Route path="/teacher/calendar" element={<ProtectedRoute allow={["teacher"]}>{withLayout(CalendarPage)}</ProtectedRoute>} />
+      <Route path="/teacher/uploads" element={<ProtectedRoute allow={["teacher"]}>{withLayout(UploadsPage)}</ProtectedRoute>} />
+      <Route path="/teacher/sick-leaves" element={<ProtectedRoute allow={["teacher"]}>{withLayout(SickLeavesPage)}</ProtectedRoute>} />
 
       {/* Parent extras */}
       <Route path="/parent/calendar" element={<ProtectedRoute allow={["parent"]}>{withLayout(CalendarPage)}</ProtectedRoute>} />
+      <Route path="/parent/sick-leaves" element={<ProtectedRoute allow={["parent"]}>{withLayout(SickLeavesPage)}</ProtectedRoute>} />
 
       {/* Accounts */}
       <Route path="/accounts" element={<ProtectedRoute allow={["accounts"]}>{withLayout(AccountsDashboard)}</ProtectedRoute>} />

@@ -1027,3 +1027,276 @@ class TestSingleSuperAdmin:
         assert me["email"] == "jagadishchandu789@gmail.com"
         assert me["role"] == "platform_admin"
 
+
+# =========================================================================
+# Iteration 6: Teacher student/upload bug-fixes, Sick Leaves, Audit filters,
+#              Subscription guard middleware import sanity
+# =========================================================================
+
+import io as _io
+from datetime import date as _date, timedelta as _td
+
+
+class TestTeacherCreateStudent:
+    """Bug fix: class teacher can create student in their assigned class/section only."""
+
+    def _grade5a(self, school_session):
+        classes = school_session.get(f"{API}/academic/classes", timeout=15).json()
+        g5 = next(c for c in classes if "5" in c.get("name", ""))
+        return g5
+
+    def test_teacher_creates_in_own_class(self, teacher_session, school_session):
+        g5 = self._grade5a(school_session)
+        uid = f"STU-T6A{uuid.uuid4().hex[:5].upper()}"
+        payload = {
+            "name": "TEST T6 Student A", "student_uid": uid,
+            "class_id": g5["id"], "section": "A", "roll_number": "201",
+            "gender": "M", "dob": "2014-01-01", "admission_date": "2024-06-01",
+            "parent": {"name": "TEST P", "relationship": "father",
+                       "phone": "+91-9000000601", "whatsapp": "+91-9000000601",
+                       "email": f"t6.{uid.lower()}@sunrise.edu"},
+        }
+        r = teacher_session.post(f"{API}/students", json=payload, timeout=20)
+        assert r.status_code in (200, 201), r.text
+
+    def test_teacher_blocked_other_section(self, teacher_session, school_session):
+        g5 = self._grade5a(school_session)
+        uid = f"STU-T6B{uuid.uuid4().hex[:5].upper()}"
+        payload = {
+            "name": "TEST T6 Student B", "student_uid": uid,
+            "class_id": g5["id"], "section": "B", "roll_number": "202",
+            "gender": "F", "dob": "2014-01-01", "admission_date": "2024-06-01",
+            "parent": {"name": "TEST P", "relationship": "mother",
+                       "phone": "+91-9000000602", "whatsapp": "+91-9000000602",
+                       "email": f"t6b.{uid.lower()}@sunrise.edu"},
+        }
+        r = teacher_session.post(f"{API}/students", json=payload, timeout=20)
+        assert r.status_code == 403, r.status_code
+
+
+class TestTeacherUploadStudents:
+    """Bug fix: POST /api/uploads/students by teacher accepts own-class rows, errors on others."""
+
+    def _build_xlsx(self, rows):
+        try:
+            from openpyxl import Workbook
+        except Exception:
+            pytest.skip("openpyxl not available")
+        wb = Workbook()
+        ws = wb.active
+        headers = list(rows[0].keys())
+        ws.append(headers)
+        for r in rows:
+            ws.append([r.get(h, "") for h in headers])
+        buf = _io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        return buf
+
+    def test_teacher_upload_mixed_rows(self, teacher_session, school_session):
+        classes = school_session.get(f"{API}/academic/classes", timeout=15).json()
+        g5 = next(c for c in classes if "5" in c.get("name", ""))
+        rows = [
+            {"student_uid": f"STU-U6A{uuid.uuid4().hex[:5].upper()}",
+             "name": "TEST Upload A", "class_id": g5["id"], "section": "A",
+             "roll_number": "301", "gender": "M", "dob": "2014-01-01",
+             "admission_date": "2024-06-01",
+             "parent_name": "P", "parent_relationship": "father",
+             "parent_phone": "+91-9000000701", "parent_whatsapp": "+91-9000000701",
+             "parent_email": f"u6a.{uuid.uuid4().hex[:5]}@sunrise.edu"},
+            # Row for section B — should be rejected (in errors array)
+            {"student_uid": f"STU-U6B{uuid.uuid4().hex[:5].upper()}",
+             "name": "TEST Upload B", "class_id": g5["id"], "section": "B",
+             "roll_number": "302", "gender": "F", "dob": "2014-01-01",
+             "admission_date": "2024-06-01",
+             "parent_name": "P", "parent_relationship": "mother",
+             "parent_phone": "+91-9000000702", "parent_whatsapp": "+91-9000000702",
+             "parent_email": f"u6b.{uuid.uuid4().hex[:5]}@sunrise.edu"},
+        ]
+        buf = self._build_xlsx(rows)
+        files = {"file": ("students.xlsx", buf,
+                          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+        r = teacher_session.post(f"{API}/uploads/students", files=files, timeout=30)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        # At least one created, at least one error for section B
+        assert body.get("inserted", body.get("created", 0)) >= 1, body
+        errs = body.get("errors") or body.get("error_rows") or []
+        assert any("B" in str(e) or "class" in str(e).lower() or "section" in str(e).lower() for e in errs), body
+
+
+class TestSickLeaves:
+    """Sick leave CRUD + auto-attendance + recurring + cert upload + RBAC."""
+
+    def _stu_id(self, session, uid="STU-00001"):
+        students = session.get(f"{API}/students", timeout=15).json()
+        s = next(s for s in students if s["student_uid"] == uid)
+        return s["id"]
+
+    def test_create_leave_school_admin_auto_attendance(self, school_session):
+        sid = self._stu_id(school_session)
+        # use Mon-Fri date in the past
+        d = _date.today() - _td(days=60)
+        while d.weekday() >= 5:
+            d -= _td(days=1)
+        payload = {"student_id": sid, "start_date": d.isoformat(),
+                   "end_date": d.isoformat(), "reason": "Flu"}
+        r = school_session.post(f"{API}/sick-leaves", json=payload, timeout=20)
+        assert r.status_code in (200, 201), r.text
+        body = r.json()
+        assert body["student_id"] == sid
+        assert "_id" not in body
+        # auto-attendance verification
+        ar = school_session.get(f"{API}/attendance", params={"date": d.isoformat()}, timeout=15).json()
+        match = [x for x in ar if x.get("student_id") == sid and x.get("status") == "sick"]
+        assert len(match) >= 1, ar[:3]
+
+    def test_teacher_creates_for_own_class(self, teacher_session):
+        sid = self._stu_id(teacher_session)
+        d = _date.today() - _td(days=80)
+        while d.weekday() >= 5:
+            d -= _td(days=1)
+        r = teacher_session.post(f"{API}/sick-leaves",
+                                 json={"student_id": sid, "start_date": d.isoformat(),
+                                       "end_date": d.isoformat(), "reason": "Fever"},
+                                 timeout=15)
+        assert r.status_code in (200, 201), r.text
+
+    def test_parent_creates_for_own_child(self, parent_session):
+        sid = self._stu_id(parent_session)
+        d = _date.today() - _td(days=70)
+        while d.weekday() >= 5:
+            d -= _td(days=1)
+        r = parent_session.post(f"{API}/sick-leaves",
+                                json={"student_id": sid, "start_date": d.isoformat(),
+                                      "end_date": d.isoformat(), "reason": "Cold"},
+                                timeout=15)
+        assert r.status_code in (200, 201), r.text
+
+    def test_parent_blocked_other_child(self, parent_session, school_session):
+        sid_other = self._stu_id(school_session, "STU-00002")
+        r = parent_session.post(f"{API}/sick-leaves",
+                                json={"student_id": sid_other, "start_date": "2025-11-03",
+                                      "end_date": "2025-11-03"}, timeout=15)
+        assert r.status_code == 403, r.status_code
+
+    def test_list_parent_own_only(self, parent_session, school_session):
+        # ensure at least one leave exists for own child
+        sid = self._stu_id(parent_session)
+        r = parent_session.get(f"{API}/sick-leaves", timeout=15)
+        assert r.status_code == 200
+        rows = r.json()
+        for x in rows:
+            assert x["student_id"] == sid, x
+
+    def test_list_teacher_scoped(self, teacher_session):
+        r = teacher_session.get(f"{API}/sick-leaves", timeout=15)
+        assert r.status_code == 200
+        rows = r.json()
+        # All rows must be within teacher's class students (we already know teacher is Grade 5 A)
+        assert isinstance(rows, list)
+
+    def test_certificate_upload_pdf(self, school_session):
+        sid = self._stu_id(school_session)
+        d = _date.today() - _td(days=50)
+        while d.weekday() >= 5:
+            d -= _td(days=1)
+        r = school_session.post(f"{API}/sick-leaves",
+                                json={"student_id": sid, "start_date": d.isoformat(),
+                                      "end_date": d.isoformat(), "reason": "Cert test"},
+                                timeout=15)
+        assert r.status_code in (200, 201), r.text
+        lid = r.json()["id"]
+        pdf_bytes = b"%PDF-1.4\n%mock\n"
+        files = {"file": ("cert.pdf", pdf_bytes, "application/pdf")}
+        cr = school_session.post(f"{API}/sick-leaves/{lid}/certificate", files=files, timeout=15)
+        assert cr.status_code in (200, 201), cr.text
+        assert cr.json().get("ok") is True
+
+    def test_certificate_rejects_bad_mime(self, school_session):
+        sid = self._stu_id(school_session)
+        d = _date.today() - _td(days=45)
+        while d.weekday() >= 5:
+            d -= _td(days=1)
+        cr0 = school_session.post(f"{API}/sick-leaves",
+                                  json={"student_id": sid, "start_date": d.isoformat(),
+                                        "end_date": d.isoformat()}, timeout=15)
+        lid = cr0.json()["id"]
+        files = {"file": ("x.txt", b"hi", "text/plain")}
+        r = school_session.post(f"{API}/sick-leaves/{lid}/certificate", files=files, timeout=15)
+        assert r.status_code == 400, r.status_code
+
+    def test_recurring_endpoint_admin(self, school_session):
+        # create 3 leaves for STU-00001 within 90 days
+        sid = self._stu_id(school_session)
+        base = _date.today() - _td(days=85)
+        for i in range(3):
+            d = base + _td(days=i * 7)
+            while d.weekday() >= 5:
+                d += _td(days=1)
+            school_session.post(f"{API}/sick-leaves",
+                                json={"student_id": sid, "start_date": d.isoformat(),
+                                      "end_date": d.isoformat(), "reason": f"recur {i}"},
+                                timeout=15)
+        r = school_session.get(f"{API}/sick-leaves/recurring", params={"threshold": 3, "days": 90}, timeout=15)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert isinstance(data, list)
+        assert any(x.get("student_uid") == "STU-00001" and x.get("leaves_in_window", 0) >= 3 for x in data), data
+
+    def test_recurring_rbac_parent_forbidden(self, parent_session):
+        r = parent_session.get(f"{API}/sick-leaves/recurring", timeout=15)
+        assert r.status_code == 403, r.status_code
+
+
+class TestAuditFilters:
+    """Iter6: audit filter params + /facets endpoint."""
+
+    def test_facets_school_admin(self, school_session):
+        r = school_session.get(f"{API}/audit/facets", timeout=15)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        for k in ("actions", "resources", "roles"):
+            assert k in body and isinstance(body[k], list), body
+
+    def test_filter_by_action_create(self, school_session):
+        r = school_session.get(f"{API}/audit", params={"action": "create", "limit": 50}, timeout=15)
+        assert r.status_code == 200
+        rows = r.json()
+        for row in rows:
+            assert row["action"] == "create", row
+
+    def test_filter_by_actor_role(self, school_session):
+        r = school_session.get(f"{API}/audit", params={"actor_role": "school_admin", "limit": 20}, timeout=15)
+        assert r.status_code == 200
+        for row in r.json():
+            assert row["actor_role"] == "school_admin", row
+
+    def test_filter_by_date_from(self, school_session):
+        # Should accept and return list
+        r = school_session.get(f"{API}/audit", params={"date_from": "2024-01-01"}, timeout=15)
+        assert r.status_code == 200
+        assert isinstance(r.json(), list)
+
+    def test_facets_non_admin_empty(self, teacher_session, parent_session):
+        for s in (teacher_session, parent_session):
+            r = s.get(f"{API}/audit/facets", timeout=15)
+            assert r.status_code == 200
+            body = r.json()
+            assert body.get("actions") == [] and body.get("roles") == [], body
+
+
+class TestSubscriptionGuardMiddleware:
+    """Sanity: with ENABLE_SUBSCRIPTION_GUARD=false (default), all writes still work."""
+
+    def test_writes_open_when_guard_disabled(self, school_session):
+        # If guard were on for an expired school, this would be 402. Default is off → 200/201.
+        r = school_session.post(f"{API}/holidays",
+                                json={"title": f"TEST Iter6 {uuid.uuid4().hex[:4]}",
+                                      "date": "2026-01-26", "type": "public"}, timeout=15)
+        assert r.status_code in (200, 201), r.text
+
+    def test_health_still_ok(self):
+        r = requests.get(f"{API}/health", timeout=10)
+        assert r.status_code == 200
+

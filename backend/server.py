@@ -34,6 +34,7 @@ from routes.receipts import router as receipts_router
 from routes.calendar_route import router as calendar_router
 from routes.digests import router as digests_router
 from routes.activities import router as activities_router
+from routes.sick_leaves import router as sick_leaves_router
 from core import scheduler as digest_scheduler
 
 
@@ -435,6 +436,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Subscription expiry gate (opt-in via env)
+from core.subscription_guard import SubscriptionGuardMiddleware, is_enabled as _sub_guard_enabled
+if _sub_guard_enabled():
+    app.add_middleware(SubscriptionGuardMiddleware)
+    print("[startup] Subscription expiry guard ENABLED")
+
 api = APIRouter(prefix="/api")
 
 
@@ -472,5 +479,6 @@ api.include_router(receipts_router)
 api.include_router(calendar_router)
 api.include_router(digests_router)
 api.include_router(activities_router)
+api.include_router(sick_leaves_router)
 
 app.include_router(api)

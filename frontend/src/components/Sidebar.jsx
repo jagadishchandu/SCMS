@@ -6,7 +6,7 @@ import {
   House, Buildings, GraduationCap, ClipboardText, ChartLineUp,
   Calendar, BookOpen, Receipt, BellRinging, UploadSimple,
   Gauge, ChalkboardTeacher, SignOut, ChartPieSlice, FileText, MagnifyingGlass,
-  ShieldCheck, Package, X,
+  ShieldCheck, Package, X, Heartbeat,
 } from "@phosphor-icons/react";
 
 const NAV_BY_ROLE = {
@@ -30,6 +30,7 @@ const NAV_BY_ROLE = {
     { to: "/school/fees", label: "Fees", icon: Receipt },
     { to: "/school/timetable", label: "Timetable", icon: Calendar },
     { to: "/school/activities", label: "Activities", icon: ChartLineUp },
+    { to: "/school/sick-leaves", label: "Sick Leaves", icon: Heartbeat },
     { to: "/school/performance", label: "Teacher Performance", icon: ChartLineUp },
     { to: "/school/notifications", label: "Notifications", icon: BellRinging },
     { to: "/school/uploads", label: "Bulk Uploads", icon: UploadSimple },
@@ -44,6 +45,8 @@ const NAV_BY_ROLE = {
     { to: "/teacher/attendance", label: "Attendance (grid)", icon: ClipboardText },
     { to: "/teacher/marks", label: "Enter Marks", icon: FileText },
     { to: "/teacher/students", label: "My Students", icon: GraduationCap },
+    { to: "/teacher/uploads", label: "Bulk Uploads", icon: UploadSimple },
+    { to: "/teacher/sick-leaves", label: "Sick Leaves", icon: Heartbeat },
     { to: "/teacher/timetable", label: "My Timetable", icon: Calendar },
     { to: "/teacher/calendar", label: "Calendar", icon: Calendar },
     { to: "/teacher/performance", label: "My Performance", icon: ChartLineUp },
@@ -58,6 +61,7 @@ const NAV_BY_ROLE = {
   parent: [
     { to: "/parent", label: "My Child", icon: House, end: true },
     { to: "/parent/calendar", label: "Calendar", icon: Calendar },
+    { to: "/parent/sick-leaves", label: "Sick Leaves", icon: Heartbeat },
   ],
 };
 
