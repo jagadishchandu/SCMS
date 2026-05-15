@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useAuth } from "../contexts/AuthContext";
-import { useNavigate, Navigate } from "react-router-dom";
+import { useNavigate, Navigate, Link } from "react-router-dom";
 import { ROLE_HOME, ROLE_LABELS } from "../lib/utils";
 import toast from "react-hot-toast";
 import { GraduationCap, ArrowRight, IdentificationCard } from "@phosphor-icons/react";
@@ -130,6 +130,11 @@ export default function Login() {
                 value={password} onChange={(e) => setPassword(e.target.value)}
                 data-testid="login-password-input"
               />
+              <div className="flex justify-end mt-1.5">
+                <Link to="/forgot-password" className="text-xs text-ink-muted hover:text-primary" data-testid="forgot-password-link">
+                  Forgot password?
+                </Link>
+              </div>
             </div>
             <button type="submit" disabled={loading} className="btn-primary w-full" data-testid="login-submit-btn">
               {loading ? "Signing in…" : (<>Sign in <ArrowRight size={16} /></>)}

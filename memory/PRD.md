@@ -343,15 +343,49 @@ See `/app/memory/test_credentials.md`.
 - **Backend: 194/194 pass** (was 180; +14 new e2e tests).
 - **Frontend smoke**: change-password modal verified live — original password rejected after change, new password works, then reverted back.
 
+## v1.13 — Password reset via Telegram OTP (2026-05-15)
+
+**Forgot-password flow that survives lost passwords without email**
+- New backend endpoints (both unauthenticated, both under `/api/auth/` so they pass the subscription guard):
+  - `POST /api/auth/password-reset/request { email }` — generates a 6-digit CSPRNG OTP, stores its **bcrypt hash** (never plaintext) in `password_reset_codes` with 10-minute expiry, sends the plaintext OTP to the user's linked `telegram_chat_id` via `core/telegram_sender.send_telegram`. Returns a generic message (`"If an account with that email exists and has Telegram linked…"`) regardless of outcome — blocks email-enumeration.
+  - `POST /api/auth/password-reset/verify { email, code, new_password }` — verifies code against the stored hash, enforces TTL (10 min) + attempt cap (5 wrong tries) + min length (6), then sets the new password and consumes the code. Also clears any brute-force `login_attempts` lock for that email so the user can immediately log in.
+- 30-second cooldown between requests for the same email (silently honoured).
+- Issuing a new request invalidates any older unconsumed codes (`consumed_reason=superseded`).
+- Audit log entries: `password_reset_request`, `password_reset_request_no_telegram`, `password_reset_complete`.
+
+**Frontend**
+- New page `/forgot-password` (`pages/ForgotPassword.jsx`) — two-step UI:
+  - Step 1: enter email → "Send code to Telegram"
+  - Step 2: enter 6-digit OTP + new password + confirm → "Update password" → redirect to `/login`
+  - Resend button + "Change email" back navigation
+  - data-testids: `forgot-password-page`, `forgot-email-input`, `forgot-send-code-btn`, `forgot-code-input`, `forgot-newpw-input`, `forgot-confirmpw-input`, `forgot-verify-btn`, `forgot-resend-btn`, `forgot-step-back`, `forgot-back-to-login`.
+- "Forgot password?" link added under the password input on `/login` (`forgot-password-link`).
+
+**New tests — `backend/tests/test_password_reset.py` (10 cases)**
+- request returns generic when email unknown
+- request returns generic when email exists but has no Telegram linked
+- request creates a hashed code record when telegram_chat_id is present (verifies hash, not plaintext, is stored)
+- verify with correct code updates password (old pw rejected, new pw works)
+- verify rejects invalid code with 400
+- verify rejects expired code with 400
+- verify returns 429 after 5 incorrect attempts
+- verify returns 400 when no active code exists
+- verify rejects short new password (< 6 chars)
+- consumed code cannot be reused
+
+### Test status (cumulative)
+- **Backend: 204/204 pass** (was 194; +10 new password-reset tests).
+- **Frontend smoke**: full forgot-password journey verified — Step 1 → Step 2 transition, invalid code toast, back-to-login navigation.
+
 ## Prioritized Backlog (refreshed)
 ### P1
 - Stripe / Razorpay automated subscription payments
-- Password Reset (forgot password) via SMTP — public endpoint for users who can't log in at all
 
 ### P2
 - Wire uploads (photos / medical certs / PDF receipts) to Azure Blob once `AZURE_STORAGE_CONNECTION_STRING` is filled
 - Recovery nudges post-expiry (day 1 / 3 / 7) before full lockout (i18n templates ready; scheduler wiring pending)
-- Meta WhatsApp template approval workflow (for messages outside 24-hour session)
+- Meta WhatsApp template approval workflow
+- Email channel for password reset (current flow is Telegram-only; useful for users without Telegram linked)
 
 ### P3
 - React Native shell reusing the same API

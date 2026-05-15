@@ -10,6 +10,7 @@ import AppLayout from "./layouts/AppLayout";
 
 // Pages
 import Login from "./pages/Login";
+import ForgotPassword from "./pages/ForgotPassword";
 
 // Platform
 import PlatformOverview from "./pages/platform/PlatformOverview";
@@ -69,6 +70,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/" element={<Home />} />
 
       {/* Platform Admin */}
