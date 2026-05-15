@@ -1,35 +1,78 @@
 import React, { useEffect, useState } from "react";
-import { api } from "../../lib/api";
+import { api, formatApiError } from "../../lib/api";
 import { PageHeader, KPI, Section, Empty } from "../../components/Primitives";
 import { currency, formatDate, CHART_COLORS } from "../../lib/utils";
+import { Camera, UserCircle, DownloadSimple, Receipt } from "@phosphor-icons/react";
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell, Legend } from "recharts";
+import toast from "react-hot-toast";
 
 export default function ParentPortal() {
   const [students, setStudents] = useState([]);
   const [selected, setSelected] = useState(null);
   const [dash, setDash] = useState(null);
+  const [payments, setPayments] = useState([]);
 
-  useEffect(() => {
-    api.get("/students").then((r) => {
-      setStudents(r.data);
-      if (r.data.length) setSelected(r.data[0]);
-    });
-  }, []);
+  const loadStudents = async () => {
+    const r = await api.get("/students");
+    setStudents(r.data);
+    if (r.data.length && !selected) setSelected(r.data[0]);
+    if (selected) {
+      const updated = r.data.find((s) => s.id === selected.id);
+      if (updated) setSelected(updated);
+    }
+  };
+
+  useEffect(() => { loadStudents(); /* eslint-disable-next-line */ }, []);
 
   useEffect(() => {
     if (!selected) return;
-    api.get(`/analytics/student/${selected.student_uid}`).then((r) => setDash(r.data));
+    Promise.all([
+      api.get(`/analytics/student/${selected.student_uid}`).then((r) => r.data),
+      api.get(`/fees/payments`, { params: { student_id: selected.id } }).then((r) => r.data),
+    ]).then(([d, p]) => { setDash(d); setPayments(p); });
   }, [selected]);
+
+  const onPhoto = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !selected) return;
+    try {
+      const fd = new FormData(); fd.append("file", file);
+      await api.post(`/students/${selected.id}/photo`, fd);
+      toast.success("Photo updated");
+      loadStudents();
+    } catch (err) { toast.error(formatApiError(err)); }
+  };
+
+  const downloadReceipt = async (pid) => {
+    try {
+      const res = await api.get(`/receipts/payment/${pid}.pdf`, { responseType: "blob" });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement("a"); a.href = url; a.download = `receipt_${pid}.pdf`; a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) { toast.error(formatApiError(err)); }
+  };
+
+  const downloadReport = async () => {
+    if (!selected) return;
+    try {
+      const res = await api.get(`/receipts/student/${selected.student_uid}/report.pdf`, { responseType: "blob" });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement("a"); a.href = url; a.download = `${selected.student_uid}_report.pdf`; a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) { toast.error(formatApiError(err)); }
+  };
 
   if (!students.length) return <div className="card">No child linked to your account.</div>;
 
   return (
     <div data-testid="parent-portal">
       <PageHeader eyebrow="Parent portal" title={`Welcome, ${selected ? "tracking " + selected.name : ""}`}
-        subtitle="Your child's complete academic and attendance picture, all in one place." />
+        subtitle="Your child's complete academic and attendance picture, all in one place."
+        actions={selected ? <button className="btn-secondary" onClick={downloadReport} data-testid="parent-download-report"><DownloadSimple size={14}/> Report PDF</button> : null}
+      />
 
       {students.length > 1 && (
-        <div className="flex gap-2 mb-4">
+        <div className="flex gap-2 mb-4 flex-wrap">
           {students.map((s) => (
             <button key={s.id} onClick={() => setSelected(s)} className={`btn-secondary ${selected?.id === s.id ? "border-primary text-primary" : ""}`} data-testid={`child-tab-${s.student_uid}`}>
               {s.name}
@@ -38,12 +81,32 @@ export default function ParentPortal() {
         </div>
       )}
 
-      {dash ? <DashboardView dash={dash} /> : <div className="skeleton h-40 w-full" />}
+      {selected && (
+        <div className="card mb-4 flex items-center gap-4" data-testid="parent-child-card">
+          <div className="relative w-16 h-16 rounded-lg overflow-hidden bg-bg-subtle grid place-items-center border border-line shrink-0">
+            {selected.photo ? (
+              <img src={selected.photo} alt={selected.name} className="w-full h-full object-cover" />
+            ) : (
+              <UserCircle size={40} className="text-ink-muted" />
+            )}
+            <label className="absolute bottom-1 right-1 bg-primary text-white p-1 rounded cursor-pointer" title="Upload photo">
+              <Camera size={11} />
+              <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={onPhoto} data-testid="parent-photo-input" />
+            </label>
+          </div>
+          <div className="min-w-0">
+            <div className="font-display text-lg font-medium truncate">{selected.name}</div>
+            <div className="text-xs text-ink-muted">{selected.student_uid} · Section {selected.section} · Roll {selected.roll_number || "—"}</div>
+          </div>
+        </div>
+      )}
+
+      {dash ? <DashboardView dash={dash} payments={payments} onReceipt={downloadReceipt} /> : <div className="skeleton h-40 w-full" />}
     </div>
   );
 }
 
-function DashboardView({ dash }) {
+function DashboardView({ dash, payments, onReceipt }) {
   const { student, attendance, academics, fees, insights } = dash;
   const attData = [
     { name: "Present", value: attendance.counts.present },
@@ -133,6 +196,25 @@ function DashboardView({ dash }) {
             </ResponsiveContainer>
           </div>}
       </Section>
+
+      <div className="mt-6">
+        <Section title="Payment history & receipts">
+          {payments.length === 0 ? <Empty title="No payments yet" /> :
+            <ul className="divide-y divide-line">
+              {payments.map((p) => (
+                <li key={p.id} className="py-3 flex items-center justify-between" data-testid={`pp-pay-${p.id}`}>
+                  <div>
+                    <div className="font-medium">{currency(p.amount)} · {p.mode}</div>
+                    <div className="text-xs text-ink-muted">Receipt {p.receipt_no} · {formatDate(p.created_at)}</div>
+                  </div>
+                  <button className="btn-secondary" onClick={() => onReceipt(p.id)} data-testid={`pp-receipt-${p.id}`}>
+                    <Receipt size={14}/> Download
+                  </button>
+                </li>
+              ))}
+            </ul>}
+        </Section>
+      </div>
     </>
   );
 }

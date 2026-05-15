@@ -1,9 +1,10 @@
 import React, { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, formatApiError } from "../../lib/api";
+import { useAuth } from "../../contexts/AuthContext";
 import { PageHeader, KPI, Section, Empty } from "../../components/Primitives";
-import { MagnifyingGlass } from "@phosphor-icons/react";
-import { currency, CHART_COLORS, formatDate } from "../../lib/utils";
+import { MagnifyingGlass, DownloadSimple, Camera, UserCircle } from "@phosphor-icons/react";
+import { currency, CHART_COLORS } from "../../lib/utils";
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell, Legend } from "recharts";
 import toast from "react-hot-toast";
 
@@ -44,14 +45,37 @@ export default function StudentAnalytics() {
       </form>
 
       {loading && <div className="skeleton h-40 w-full" />}
-      {!loading && dash && <DashView dash={dash} />}
+      {!loading && dash && <DashView dash={dash} onRefresh={() => doSearch(params.uid || uid)} />}
       {!loading && !dash && uid && <Empty title="No data" message="No matching student found. Try a different UID." />}
     </div>
   );
 }
 
-function DashView({ dash }) {
+function DashView({ dash, onRefresh }) {
   const { student, attendance, academics, fees, insights } = dash;
+  const { user } = useAuth();
+
+  const downloadReport = async () => {
+    try {
+      const res = await api.get(`/receipts/student/${student.student_uid}/report.pdf`, { responseType: "blob" });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement("a"); a.href = url; a.download = `${student.student_uid}_report.pdf`; a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) { toast.error(formatApiError(err)); }
+  };
+
+  const onPhoto = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const fd = new FormData(); fd.append("file", file);
+      await api.post(`/students/${student.id}/photo`, fd);
+      toast.success("Photo updated");
+      onRefresh && onRefresh();
+    } catch (err) { toast.error(formatApiError(err)); }
+  };
+
+  const canEditPhoto = ["school_admin", "teacher", "parent"].includes(user?.role);
 
   const attData = [
     { name: "Present", value: attendance.counts.present },
@@ -70,25 +94,43 @@ function DashView({ dash }) {
     <>
       <div className="card mb-6" data-testid="sa-profile-card">
         <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <div className="overline mb-1">{student.student_uid}</div>
-            <h2 className="font-display text-3xl font-medium">{student.name}</h2>
-            <div className="text-ink-soft text-sm mt-1">
-              Roll #{student.roll_number} · Section {student.section} · DOB {student.dob || "—"}
+          <div className="flex items-start gap-4">
+            <div className="relative w-20 h-20 rounded-lg overflow-hidden bg-bg-subtle grid place-items-center border border-line shrink-0" data-testid="sa-photo-wrap">
+              {student.photo ? (
+                <img src={student.photo} alt={student.name} className="w-full h-full object-cover" />
+              ) : (
+                <UserCircle size={48} className="text-ink-muted" />
+              )}
+              {canEditPhoto && (
+                <label className="absolute bottom-1 right-1 bg-primary text-white p-1 rounded cursor-pointer hover:bg-primary-hover" title="Upload photo" data-testid="sa-photo-upload-label">
+                  <Camera size={12} />
+                  <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={onPhoto} data-testid="sa-photo-input" />
+                </label>
+              )}
             </div>
-            <div className="text-xs text-ink-muted mt-2">
-              Parent: {student.parent?.name} · {student.parent?.phone}
+            <div>
+              <div className="overline mb-1">{student.student_uid}</div>
+              <h2 className="font-display text-3xl font-medium">{student.name}</h2>
+              <div className="text-ink-soft text-sm mt-1">
+                Roll #{student.roll_number} · Section {student.section} · DOB {student.dob || "—"}
+              </div>
+              <div className="text-xs text-ink-muted mt-2">
+                Parent: {student.parent?.name} · {student.parent?.phone}
+              </div>
             </div>
           </div>
-          <div className="flex gap-2 flex-wrap">
-            {academics.improvement && (
-              <span className={
-                academics.improvement.status === "improving" ? "badge-success" :
-                academics.improvement.status === "declining" ? "badge-danger" : "badge-neutral"
-              }>{academics.improvement.status} ({academics.improvement.diff > 0 ? "+" : ""}{academics.improvement.diff}%)</span>
-            )}
-            {academics.strongest && <span className="badge-success">Best: {academics.strongest.subject} {academics.strongest.avg}%</span>}
-            {academics.weakest && <span className="badge-warning">Focus: {academics.weakest.subject} {academics.weakest.avg}%</span>}
+          <div className="flex flex-col items-end gap-2">
+            <button className="btn-secondary" onClick={downloadReport} data-testid="sa-download-report"><DownloadSimple size={14}/> Download report (PDF)</button>
+            <div className="flex gap-2 flex-wrap justify-end">
+              {academics.improvement && (
+                <span className={
+                  academics.improvement.status === "improving" ? "badge-success" :
+                  academics.improvement.status === "declining" ? "badge-danger" : "badge-neutral"
+                }>{academics.improvement.status} ({academics.improvement.diff > 0 ? "+" : ""}{academics.improvement.diff}%)</span>
+              )}
+              {academics.strongest && <span className="badge-success">Best: {academics.strongest.subject} {academics.strongest.avg}%</span>}
+              {academics.weakest && <span className="badge-warning">Focus: {academics.weakest.subject} {academics.weakest.avg}%</span>}
+            </div>
           </div>
         </div>
       </div>

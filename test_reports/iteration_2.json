@@ -1,0 +1,34 @@
+{
+  "summary": "SCMS iteration 2 full-stack testing. Backend: 53/53 pytest pass (32 iter1 regression + 21 new). New coverage: (1) NEW admin jagadishchandu789@gmail.com / Manasa@123 returns platform_admin and legacy platform@scms.com still works; (2) Twilio scaffolding verified — after absent-attendance bulk, /api/notifications shows channel='whatsapp', status='queued', delivery_note='twilio_not_configured'; (3) /api/calendar/events returns holiday+exam types, month=YYYY-MM filter works; (4) /api/audit returns list, grows after student create with action='create' resource='student' actor_role='school_admin', returns [] for teacher/parent; (5) /api/subscriptions/plans auto-seeds Starter/Growth/Enterprise on first call, /assign updates school.subscription, /usage/{school_id} returns school + usage; (6) /api/receipts/payment/{id}.pdf returns application/pdf + %PDF body for school_admin, 403 cross-school; (7) /api/receipts/student/STU-00001/report.pdf works for school_admin + own parent, 404 for other parent; (8) Photo upload accepts image/png + stores data URL, rejects text/plain with 400, parent can upload only for own child (403 otherwise); (9) RBAC + health regression all green. Frontend: NEW admin login navigates to /platform (schools list rendered), /platform/subscriptions shows all 3 plan cards (data-testid plan-starter/plan-growth/plan-enterprise), /platform/audit and /school/audit render (audit-log-page), /school/calendar renders calendar-page + cal-month='May 2026', logout works and redirects to /login, parent login → /parent shows child card with photo placeholder + 'Report PDF' button (parent-download-report) + Payment history section, mobile (390px) shows mobile-menu-toggle which opens mobile-drawer with mobile-drawer-close button.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "(Cosmetic / seed-data) STU-00001 is seeded with paid=16000 directly on the fee doc but no corresponding doc in fee_payments collection, so the parent Payment history list is empty out-of-the-box. Pre-seeding 1-2 fee_payments rows for paid fees would make the 'pp-receipt-<id>' download buttons visible without the parent first triggering a /fees/payments POST.",
+    "(Cosmetic) New default admin's display name is still 'Platform Super Admin' — consider personalising to 'Jagadish' on the seed update path."
+  ],
+  "critical_code_review_comments": [
+    "core/notify.py + WhatsApp: notifications are correctly persisted with channel='whatsapp', status='queued', delivery_note='twilio_not_configured' when TWILIO_ACCOUNT_SID is empty. Send path is gated and safe; main agent should add structured logging when real send fails (status='failed') in future.",
+    "routes/audit.py: returns [] for non-admin roles (200), correct. core/audit.log_action invoked on student create, update, delete, upload_photo — good coverage. Consider also logging fee_payment creation and subscription assignment for full surface.",
+    "routes/subscriptions.py: list_plans lazy-seeds 3 defaults on first call (good for tests). /usage returns embedded school object including subscription nested doc; ensure _id is excluded — verified ({'_id':0} projection used).",
+    "routes/receipts.py: cross-school 403 enforced via user.school_id check; parent restricted via parent_user_id. Filename uses receipt_no; payments seeded inline avoid leaking other school data. Reportlab build is synchronous CPU-bound — under heavy load consider running in a threadpool.",
+    "routes/students.py upload_photo: 2MB cap + content-type allowlist verified. Stored as data URL — fine for MVP but will bloat documents; eventual S3/GridFS recommended for scale.",
+    "Seed_platform_admin is idempotent and password-refresh aware — verified by logging in with new password after upgrade.",
+    "Mobile drawer (Sidebar.jsx): testids mobile-menu-toggle/mobile-drawer/mobile-drawer-close all present and functional at 390x844."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": { "backend": "100% (53/53)", "frontend": "100% on smoke (new+legacy admin, school admin, parent, mobile drawer, all required data-testids)" },
+  "test_credentials": "Used /app/memory/test_credentials.md verbatim. NEW admin jagadishchandu789@gmail.com / Manasa@123 confirmed; legacy platform@scms.com / Platform@123 still works.",
+  "seed_data_creation": "Tests create TEST_-prefixed schools/students/teachers/holidays/fee structures and at least one fee_payments doc (used by receipt PDF tests). All scoped via uuid suffixes to keep deterministic re-runs safe.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: pytest /app/backend/tests/backend_test.py -v --junitxml=/app/test_reports/pytest/pytest_results.xml. The CREDS dict now contains 7 keys including platform_admin_old + parent2. Photo upload test uses an inline 1x1 PNG byte-string. Cross-school receipt 403 test creates a fresh TEST school via /api/schools (requires platform_admin) and logs in as that school's admin. Twilio notifications stay in queued state with delivery_note='twilio_not_configured' as long as TWILIO_ACCOUNT_SID env var is empty. Frontend testids verified present: plan-starter, plan-growth, plan-enterprise, audit-log-page (both /platform/audit and /school/audit), calendar-page, cal-month, parent-download-report, parent-photo-input, parent-child-card, mobile-menu-toggle, mobile-drawer, mobile-drawer-close, pp-receipt-<paymentId> (latter is conditional on payment history being non-empty).",
+  "rca of the issue": "No bugs found. Only a soft observation: parent payment-history is empty out-of-the-box because seed assigns fees.paid=16000 without inserting matching fee_payments docs; this hides the pp-receipt-<id> buttons until the school admin posts a /fees/payments record. Trivial fix in seed_demo_data if desired."
+}

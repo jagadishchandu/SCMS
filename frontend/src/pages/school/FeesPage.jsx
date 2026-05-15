@@ -4,24 +4,35 @@ import { PageHeader, Section, KPI, Empty } from "../../components/Primitives";
 import { Modal } from "../../components/Modal";
 import toast from "react-hot-toast";
 import { currency, formatDate } from "../../lib/utils";
-import { Plus, Receipt } from "@phosphor-icons/react";
+import { Plus, Receipt, DownloadSimple } from "@phosphor-icons/react";
 
 export default function FeesPage() {
   const [structures, setStructures] = useState([]);
   const [fees, setFees] = useState([]);
   const [classes, setClasses] = useState([]);
   const [students, setStudents] = useState([]);
+  const [payments, setPayments] = useState([]);
   const [openStruct, setOpenStruct] = useState(false);
   const [payFor, setPayFor] = useState(null);
 
+  const downloadReceipt = async (pid) => {
+    try {
+      const res = await api.get(`/receipts/payment/${pid}.pdf`, { responseType: "blob" });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement("a"); a.href = url; a.download = `receipt_${pid}.pdf`; a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) { toast.error(formatApiError(err)); }
+  };
+
   const load = async () => {
-    const [str, f, c, s] = await Promise.all([
+    const [str, f, c, s, pay] = await Promise.all([
       api.get("/fees/structures").then((r) => r.data),
       api.get("/fees").then((r) => r.data),
       api.get("/academic/classes").then((r) => r.data),
       api.get("/students").then((r) => r.data),
+      api.get("/fees/payments").then((r) => r.data).catch(() => []),
     ]);
-    setStructures(str); setFees(f); setClasses(c); setStudents(s);
+    setStructures(str); setFees(f); setClasses(c); setStudents(s); setPayments(pay);
   };
   useEffect(() => { load(); }, []);
 
@@ -115,6 +126,34 @@ export default function FeesPage() {
 
       <StructureModal classes={classes} open={openStruct} onClose={() => setOpenStruct(false)} onCreated={() => { setOpenStruct(false); load(); }} />
       {payFor && <PaymentModal fee={payFor} onClose={() => setPayFor(null)} onDone={() => { setPayFor(null); load(); }} />}
+
+      <div className="mt-6">
+        <Section title={`Recent payments · ${payments.length}`}>
+          {payments.length === 0 ? <Empty title="No payments yet" /> :
+            <div className="overflow-x-auto">
+              <table className="table">
+                <thead><tr><th className="th">Date</th><th className="th">Student</th><th className="th">Amount</th><th className="th">Mode</th><th className="th">Receipt #</th><th className="th"></th></tr></thead>
+                <tbody>
+                  {payments.slice(0, 30).map((p) => {
+                    const st = studentMap[p.student_id];
+                    return (
+                      <tr key={p.id} className="table-row" data-testid={`payment-row-${p.id}`}>
+                        <td className="td text-xs">{formatDate(p.created_at)}</td>
+                        <td className="td"><div className="font-medium">{st?.name || "—"}</div><div className="text-xs text-ink-muted">{st?.student_uid}</div></td>
+                        <td className="td font-display">{currency(p.amount)}</td>
+                        <td className="td">{p.mode}</td>
+                        <td className="td font-mono text-xs">{p.receipt_no}</td>
+                        <td className="td">
+                          <button className="btn-secondary" onClick={() => downloadReceipt(p.id)} data-testid={`receipt-${p.id}`}><DownloadSimple size={14}/> Receipt</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>}
+        </Section>
+      </div>
     </div>
   );
 }

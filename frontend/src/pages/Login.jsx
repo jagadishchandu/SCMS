@@ -6,7 +6,7 @@ import toast from "react-hot-toast";
 import { GraduationCap, ArrowRight } from "@phosphor-icons/react";
 
 const DEMO_ACCOUNTS = [
-  { label: "Platform Admin", email: "platform@scms.com", password: "Platform@123" },
+  { label: "Platform Admin", email: "jagadishchandu789@gmail.com", password: "Manasa@123" },
   { label: "School Admin", email: "principal@sunrise.edu", password: "School@123" },
   { label: "Teacher (Class Teacher)", email: "priya@sunrise.edu", password: "Teacher@123" },
   { label: "Accounts", email: "accounts@sunrise.edu", password: "Accounts@123" },

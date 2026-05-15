@@ -15,11 +15,13 @@ BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://4d977b08-b8f9-4943-a
 API = f"{BASE_URL}/api"
 
 CREDS = {
-    "platform_admin": ("platform@scms.com", "Platform@123"),
-    "school_admin":   ("principal@sunrise.edu", "School@123"),
-    "teacher":        ("priya@sunrise.edu", "Teacher@123"),
-    "accounts":       ("accounts@sunrise.edu", "Accounts@123"),
-    "parent":         ("parent.stu-00001@sunrise.edu", "Parent@123"),
+    "platform_admin":     ("jagadishchandu789@gmail.com", "Manasa@123"),
+    "platform_admin_old": ("platform@scms.com", "Platform@123"),
+    "school_admin":       ("principal@sunrise.edu", "School@123"),
+    "teacher":            ("priya@sunrise.edu", "Teacher@123"),
+    "accounts":           ("accounts@sunrise.edu", "Accounts@123"),
+    "parent":             ("parent.stu-00001@sunrise.edu", "Parent@123"),
+    "parent2":            ("parent.stu-00002@sunrise.edu", "Parent@123"),
 }
 
 
@@ -44,6 +46,8 @@ def teacher_session():   return login("teacher")
 def accounts_session():  return login("accounts")
 @pytest.fixture(scope="session")
 def parent_session():    return login("parent")
+@pytest.fixture(scope="session")
+def parent2_session():   return login("parent2")
 
 
 # ---------- health ----------
@@ -346,3 +350,234 @@ class TestUploads:
         ct = r.headers.get("content-type", "")
         assert "spreadsheet" in ct or "octet" in ct or "excel" in ct, ct
         assert len(r.content) > 100
+
+
+
+# =========================================================================
+# Iteration 2: New admin, Twilio scaffolding, Audit, Subscriptions,
+# Receipts (PDF), Photo upload, Calendar, RBAC regression
+# =========================================================================
+
+class TestNewAdmin:
+    """New default admin + legacy admin backward compatibility."""
+
+    def test_new_admin_login_role(self):
+        s = login("platform_admin")  # new email
+        me = s.get(f"{API}/auth/me", timeout=15).json()
+        assert me["email"] == "jagadishchandu789@gmail.com"
+        assert me["role"] == "platform_admin"
+
+    def test_legacy_admin_still_works(self):
+        s = login("platform_admin_old")
+        me = s.get(f"{API}/auth/me", timeout=15).json()
+        assert me["email"] == "platform@scms.com"
+        assert me["role"] == "platform_admin"
+
+
+class TestTwilioQueued:
+    """Twilio not configured -> notifications stay queued with delivery_note."""
+
+    def test_attendance_bulk_triggers_queued_whatsapp(self, school_session):
+        students = school_session.get(f"{API}/students", timeout=15).json()
+        from datetime import date
+        entries = [{"student_id": s["id"], "status": "absent"} for s in students[:2]]
+        payload = {
+            "class_id": students[0]["class_id"], "section": students[0]["section"],
+            "date": date.today().isoformat(), "entries": entries,
+        }
+        r = school_session.post(f"{API}/attendance/bulk", json=payload, timeout=20)
+        assert r.status_code in (200, 201), r.text
+        notifs = school_session.get(f"{API}/notifications", timeout=15).json()
+        assert isinstance(notifs, list) and len(notifs) > 0
+        wa = [n for n in notifs if n.get("channel") == "whatsapp"]
+        assert len(wa) > 0, "Expected at least one whatsapp notification"
+        # at least one queued / not configured
+        assert any(n.get("status") == "queued" for n in wa), [n.get("status") for n in wa[:5]]
+        assert any((n.get("delivery_note") or "").lower().startswith("twilio") or "twilio_not_configured" in (n.get("delivery_note") or "") for n in wa), \
+            [n.get("delivery_note") for n in wa[:5]]
+
+
+class TestCalendar:
+    def test_events_school_admin(self, school_session):
+        r = school_session.get(f"{API}/calendar/events", timeout=15)
+        assert r.status_code == 200
+        data = r.json()
+        assert isinstance(data, list)
+        types = {e.get("type") for e in data}
+        assert "holiday" in types, types
+        assert "exam" in types, types
+
+    def test_events_month_filter(self, school_session):
+        r = school_session.get(f"{API}/calendar/events", params={"month": "2025-01"}, timeout=15)
+        assert r.status_code == 200
+        data = r.json()
+        assert isinstance(data, list)
+        for e in data:
+            assert (e.get("date") or "").startswith("2025-01"), e
+
+
+class TestAudit:
+    def test_audit_returns_list(self, school_session):
+        r = school_session.get(f"{API}/audit", timeout=15)
+        assert r.status_code == 200
+        assert isinstance(r.json(), list)
+
+    def test_audit_after_create_student(self, school_session):
+        # Capture current count
+        before = school_session.get(f"{API}/audit", timeout=15).json()
+        before_n = len(before)
+
+        classes = school_session.get(f"{API}/academic/classes", timeout=15).json()
+        uid = f"STU-AUD{uuid.uuid4().hex[:5].upper()}"
+        payload = {
+            "name": "TEST Audit Student", "student_uid": uid,
+            "class_id": classes[0]["id"], "section": "A", "roll_number": "199",
+            "gender": "M", "dob": "2014-01-01", "admission_date": "2024-06-01",
+            "parent": {"name": "TEST Audit Parent", "relationship": "father",
+                       "phone": "+91-9000088888", "whatsapp": "+91-9000088888",
+                       "email": f"test.aud.{uid.lower()}@sunrise.edu"},
+        }
+        r = school_session.post(f"{API}/students", json=payload, timeout=20)
+        assert r.status_code in (200, 201), r.text
+
+        after = school_session.get(f"{API}/audit", timeout=15).json()
+        assert len(after) > before_n, f"audit should grow, before={before_n} after={len(after)}"
+        # at least one create / student entry
+        match = [a for a in after if a.get("action") == "create" and a.get("resource") == "student"
+                 and a.get("actor_role") == "school_admin"]
+        assert len(match) > 0, after[:3]
+
+    def test_audit_non_admin_empty(self, teacher_session, parent_session):
+        for s in (teacher_session, parent_session):
+            r = s.get(f"{API}/audit", timeout=15)
+            assert r.status_code == 200
+            assert r.json() == []
+
+
+class TestSubscriptions:
+    def test_plans_seeded(self, platform_session):
+        r = platform_session.get(f"{API}/subscriptions/plans", timeout=15)
+        assert r.status_code == 200
+        plans = r.json()
+        names = {p["name"] for p in plans}
+        assert {"Starter", "Growth", "Enterprise"} <= names, names
+        assert len(plans) >= 3
+
+    def test_assign_plan_and_usage(self, platform_session):
+        plans = platform_session.get(f"{API}/subscriptions/plans", timeout=15).json()
+        starter = next(p for p in plans if p["name"] == "Starter")
+        schools = platform_session.get(f"{API}/schools", timeout=15).json()
+        demo = next(s for s in schools if s["code"] == "DEMO")
+        r = platform_session.post(f"{API}/subscriptions/assign",
+                                  json={"school_id": demo["id"], "plan_id": starter["id"]},
+                                  timeout=15)
+        assert r.status_code in (200, 201), r.text
+        # usage
+        u = platform_session.get(f"{API}/subscriptions/usage/{demo['id']}", timeout=15)
+        assert u.status_code == 200
+        body = u.json()
+        assert "school" in body and "usage" in body
+        assert body["school"].get("subscription", {}).get("plan_name") == "Starter"
+        assert body["usage"]["students"] >= 8
+
+
+class TestReceipts:
+    def _get_payment(self, session):
+        # ensure we have at least one payment by paying a fee
+        fees = session.get(f"{API}/fees", timeout=15).json()
+        target = next((f for f in fees if f["due"] > 0), None)
+        if not target:
+            return None
+        r = session.post(f"{API}/fees/payments", json={
+            "fee_id": target["id"], "student_id": target["student_id"],
+            "amount": min(1000, target["due"]), "method": "cash"
+        }, timeout=20)
+        assert r.status_code in (200, 201), r.text
+        return r.json()
+
+    def test_payment_receipt_pdf(self, school_session):
+        p = self._get_payment(school_session)
+        assert p, "no fee with due"
+        pid = p.get("id")
+        r = school_session.get(f"{API}/receipts/payment/{pid}.pdf", timeout=20)
+        assert r.status_code == 200, r.text[:200]
+        assert "application/pdf" in r.headers.get("content-type", "")
+        assert r.content[:4] == b"%PDF"
+
+    def test_payment_receipt_cross_school_forbidden(self, school_session, platform_session):
+        # create another school + admin, login as that admin and try fetch DEMO payment
+        p = self._get_payment(school_session)
+        assert p
+        code = f"X{uuid.uuid4().hex[:5].upper()}"
+        admin_email = f"adminx.{code.lower()}@test.edu"
+        payload = {"name": f"X {code}", "code": code, "address": "x", "phone": "+91",
+                   "email": f"info-{code.lower()}@x.edu", "academic_year": "2025-2026",
+                   "admin_email": admin_email, "admin_password": "Admin@123",
+                   "admin_name": "X Admin"}
+        rs = platform_session.post(f"{API}/schools", json=payload, timeout=20)
+        assert rs.status_code in (200, 201), rs.text
+        # login as new admin
+        s2 = requests.Session()
+        lr = s2.post(f"{API}/auth/login", json={"email": admin_email, "password": "Admin@123"}, timeout=15)
+        assert lr.status_code == 200, lr.text
+        rcross = s2.get(f"{API}/receipts/payment/{p['id']}.pdf", timeout=15)
+        assert rcross.status_code == 403, rcross.status_code
+
+    def test_student_report_pdf_school_admin(self, school_session):
+        r = school_session.get(f"{API}/receipts/student/STU-00001/report.pdf", timeout=25)
+        assert r.status_code == 200, r.text[:200]
+        assert "application/pdf" in r.headers.get("content-type", "")
+        assert r.content[:4] == b"%PDF"
+
+    def test_student_report_parent_own_child(self, parent_session):
+        r = parent_session.get(f"{API}/receipts/student/STU-00001/report.pdf", timeout=25)
+        assert r.status_code == 200, r.text[:200]
+        assert r.content[:4] == b"%PDF"
+
+    def test_student_report_other_parent_404(self, parent_session):
+        r = parent_session.get(f"{API}/receipts/student/STU-00002/report.pdf", timeout=15)
+        assert r.status_code == 404
+
+
+class TestPhotoUpload:
+    # minimal valid PNG 1x1
+    PNG_BYTES = bytes.fromhex(
+        "89504E470D0A1A0A0000000D49484452000000010000000108060000001F15C489"
+        "0000000A49444154789C6300010000000500010D0A2DB40000000049454E44AE426082"
+    )
+
+    def _stu_id(self, session, uid="STU-00001"):
+        students = session.get(f"{API}/students", timeout=15).json()
+        s = next(s for s in students if s["student_uid"] == uid)
+        return s["id"]
+
+    def test_admin_upload_and_read_back(self, school_session):
+        sid = self._stu_id(school_session)
+        files = {"file": ("p.png", self.PNG_BYTES, "image/png")}
+        r = school_session.post(f"{API}/students/{sid}/photo", files=files, timeout=20)
+        assert r.status_code in (200, 201), r.text
+        body = r.json()
+        assert body.get("ok") is True
+        assert body.get("photo", "").startswith("data:image/png;base64,")
+        # read back
+        students = school_session.get(f"{API}/students", timeout=15).json()
+        match = next(s for s in students if s["id"] == sid)
+        assert (match.get("photo") or "").startswith("data:image/png;base64,")
+
+    def test_reject_non_image(self, school_session):
+        sid = self._stu_id(school_session)
+        files = {"file": ("p.txt", b"hello", "text/plain")}
+        r = school_session.post(f"{API}/students/{sid}/photo", files=files, timeout=15)
+        assert r.status_code == 400, r.status_code
+
+    def test_parent_upload_own_child(self, parent_session, school_session):
+        sid = self._stu_id(school_session, "STU-00001")
+        files = {"file": ("p.png", self.PNG_BYTES, "image/png")}
+        r = parent_session.post(f"{API}/students/{sid}/photo", files=files, timeout=15)
+        assert r.status_code in (200, 201), r.text
+
+    def test_parent_cannot_upload_other_child(self, parent_session, school_session):
+        sid_other = self._stu_id(school_session, "STU-00002")
+        files = {"file": ("p.png", self.PNG_BYTES, "image/png")}
+        r = parent_session.post(f"{API}/students/{sid_other}/photo", files=files, timeout=15)
+        assert r.status_code == 403, r.status_code

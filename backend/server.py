@@ -28,6 +28,10 @@ from routes.timetable import router as timetable_router
 from routes.notifications import router as notifications_router
 from routes.analytics import router as analytics_router
 from routes.uploads import router as uploads_router
+from routes.audit import router as audit_router
+from routes.subscriptions import router as subscriptions_router
+from routes.receipts import router as receipts_router
+from routes.calendar_route import router as calendar_router
 
 
 async def seed_platform_admin():
@@ -50,6 +54,19 @@ async def seed_platform_admin():
     elif not verify_password(password, existing["password_hash"]):
         await db.users.update_one({"email": email}, {"$set": {"password_hash": hash_password(password)}})
         print(f"[seed] Platform admin password refreshed: {email}")
+    # Also keep the legacy platform@scms.com as a backup admin if not present (for older bookmarks)
+    legacy = await db.users.find_one({"email": "platform@scms.com"})
+    if not legacy:
+        await db.users.insert_one({
+            "id": new_id(),
+            "email": "platform@scms.com",
+            "password_hash": hash_password("Platform@123"),
+            "name": "Platform Super Admin (Legacy)",
+            "role": "platform_admin",
+            "school_id": None,
+            "is_active": True,
+            "created_at": utc_now(),
+        })
 
 
 async def seed_demo_data():
@@ -319,5 +336,9 @@ api.include_router(timetable_router)
 api.include_router(notifications_router)
 api.include_router(analytics_router)
 api.include_router(uploads_router)
+api.include_router(audit_router)
+api.include_router(subscriptions_router)
+api.include_router(receipts_router)
+api.include_router(calendar_router)
 
 app.include_router(api)
