@@ -1,14 +1,17 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import "./index.css";
-import App from "./App";
 import { BrowserRouter } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
+import "./index.css";
+import App from "./App";
 import { AuthProvider } from "./contexts/AuthContext";
+
+// Silence React Router v6 -> v7 future-flag warnings
+const ROUTER_FUTURE = { v7_startTransition: true, v7_relativeSplatPath: true };
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(
-  <BrowserRouter>
+  <BrowserRouter future={ROUTER_FUTURE}>
     <AuthProvider>
       <App />
       <Toaster position="top-right" toastOptions={{
