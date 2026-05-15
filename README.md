@@ -90,6 +90,10 @@ Full list at [`/app/memory/test_credentials.md`](memory/test_credentials.md).
 
 ## Architecture
 
+> **Database schema reference:** see [`README_DB.md`](README_DB.md) for the
+> complete documentation of all 29 per-school collections, master collections,
+> indexes, mirroring rules, and where the schema is auto-provisioned.
+
 ```
 /app
 ├── backend/

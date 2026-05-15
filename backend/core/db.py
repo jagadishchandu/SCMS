@@ -1,13 +1,25 @@
-"""Database connection (Motor / MongoDB).
+"""Database connection (Motor / MongoDB) + per-tenant routing.
 
-Architecture:
-- MASTER DB (DB_NAME from env): stores schools, plans, platform_admin users, and
-  all operational data with school_id-based tenant isolation. This is the
-  authoritative store today.
-- PER-SCHOOL DBs: When a school is created we ALSO provision a dedicated
-  database (e.g. `scms_db_school_<code>`) with full index schema. This is a
-  foundation for future per-tenant physical isolation (backup/restore/scale).
-  The school document carries its `db_name`.
+## Architecture (v1.15+)
+
+- **MASTER DB** (`DB_NAME` env var, default `scms_db`)
+  Stores cross-cutting tables only — see `MASTER_ONLY_COLLECTIONS`:
+  users (login-by-email source of truth), schools, plans, login_attempts,
+  password_reset_codes, webhook inbound logs, subscription_payments,
+  platform-wide audit_logs, and (today) notifications.
+
+- **PER-SCHOOL DBs** (`<DB_NAME>_school_<slug>`)
+  Each school gets its own MongoDB database holding ALL operational rows —
+  see `TENANT_OPERATIONAL_COLLECTIONS`: students, classes, subjects,
+  class_teacher_map, attendance, exams, marks, syllabus, holidays,
+  fee_structures, fees, fee_payments, timetable, activities,
+  activity_enrollments, sick_leaves, audit_logs, bulk_uploads, receipts.
+  A `meta` doc records the schema version (`initialized_at_v`).
+
+Routes resolve the right DB via `tenant_db(school_id_or_user)`. Platform admin
+flows that span schools iterate every school's tenant DB explicitly.
+
+See `/app/README_DB.md` for the full schema + index documentation.
 """
 import os
 import re
@@ -297,7 +309,7 @@ async def init_school_db(school: dict):
             "school_id": school["id"],
             "school_code": school.get("code"),
             "school_name": school.get("name"),
-            "initialized_at_v": "1.14",
+            "initialized_at_v": "1.15",
             "collections": [
                 "users", "school_admins", "teachers", "parents", "accounts_users", "students_users",
                 "classes", "subjects", "class_teacher_map", "students", "attendance",
@@ -353,18 +365,44 @@ async def school_db_status(school: dict) -> dict:
 
 
 async def ensure_indexes():
+    """Indexes on MASTER DB collections only.
+
+    Per-school DB collection indexes are created by `init_school_db()` and run
+    on every backend startup for every school (so they stay in sync with the
+    schema). Master DB retains only cross-cutting tables — see
+    `MASTER_ONLY_COLLECTIONS` for the full list.
+    """
     db = get_db()
+    # users — auth source-of-truth (login-by-email)
     await db.users.create_index("email", unique=True)
     await db.users.create_index([("school_id", 1), ("role", 1)])
+    await db.users.create_index([("role", 1), ("is_active", 1)])
+    await db.users.create_index("telegram_chat_id")
+    # schools registry
     await db.schools.create_index("code", unique=True)
-    await db.students.create_index([("school_id", 1), ("student_uid", 1)], unique=True)
-    await db.students.create_index([("school_id", 1), ("class_id", 1), ("section", 1)])
-    await db.attendance.create_index([("school_id", 1), ("student_id", 1), ("date", 1)], unique=True)
-    await db.marks.create_index([("school_id", 1), ("student_id", 1), ("exam_id", 1), ("subject_id", 1)], unique=True)
-    await db.classes.create_index([("school_id", 1), ("name", 1)])
-    await db.subjects.create_index([("school_id", 1), ("name", 1)])
-    await db.fees.create_index([("school_id", 1), ("student_id", 1)])
-    await db.notifications.create_index([("school_id", 1), ("created_at", -1)])
+    await db.schools.create_index("status")
+    await db.schools.create_index("db_name")
+    # plans (static price catalog)
+    await db.plans.create_index("name")
+    # brute-force lock + password reset (auth)
     await db.login_attempts.create_index("identifier")
-    await db.activities.create_index([("school_id", 1), ("name", 1)])
-    await db.activity_enrollments.create_index([("school_id", 1), ("activity_id", 1), ("student_id", 1)], unique=True)
+    await db.login_attempts.create_index([("identifier", 1), ("created_at", -1)])
+    await db.password_reset_codes.create_index([("email", 1), ("created_at", -1)])
+    await db.password_reset_codes.create_index("expires_at")
+    # Webhook inbound logs (events arrive pre-tenant-context)
+    await db.whatsapp_inbound.create_index([("created_at", -1)])
+    await db.whatsapp_status_updates.create_index([("created_at", -1)])
+    await db.telegram_inbound.create_index([("created_at", -1)])
+    # Platform-wide audit (mirrored into each per-school DB as needed)
+    await db.audit_logs.create_index([("created_at", -1)])
+    await db.audit_logs.create_index("action")
+    await db.audit_logs.create_index("school_id")
+    await db.audit_logs.create_index("actor_id")
+    # Subscription payments are platform-wide (admin reconciles across schools)
+    await db.subscription_payments.create_index([("school_id", 1), ("created_at", -1)])
+    await db.subscription_payments.create_index("status")
+    # Notifications — currently kept in master for cross-school analytics
+    await db.notifications.create_index([("school_id", 1), ("created_at", -1)])
+    await db.notifications.create_index("status")
+    await db.notifications.create_index("channel")
+

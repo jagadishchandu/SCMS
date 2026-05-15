@@ -225,6 +225,12 @@ async def upload_holidays(file: UploadFile = File(...), user: dict = Depends(req
 
 @router.get("/logs")
 async def upload_logs(user: dict = Depends(require_roles("school_admin", "platform_admin"))):
-    db = get_db()
-    flt = {} if user["role"] == "platform_admin" else {"school_id": user["school_id"]}
-    return await db.upload_logs.find(flt, {"_id": 0}).sort("created_at", -1).to_list(100)
+    if user["role"] == "platform_admin" and not user.get("school_id"):
+        db = get_db()
+        out = []
+        async for s in db.schools.find({}, {"_id": 0, "id": 1}):
+            tdb = await tenant_db(s["id"])
+            out.extend(await tdb.bulk_uploads.find({}, {"_id": 0}).sort("created_at", -1).to_list(50))
+        return out
+    tdb = await tenant_db(user["school_id"])
+    return await tdb.bulk_uploads.find({"school_id": user["school_id"]}, {"_id": 0}).sort("created_at", -1).to_list(100)
