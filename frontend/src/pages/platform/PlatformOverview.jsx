@@ -2,7 +2,10 @@ import React, { useEffect, useState } from "react";
 import { api, formatApiError } from "../../lib/api";
 import { PageHeader, KPI, Section, Empty } from "../../components/Primitives";
 import { Modal } from "../../components/Modal";
-import { Plus, BellRinging, Buildings } from "@phosphor-icons/react";
+import {
+  Plus, BellRinging, Buildings, GraduationCap, ChalkboardTeacher,
+  Users, BookOpen, CurrencyInr, CaretRight, X,
+} from "@phosphor-icons/react";
 import toast from "react-hot-toast";
 import { formatDate } from "../../lib/utils";
 
@@ -10,10 +13,12 @@ export default function PlatformOverview() {
   const [schools, setSchools] = useState([]);
   const [notifStats, setNotifStats] = useState({ total: 0, queued: 0, sent: 0, failed: 0 });
   const [open, setOpen] = useState(false);
+  const [detail, setDetail] = useState(null); // { school, teachers, students, counts }
+  const [loadingDetail, setLoadingDetail] = useState(false);
 
   const load = async () => {
     const [s, n] = await Promise.all([
-      api.get("/schools").then((r) => r.data),
+      api.get("/schools/with-stats").then((r) => r.data),
       api.get("/notifications/stats").then((r) => r.data),
     ]);
     setSchools(s);
@@ -21,42 +26,207 @@ export default function PlatformOverview() {
   };
   useEffect(() => { load(); }, []);
 
+  const openDetail = async (school) => {
+    setLoadingDetail(true);
+    setDetail({ school, teachers: [], students: [], counts: {} });
+    try {
+      const { data } = await api.get(`/schools/${school.id}/people`);
+      setDetail(data);
+    } catch (err) {
+      toast.error(formatApiError(err));
+      setDetail(null);
+    } finally {
+      setLoadingDetail(false);
+    }
+  };
+
+  const totalStudents = schools.reduce((a, s) => a + (s.stats?.students || 0), 0);
+  const totalTeachers = schools.reduce((a, s) => a + (s.stats?.teachers || 0), 0);
+
   return (
     <div data-testid="platform-overview">
       <PageHeader
         eyebrow="Platform Console"
         title="Schools across your platform"
-        subtitle="Create new schools, manage school super admins, and monitor system-wide health."
+        subtitle="Create new schools, manage school super admins, and inspect any school's roster in one click."
         actions={<button className="btn-primary" onClick={() => setOpen(true)} data-testid="add-school-btn"><Plus size={16}/> New school</button>}
       />
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <KPI label="Total schools" value={schools.length} accent="primary" testId="kpi-schools" />
-        <KPI label="Active schools" value={schools.filter(s => s.is_active).length} accent="success" testId="kpi-active-schools" />
-        <KPI label="Notifications sent" value={notifStats.total} accent="info" hint={`${notifStats.queued} queued`} testId="kpi-notifications" />
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
+        <KPI label="Schools" value={schools.length} accent="primary" testId="kpi-schools" />
+        <KPI label="Total students" value={totalStudents} accent="info" testId="kpi-total-students" />
+        <KPI label="Total teachers" value={totalTeachers} accent="success" testId="kpi-total-teachers" />
+        <KPI label="Notifications" value={notifStats.total} accent="info" hint={`${notifStats.queued} queued`} testId="kpi-notifications" />
         <KPI label="Failed deliveries" value={notifStats.failed} accent={notifStats.failed ? "danger" : "success"} testId="kpi-failed" />
       </div>
 
-      <Section title="Schools">
+      <Section title="Schools" subtitle="Click any school card to view its teachers and students.">
         {schools.length === 0 ? <Empty title="No schools yet" message="Add your first school to begin." /> : (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {schools.map((s) => (
-              <div key={s.id} className="border border-line rounded-lg p-5 hover:border-line-strong transition" data-testid={`school-card-${s.id}`}>
-                <div className="flex items-start justify-between gap-3 mb-3">
-                  <div className="w-10 h-10 rounded-lg bg-primary-light text-primary grid place-items-center"><Buildings size={20} /></div>
-                  {s.is_active ? <span className="badge-success">Active</span> : <span className="badge-neutral">Inactive</span>}
-                </div>
-                <div className="font-display text-lg font-medium">{s.name}</div>
-                <div className="text-sm text-ink-muted">{s.code} · {s.academic_year}</div>
-                <div className="text-xs text-ink-muted mt-3">{s.address || "—"}</div>
-                <div className="text-xs text-ink-muted mt-1">Created {formatDate(s.created_at)}</div>
-              </div>
-            ))}
+            {schools.map((s) => {
+              const st = s.stats || {};
+              return (
+                <button
+                  type="button"
+                  key={s.id}
+                  onClick={() => openDetail(s)}
+                  className="text-left border border-line rounded-lg p-5 hover:border-primary hover:shadow-sm transition group bg-bg-surface"
+                  data-testid={`school-card-${s.id}`}
+                >
+                  <div className="flex items-start justify-between gap-3 mb-3">
+                    <div className="w-10 h-10 rounded-lg bg-primary-light text-primary grid place-items-center">
+                      <Buildings size={20} />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {s.is_active ? <span className="badge-success">Active</span> : <span className="badge-neutral">Inactive</span>}
+                      <CaretRight size={14} className="text-ink-muted group-hover:text-primary transition" />
+                    </div>
+                  </div>
+                  <div className="font-display text-lg font-medium">{s.name}</div>
+                  <div className="text-sm text-ink-muted">{s.code} · {s.academic_year || "—"}</div>
+
+                  <div className="grid grid-cols-3 gap-2 mt-4">
+                    <StatTile icon={GraduationCap} label="Students" value={st.students || 0} testId={`stat-students-${s.id}`} />
+                    <StatTile icon={ChalkboardTeacher} label="Teachers" value={st.teachers || 0} testId={`stat-teachers-${s.id}`} />
+                    <StatTile icon={Users} label="Parents" value={st.parents || 0} testId={`stat-parents-${s.id}`} />
+                    <StatTile icon={BookOpen} label="Classes" value={st.classes || 0} testId={`stat-classes-${s.id}`} />
+                    <StatTile icon={BookOpen} label="Sections" value={st.sections || 0} testId={`stat-sections-${s.id}`} />
+                    <StatTile icon={CurrencyInr} label="Fee due" value={fmtMoney(st.fee_due || 0)} testId={`stat-feedue-${s.id}`} />
+                  </div>
+
+                  <div className="text-xs text-ink-muted mt-4 pt-3 border-t border-line/60 flex items-center justify-between">
+                    <span>Created {formatDate(s.created_at)}</span>
+                    {s.valid_until && <span>Valid until {formatDate(s.valid_until)}</span>}
+                  </div>
+                </button>
+              );
+            })}
           </div>
         )}
       </Section>
 
       <CreateSchoolModal open={open} onClose={() => setOpen(false)} onCreated={() => { setOpen(false); load(); }} />
+      <SchoolDetailDrawer
+        open={!!detail}
+        detail={detail}
+        loading={loadingDetail}
+        onClose={() => setDetail(null)}
+      />
+    </div>
+  );
+}
+
+function StatTile({ icon: Icon, label, value, testId }) {
+  return (
+    <div className="bg-bg-subtle rounded-md p-2.5 flex flex-col gap-0.5" data-testid={testId}>
+      <Icon size={14} className="text-ink-muted" />
+      <div className="text-base font-display font-medium leading-tight">{value}</div>
+      <div className="text-[10px] uppercase tracking-wider text-ink-muted">{label}</div>
+    </div>
+  );
+}
+
+function fmtMoney(v) {
+  if (!v) return "₹0";
+  const num = Number(v);
+  if (num >= 1e7) return `₹${(num / 1e7).toFixed(1)}Cr`;
+  if (num >= 1e5) return `₹${(num / 1e5).toFixed(1)}L`;
+  if (num >= 1e3) return `₹${(num / 1e3).toFixed(0)}k`;
+  return `₹${num.toFixed(0)}`;
+}
+
+function SchoolDetailDrawer({ open, detail, loading, onClose }) {
+  if (!open) return null;
+  const school = detail?.school;
+  const teachers = detail?.teachers || [];
+  const students = detail?.students || [];
+  return (
+    <div className="fixed inset-0 z-40" data-testid="school-detail-drawer">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+      <div className="absolute top-0 right-0 bottom-0 w-full max-w-2xl bg-bg-surface border-l border-line shadow-xl overflow-y-auto">
+        <div className="sticky top-0 bg-bg-surface border-b border-line p-5 flex items-start justify-between gap-3 z-10">
+          <div className="flex items-start gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-lg bg-primary-light text-primary grid place-items-center shrink-0">
+              <Buildings size={20} />
+            </div>
+            <div className="min-w-0">
+              <div className="font-display text-xl font-medium truncate" data-testid="drawer-school-name">{school?.name}</div>
+              <div className="text-xs text-ink-muted">{school?.code} · {school?.academic_year || "—"}</div>
+            </div>
+          </div>
+          <button onClick={onClose} className="btn-ghost p-2" data-testid="drawer-close-btn"><X size={18}/></button>
+        </div>
+
+        <div className="p-5 space-y-6">
+          {loading ? (
+            <div className="text-ink-muted text-sm">Loading roster…</div>
+          ) : (
+            <>
+              <div className="grid grid-cols-3 gap-3">
+                <KPI label="Students" value={students.length} accent="info" testId="drawer-kpi-students" />
+                <KPI label="Teachers" value={teachers.length} accent="success" testId="drawer-kpi-teachers" />
+                <KPI label="Classes" value={detail?.counts?.classes || 0} accent="primary" testId="drawer-kpi-classes" />
+              </div>
+
+              <Section title={`Teachers (${teachers.length})`}>
+                {teachers.length === 0 ? (
+                  <Empty title="No teachers" message="This school hasn't added any teachers yet." />
+                ) : (
+                  <div className="border border-line rounded-md overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead className="bg-bg-subtle text-ink-muted text-xs uppercase tracking-wider">
+                        <tr>
+                          <th className="text-left p-2.5">Name</th>
+                          <th className="text-left p-2.5">Email</th>
+                          <th className="text-left p-2.5">Phone</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {teachers.map((t) => (
+                          <tr key={t.id} className="border-t border-line/60" data-testid={`drawer-teacher-${t.id}`}>
+                            <td className="p-2.5 font-medium">{t.name}</td>
+                            <td className="p-2.5 text-ink-soft">{t.email}</td>
+                            <td className="p-2.5 text-ink-soft">{t.phone || "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </Section>
+
+              <Section title={`Students (${students.length})`}>
+                {students.length === 0 ? (
+                  <Empty title="No students" message="This school hasn't enrolled any students yet." />
+                ) : (
+                  <div className="border border-line rounded-md overflow-hidden max-h-96 overflow-y-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-bg-subtle text-ink-muted text-xs uppercase tracking-wider sticky top-0">
+                        <tr>
+                          <th className="text-left p-2.5">UID</th>
+                          <th className="text-left p-2.5">Name</th>
+                          <th className="text-left p-2.5">Class</th>
+                          <th className="text-left p-2.5">Parent</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {students.map((s) => (
+                          <tr key={s.id} className="border-t border-line/60" data-testid={`drawer-student-${s.id}`}>
+                            <td className="p-2.5 font-mono text-xs text-ink-soft">{s.student_uid}</td>
+                            <td className="p-2.5 font-medium">{s.name}</td>
+                            <td className="p-2.5 text-ink-soft">{s.class_name || s.class_id} · {s.section}</td>
+                            <td className="p-2.5 text-ink-soft text-xs">{s.parent?.name || "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </Section>
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

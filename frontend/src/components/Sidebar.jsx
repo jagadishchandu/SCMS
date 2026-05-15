@@ -45,6 +45,7 @@ const NAV_BY_ROLE = {
     { to: "/teacher/attendance", label: "Attendance (grid)", icon: ClipboardText },
     { to: "/teacher/marks", label: "Enter Marks", icon: FileText },
     { to: "/teacher/students", label: "My Students", icon: GraduationCap },
+    { to: "/teacher/classes", label: "Classes & Subjects", icon: BookOpen },
     { to: "/teacher/uploads", label: "Bulk Uploads", icon: UploadSimple },
     { to: "/teacher/sick-leaves", label: "Sick Leaves", icon: Heartbeat },
     { to: "/teacher/timetable", label: "My Timetable", icon: Calendar },

@@ -457,6 +457,37 @@ Whenever a user is created (school admin via school creation, teachers/parents/a
 - **Backend: 229/229 pass** (was 218; +11 new tenant-authoritative tests, 0 regressions).
 - **Live verified**: school admin can log in, see all 120 students, navigate to all pages — proving the per-tenant DB read path works through the UI.
 
+## v1.16 — Platform school-detail drawer + teachers can add classes/sections (2026-05-15)
+
+**Platform Super Admin UI**
+- `GET /api/schools/with-stats` — new endpoint enriching each school with live tenant-DB counts: `students, teachers, parents, school_admins, classes, sections, fee_due, fee_collected`.
+- `GET /api/schools/{id}/people` — returns full teacher list + student roster (with class name) for a single school. Visible to platform admin and that school's own school admin only (others → 403). Passwords never leak in the response.
+- `PlatformOverview.jsx` redesigned:
+  - 5 KPI tiles (total schools, total students, total teachers, notifications, failed).
+  - School cards are clickable — each card shows a 6-tile mini-grid: Students / Teachers / Parents / Classes / Sections / Fee Due (formatted with k/L/Cr).
+  - Click → right-side drawer (`school-detail-drawer`) lists all teachers (name/email/phone) + all students (UID/name/class/parent) for that school.
+
+**Teachers can add classes / sections / subjects**
+- `POST /api/academic/classes` and `POST /api/academic/subjects` now accept role `teacher` in addition to `school_admin`.
+- New endpoint `POST /api/academic/classes/{class_id}/sections { section }` — anyone (admin or teacher) can append a new section.
+- New endpoint `DELETE /api/academic/classes/{class_id}/sections/{section}` — **school admin only**.
+- Existing `DELETE /api/academic/classes/{id}` and `DELETE /api/academic/subjects/{id}` stay school-admin-only.
+- `ClassesPage.jsx` is now role-aware:
+  - Teachers see the "Add class", "Add section", and "Add subject" forms but NOT delete trash icons / section X chips.
+  - Teachers see a clearer subtitle: *"Add new classes, sections, and subjects. Removing items requires the school super admin."*
+  - Class-teacher assignment section is hidden for teachers.
+- New route `/teacher/classes` rendered with the same component; sidebar gets a "Classes & Subjects" entry for teachers.
+
+**New tests — `backend/tests/test_v16_platform_and_classes.py` (15 cases)**
+- `/schools/with-stats`: returns stats per school, school admin gets 403
+- `/schools/{id}/people`: returns teachers + students with safe shape (no password_hash), school admin can read own school, gets 403 for other school, teacher gets 403
+- Teacher can POST class, subject, and section; duplicate section returns 400
+- Teacher cannot DELETE class, subject, or section (403); school admin can do all of these
+
+### Test status (cumulative)
+- **Backend: 243/244 pass** (was 229; +15 new tests; 1 flaky cross-test race not related to this work).
+- **Frontend verified live**: Platform drawer shows teachers + students for any school; teacher classes page shows ADD controls but ZERO delete buttons (`DeleteClass:0 DeleteSection:0`), confirming RBAC.
+
 ## Prioritized Backlog (refreshed)
 ### P1
 - Stripe / Razorpay automated subscription payments

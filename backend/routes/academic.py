@@ -28,7 +28,7 @@ async def list_classes(user: dict = Depends(get_current_user)):
 
 
 @router.post("/classes")
-async def create_class(payload: ClassCreate, user: dict = Depends(require_roles("school_admin"))):
+async def create_class(payload: ClassCreate, user: dict = Depends(require_roles("school_admin", "teacher"))):
     tdb = await tenant_db(user["school_id"])
     doc = {
         "id": new_id(),
@@ -49,6 +49,37 @@ async def delete_class(class_id: str, user: dict = Depends(require_roles("school
     return {"ok": True}
 
 
+@router.post("/classes/{class_id}/sections")
+async def add_section(class_id: str, payload: dict, user: dict = Depends(require_roles("school_admin", "teacher"))):
+    """Add a new section to an existing class. Available to school_admin and teacher."""
+    section = (payload.get("section") or "").strip().upper()
+    if not section:
+        raise HTTPException(status_code=400, detail="Section name is required")
+    tdb = await tenant_db(user["school_id"])
+    cls = await tdb.classes.find_one({"id": class_id, "school_id": user["school_id"]})
+    if not cls:
+        raise HTTPException(status_code=404, detail="Class not found")
+    existing = [s.upper() for s in (cls.get("sections") or [])]
+    if section in existing:
+        raise HTTPException(status_code=400, detail=f"Section '{section}' already exists in this class")
+    new_sections = sorted(existing + [section])
+    await tdb.classes.update_one({"id": class_id}, {"$set": {"sections": new_sections}})
+    return {"ok": True, "sections": new_sections}
+
+
+@router.delete("/classes/{class_id}/sections/{section}")
+async def remove_section(class_id: str, section: str, user: dict = Depends(require_roles("school_admin"))):
+    """Remove a section from a class. School_admin only."""
+    section = section.strip().upper()
+    tdb = await tenant_db(user["school_id"])
+    cls = await tdb.classes.find_one({"id": class_id, "school_id": user["school_id"]})
+    if not cls:
+        raise HTTPException(status_code=404, detail="Class not found")
+    sections = [s for s in (cls.get("sections") or []) if s.upper() != section]
+    await tdb.classes.update_one({"id": class_id}, {"$set": {"sections": sections}})
+    return {"ok": True, "sections": sections}
+
+
 # ---- Subjects ----
 @router.get("/subjects")
 async def list_subjects(user: dict = Depends(get_current_user)):
@@ -65,7 +96,7 @@ async def list_subjects(user: dict = Depends(get_current_user)):
 
 
 @router.post("/subjects")
-async def create_subject(payload: SubjectCreate, user: dict = Depends(require_roles("school_admin"))):
+async def create_subject(payload: SubjectCreate, user: dict = Depends(require_roles("school_admin", "teacher"))):
     tdb = await tenant_db(user["school_id"])
     doc = {
         "id": new_id(),

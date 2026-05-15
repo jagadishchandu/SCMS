@@ -85,6 +85,7 @@ export default function App() {
       <Route path="/school/students" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(StudentsPage)}</ProtectedRoute>} />
       <Route path="/school/teachers" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(TeachersPage)}</ProtectedRoute>} />
       <Route path="/school/classes" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(ClassesPage)}</ProtectedRoute>} />
+      <Route path="/teacher/classes" element={<ProtectedRoute allow={["teacher"]}>{withLayout(ClassesPage)}</ProtectedRoute>} />
       <Route path="/school/attendance" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(AttendancePage)}</ProtectedRoute>} />
       <Route path="/school/exams" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(ExamsPage)}</ProtectedRoute>} />
       <Route path="/school/syllabus" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(SyllabusPage)}</ProtectedRoute>} />

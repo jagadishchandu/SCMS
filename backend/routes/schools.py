@@ -18,6 +18,77 @@ async def list_schools(user: dict = Depends(get_current_user)):
     return schools
 
 
+@router.get("/with-stats")
+async def list_schools_with_stats(user: dict = Depends(require_roles("platform_admin"))):
+    """Returns every school enriched with live tenant-DB counts (students, teachers,
+    parents, classes, attendance, fees outstanding) — used by the Platform Overview."""
+    from core.db import tenant_db
+    db = get_db()
+    schools = await db.schools.find({}, {"_id": 0}).sort("name", 1).to_list(1000)
+    enriched = []
+    for s in schools:
+        tdb = await tenant_db(s["id"])
+        students = await tdb.students.count_documents({"status": "active"})
+        teachers = await db.users.count_documents({"school_id": s["id"], "role": "teacher", "is_active": True})
+        parents = await db.users.count_documents({"school_id": s["id"], "role": "parent", "is_active": True})
+        admins = await db.users.count_documents({"school_id": s["id"], "role": "school_admin", "is_active": True})
+        classes = await tdb.classes.count_documents({})
+        sections_count = 0
+        async for c in tdb.classes.find({}, {"sections": 1, "_id": 0}):
+            sections_count += len(c.get("sections") or [])
+        fees_due_agg = await tdb.fees.aggregate([
+            {"$group": {"_id": None, "due": {"$sum": "$due"}, "paid": {"$sum": "$paid"}}}
+        ]).to_list(1)
+        fee_due = fees_due_agg[0]["due"] if fees_due_agg else 0
+        fee_paid = fees_due_agg[0]["paid"] if fees_due_agg else 0
+        enriched.append({
+            **s,
+            "stats": {
+                "students": students, "teachers": teachers, "parents": parents,
+                "school_admins": admins, "classes": classes, "sections": sections_count,
+                "fee_due": fee_due, "fee_collected": fee_paid,
+            },
+        })
+    return enriched
+
+
+@router.get("/{school_id}/people")
+async def school_people_overview(school_id: str, user: dict = Depends(get_current_user)):
+    """Lists teachers + students for a single school (used by Platform admin school-detail drawer)."""
+    if user["role"] not in ("platform_admin", "school_admin"):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if user["role"] == "school_admin" and user.get("school_id") != school_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    from core.db import tenant_db
+    db = get_db()
+    school = await db.schools.find_one({"id": school_id}, {"_id": 0})
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+    tdb = await tenant_db(school_id)
+    teachers = await db.users.find(
+        {"school_id": school_id, "role": "teacher", "is_active": True},
+        {"_id": 0, "password_hash": 0},
+    ).sort("name", 1).to_list(500)
+    students = await tdb.students.find(
+        {"status": "active"},
+        {"_id": 0, "id": 1, "student_uid": 1, "name": 1, "class_id": 1, "section": 1, "gender": 1, "parent": 1},
+    ).sort("student_uid", 1).to_list(5000)
+    classes = await tdb.classes.find({}, {"_id": 0}).to_list(500)
+    class_map = {c["id"]: c["name"] for c in classes}
+    for s in students:
+        s["class_name"] = class_map.get(s.get("class_id"))
+    return {
+        "school": school,
+        "teachers": teachers,
+        "students": students,
+        "counts": {
+            "teachers": len(teachers),
+            "students": len(students),
+            "classes": len(classes),
+        },
+    }
+
+
 @router.post("")
 async def create_school(payload: SchoolCreate, user: dict = Depends(require_roles("platform_admin"))):
     db = get_db()
