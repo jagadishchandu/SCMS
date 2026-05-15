@@ -42,10 +42,14 @@ def ctx():
     school = r.json()["school"]
     sa = _login(admin_email, admin_pw)
 
+    # Pre-create a subject so we can pass it when creating a teacher (now required).
+    sub = sa.post(f"{API}/academic/subjects", json={"name": f"Sub {suffix}"}, timeout=15).json()
+
     teacher_email = f"v16.t.{suffix.lower()}@v16.example.com"
     teacher_pw = "Teach@2026"
     sa.post(f"{API}/users", json={
-        "email": teacher_email, "password": teacher_pw, "name": f"V16 T", "role": "teacher",
+        "email": teacher_email, "password": teacher_pw, "name": f"V16 T",
+        "role": "teacher", "subjects": [sub["id"]],
     }, timeout=15)
     ts = _login(teacher_email, teacher_pw)
     yield {

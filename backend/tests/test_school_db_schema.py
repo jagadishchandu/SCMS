@@ -265,8 +265,13 @@ class TestDbStatusEndpoint:
         suffix = uuid.uuid4().hex[:6]
         email = f"t.dbstatus.{suffix}@dbt.example.com"
         pw = "Teacher@2026"
+        subs = sa.get(f"{API}/academic/subjects", timeout=15).json()
+        sub_id = subs[0]["id"] if subs else None
+        if not sub_id:
+            sub_id = sa.post(f"{API}/academic/subjects", json={"name": "Tmp"}, timeout=15).json()["id"]
         sa.post(f"{API}/users", json={
             "email": email, "password": pw, "name": "t", "role": "teacher",
+            "subjects": [sub_id],
         }, timeout=15)
         ts = _login(email, pw)
         r = ts.get(f"{API}/schools/{fresh_school['school']['id']}/db-status", timeout=15)

@@ -1,22 +1,36 @@
 import React, { useEffect, useState } from "react";
 import { api, formatApiError } from "../../lib/api";
+import { useAuth } from "../../contexts/AuthContext";
 import { PageHeader, KPI, Section, Empty } from "../../components/Primitives";
 import { formatDate, currency, CHART_COLORS } from "../../lib/utils";
 import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip } from "recharts";
-import { PaperPlaneTilt, Warning, UserCircle } from "@phosphor-icons/react";
+import { PaperPlaneTilt, Warning, UserCircle, Users, X, Buildings } from "@phosphor-icons/react";
 import { Link } from "react-router-dom";
 import toast from "react-hot-toast";
 
 export default function SchoolDashboard() {
+  const { user } = useAuth();
   const [data, setData] = useState(null);
   const [risks, setRisks] = useState([]);
   const [sendingDigest, setSendingDigest] = useState(false);
+  const [rosterOpen, setRosterOpen] = useState(false);
+  const [roster, setRoster] = useState(null);
+  const [rosterLoading, setRosterLoading] = useState(false);
 
   const load = () => Promise.all([
     api.get("/analytics/school").then((r) => setData(r.data)),
     api.get("/analytics/risk-students", { params: { limit: 5 } }).then((r) => setRisks(r.data)).catch(() => setRisks([])),
   ]);
   useEffect(() => { load(); }, []);
+
+  const openRoster = async () => {
+    setRosterOpen(true); setRosterLoading(true); setRoster(null);
+    try {
+      const { data: people } = await api.get(`/schools/${user.school_id}/people`);
+      setRoster(people);
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setRosterLoading(false); }
+  };
 
   const runDigests = async () => {
     const choice = window.prompt(
@@ -47,9 +61,14 @@ export default function SchoolDashboard() {
       <PageHeader eyebrow="Overview" title="Your school at a glance"
         subtitle="Live attendance, fees, and upcoming exams across all classes."
         actions={
-          <button className="btn-primary" onClick={runDigests} disabled={sendingDigest} data-testid="send-monthly-digest-btn">
-            <PaperPlaneTilt size={16}/> {sendingDigest ? "Sending…" : "Send monthly digest"}
-          </button>
+          <div className="flex gap-2">
+            <button className="btn-secondary" onClick={openRoster} data-testid="view-roster-btn">
+              <Users size={16}/> View roster
+            </button>
+            <button className="btn-primary" onClick={runDigests} disabled={sendingDigest} data-testid="send-monthly-digest-btn">
+              <PaperPlaneTilt size={16}/> {sendingDigest ? "Sending…" : "Send monthly digest"}
+            </button>
+          </div>
         }
       />
 
@@ -151,6 +170,80 @@ export default function SchoolDashboard() {
             </ul>}
         </Section>
       </div>
+
+      {rosterOpen && (
+        <div className="fixed inset-0 z-40" data-testid="school-roster-drawer">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setRosterOpen(false)} />
+          <div className="absolute top-0 right-0 bottom-0 w-full max-w-2xl bg-bg-surface border-l border-line shadow-xl overflow-y-auto">
+            <div className="sticky top-0 bg-bg-surface border-b border-line p-5 flex items-start justify-between gap-3 z-10">
+              <div className="flex items-start gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-lg bg-primary-light text-primary grid place-items-center shrink-0">
+                  <Buildings size={20} />
+                </div>
+                <div className="min-w-0">
+                  <div className="font-display text-xl font-medium truncate" data-testid="school-roster-name">
+                    {roster?.school?.name || "Your school"}
+                  </div>
+                  <div className="text-xs text-ink-muted">{roster?.school?.code} · {roster?.school?.academic_year || "—"}</div>
+                </div>
+              </div>
+              <button onClick={() => setRosterOpen(false)} className="btn-ghost p-2" data-testid="roster-close-btn"><X size={18}/></button>
+            </div>
+            <div className="p-5 space-y-6">
+              {rosterLoading ? <div className="text-ink-muted text-sm">Loading roster…</div> : roster && (
+                <>
+                  <div className="grid grid-cols-3 gap-3">
+                    <KPI label="Students" value={roster.students.length} accent="info" testId="roster-kpi-students" />
+                    <KPI label="Teachers" value={roster.teachers.length} accent="success" testId="roster-kpi-teachers" />
+                    <KPI label="Classes" value={roster.counts?.classes || 0} accent="primary" testId="roster-kpi-classes" />
+                  </div>
+                  <Section title={`Teachers (${roster.teachers.length})`}>
+                    {roster.teachers.length === 0 ? <Empty title="No teachers" /> : (
+                      <div className="border border-line rounded-md overflow-hidden">
+                        <table className="w-full text-sm">
+                          <thead className="bg-bg-subtle text-ink-muted text-xs uppercase tracking-wider">
+                            <tr><th className="text-left p-2.5">Name</th><th className="text-left p-2.5">Email</th><th className="text-left p-2.5">Phone</th></tr>
+                          </thead>
+                          <tbody>
+                            {roster.teachers.map((t) => (
+                              <tr key={t.id} className="border-t border-line/60" data-testid={`roster-teacher-${t.id}`}>
+                                <td className="p-2.5 font-medium">{t.name}</td>
+                                <td className="p-2.5 text-ink-soft">{t.email}</td>
+                                <td className="p-2.5 text-ink-soft">{t.phone || "—"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </Section>
+                  <Section title={`Students (${roster.students.length})`}>
+                    {roster.students.length === 0 ? <Empty title="No students" /> : (
+                      <div className="border border-line rounded-md overflow-hidden max-h-96 overflow-y-auto">
+                        <table className="w-full text-sm">
+                          <thead className="bg-bg-subtle text-ink-muted text-xs uppercase tracking-wider sticky top-0">
+                            <tr><th className="text-left p-2.5">UID</th><th className="text-left p-2.5">Name</th><th className="text-left p-2.5">Class</th><th className="text-left p-2.5">Parent</th></tr>
+                          </thead>
+                          <tbody>
+                            {roster.students.map((s) => (
+                              <tr key={s.id} className="border-t border-line/60" data-testid={`roster-student-${s.id}`}>
+                                <td className="p-2.5 font-mono text-xs text-ink-soft">{s.student_uid}</td>
+                                <td className="p-2.5 font-medium">{s.name}</td>
+                                <td className="p-2.5 text-ink-soft">{s.class_name || s.class_id} · {s.section}</td>
+                                <td className="p-2.5 text-ink-soft text-xs">{s.parent?.name || "—"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </Section>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

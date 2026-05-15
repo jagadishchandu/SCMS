@@ -59,6 +59,7 @@ class UserCreate(BaseModel):
     qualifications: Optional[str] = None
     joining_date: Optional[str] = None  # YYYY-MM-DD
     subjects: Optional[List[str]] = None  # subject ids
+    monthly_salary: Optional[float] = None  # for teacher/accounts
 
 
 class UserUpdate(BaseModel):
@@ -67,6 +68,7 @@ class UserUpdate(BaseModel):
     qualifications: Optional[str] = None
     is_active: Optional[bool] = None
     subjects: Optional[List[str]] = None
+    monthly_salary: Optional[float] = None
 
 
 # ---------- Class / Section / Subject ----------

@@ -45,6 +45,13 @@ async def create_user(payload: UserCreate, user: dict = Depends(require_roles("s
     email = payload.email.lower()
     if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="Email already exists")
+    # Teachers MUST have at least one subject. Non-teaching staff (cleaners,
+    # drivers, sports coaches, etc.) should be created via /api/staff instead.
+    if payload.role == "teacher" and not (payload.subjects and len(payload.subjects) > 0):
+        raise HTTPException(
+            status_code=400,
+            detail="Teachers must be assigned at least one subject. If this person doesn't teach, add them as Accounts (for fees) or as non-teaching Staff (sports coach, driver, cleaner, etc.).",
+        )
     doc = {
         "id": new_id(),
         "email": email,
@@ -57,6 +64,7 @@ async def create_user(payload: UserCreate, user: dict = Depends(require_roles("s
         "qualifications": payload.qualifications,
         "joining_date": payload.joining_date,
         "subjects": payload.subjects or [],
+        "monthly_salary": payload.monthly_salary,
         "is_active": True,
         "created_at": utc_now(),
     }

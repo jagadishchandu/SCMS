@@ -28,6 +28,8 @@ import SchoolDashboard from "./pages/school/SchoolDashboard";
 import StudentsPage from "./pages/school/StudentsPage";
 import TeachersPage from "./pages/school/TeachersPage";
 import ClassesPage from "./pages/school/ClassesPage";
+import StaffPage from "./pages/school/StaffPage";
+import ExpensesPage from "./pages/ExpensesPage";
 import AttendancePage from "./pages/school/AttendancePage";
 import ExamsPage from "./pages/school/ExamsPage";
 import SyllabusPage from "./pages/school/SyllabusPage";
@@ -86,6 +88,11 @@ export default function App() {
       <Route path="/school/teachers" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(TeachersPage)}</ProtectedRoute>} />
       <Route path="/school/classes" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(ClassesPage)}</ProtectedRoute>} />
       <Route path="/teacher/classes" element={<ProtectedRoute allow={["teacher"]}>{withLayout(ClassesPage)}</ProtectedRoute>} />
+
+      <Route path="/school/staff" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(StaffPage)}</ProtectedRoute>} />
+      <Route path="/school/expenses" element={<ProtectedRoute allow={["school_admin", "accounts"]}>{withLayout(ExpensesPage)}</ProtectedRoute>} />
+      <Route path="/accounts/expenses" element={<ProtectedRoute allow={["accounts"]}>{withLayout(ExpensesPage)}</ProtectedRoute>} />
+      <Route path="/teacher/expenses" element={<ProtectedRoute allow={["teacher"]}>{withLayout(ExpensesPage)}</ProtectedRoute>} />
       <Route path="/school/attendance" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(AttendancePage)}</ProtectedRoute>} />
       <Route path="/school/exams" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(ExamsPage)}</ProtectedRoute>} />
       <Route path="/school/syllabus" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(SyllabusPage)}</ProtectedRoute>} />

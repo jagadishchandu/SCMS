@@ -6,7 +6,7 @@ import {
   House, Buildings, GraduationCap, ClipboardText, ChartLineUp,
   Calendar, BookOpen, Receipt, BellRinging, UploadSimple,
   Gauge, ChalkboardTeacher, SignOut, ChartPieSlice, FileText, MagnifyingGlass,
-  ShieldCheck, Package, X, Heartbeat,
+  ShieldCheck, Package, X, Heartbeat, Users, MoneyWavy,
 } from "@phosphor-icons/react";
 
 const NAV_BY_ROLE = {
@@ -21,6 +21,8 @@ const NAV_BY_ROLE = {
     { to: "/school", label: "Dashboard", icon: Gauge, end: true },
     { to: "/school/students", label: "Students", icon: GraduationCap },
     { to: "/school/teachers", label: "Teachers & Staff", icon: ChalkboardTeacher },
+    { to: "/school/staff", label: "Support Staff", icon: Users },
+    { to: "/school/expenses", label: "Expenses & Payroll", icon: MoneyWavy },
     { to: "/school/classes", label: "Classes & Subjects", icon: BookOpen },
     { to: "/school/attendance", label: "Attendance", icon: ClipboardText },
     { to: "/school/exams", label: "Exams & Marks", icon: FileText },
@@ -46,6 +48,7 @@ const NAV_BY_ROLE = {
     { to: "/teacher/marks", label: "Enter Marks", icon: FileText },
     { to: "/teacher/students", label: "My Students", icon: GraduationCap },
     { to: "/teacher/classes", label: "Classes & Subjects", icon: BookOpen },
+    { to: "/teacher/expenses", label: "My Expenses", icon: MoneyWavy },
     { to: "/teacher/uploads", label: "Bulk Uploads", icon: UploadSimple },
     { to: "/teacher/sick-leaves", label: "Sick Leaves", icon: Heartbeat },
     { to: "/teacher/timetable", label: "My Timetable", icon: Calendar },
@@ -57,6 +60,7 @@ const NAV_BY_ROLE = {
     { to: "/accounts", label: "Fee Dashboard", icon: Gauge, end: true },
     { to: "/accounts/fees", label: "Fee Structures", icon: Receipt },
     { to: "/accounts/payments", label: "Payments", icon: ChartPieSlice },
+    { to: "/accounts/expenses", label: "Expenses & Reimbursements", icon: MoneyWavy },
     { to: "/student-search", label: "Student Search", icon: MagnifyingGlass },
   ],
   parent: [

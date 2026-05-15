@@ -37,6 +37,8 @@ from routes.activities import router as activities_router
 from routes.sick_leaves import router as sick_leaves_router
 from routes.webhooks import router as webhooks_router
 from routes.integration_tests import router as integration_tests_router
+from routes.staff import router as staff_router
+from routes.expenses import router as expenses_router
 from core import scheduler as digest_scheduler
 
 
@@ -489,5 +491,7 @@ api.include_router(activities_router)
 api.include_router(sick_leaves_router)
 api.include_router(webhooks_router)
 api.include_router(integration_tests_router)
+api.include_router(staff_router)
+api.include_router(expenses_router)
 
 app.include_router(api)

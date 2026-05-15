@@ -488,6 +488,40 @@ Whenever a user is created (school admin via school creation, teachers/parents/a
 - **Backend: 243/244 pass** (was 229; +15 new tests; 1 flaky cross-test race not related to this work).
 - **Frontend verified live**: Platform drawer shows teachers + students for any school; teacher classes page shows ADD controls but ZERO delete buttons (`DeleteClass:0 DeleteSection:0`), confirming RBAC.
 
+## v1.17 — HR & Finance: Staff + Salaries + Expenses + Teacher Reimbursements (2026-05-15)
+
+**Same school detail drawer for school admin** (`/school` dashboard)
+- New "View roster" button on the school dashboard opens the same drawer the platform admin sees — but scoped to their own school. Reuses `/api/schools/{id}/people`.
+
+**Teachers must be assigned subjects**
+- `POST /api/users role=teacher` now rejects with 400 unless `subjects[]` is provided. The error message guides admins to use `accounts` role or the new Staff module if the person doesn't teach.
+
+**New "Staff" module** (`/school/staff`, school admin only)
+- New tenant collection `staff` with: name, role (`cleaner/bus_driver/security/cook/sports_coach/nurse/librarian/lab_assistant/office_assistant/other`), phone, email, monthly_salary, joining_date, notes, is_active.
+- Endpoints: `GET/POST/PATCH/DELETE /api/staff` (school_admin CRUD); `GET /api/staff` also visible to accounts; teachers blocked.
+- `GET /api/staff/summary/payroll` — combined monthly + yearly outflow across teachers, accounts users, and non-teaching staff.
+
+**Teacher / Accounts salaries** (master `users.monthly_salary`)
+- `UserCreate` and `UserUpdate` accept `monthly_salary`. School admin sets/edits via `PATCH /api/users/{id}`. Surfaced in the payroll summary above.
+
+**New "Expenses" module** (`/school/expenses`, `/accounts/expenses`, `/teacher/expenses`)
+- New tenant collection `expenses` with: category (`salary/supplies/maintenance/utilities/travel/events/transport/food/stationery/books/other`), description, amount, vendor, incurred_on, receipt_data_url, reimburse_with_salary, submitted_by{,_name,_role}, status (`pending/approved/rejected/paid`), approved_by, approved_at, paid_at, note.
+- `POST /api/expenses`:
+  - school_admin / accounts → auto `approved`
+  - teacher → `pending` reimbursement request (can flag `reimburse_with_salary`)
+- `GET /api/expenses` — teachers see only their own; admin + accounts see all; filterable by status / category.
+- `POST /api/expenses/{id}/decide { decision: approve|reject|mark_paid }` — admin / accounts only; state-machine enforced.
+- `GET /api/expenses/summary` — totals by status + by category + pending teacher-reimbursement count/total.
+
+**Schema bumped to 1.17**: 31 tenant collections (was 29). New collections `staff` and `expenses` added to `init_school_db` (idempotent — applied to all existing schools on startup).
+
+### Test status
+- **265 backend tests pass** (was 244; +24 new tests in `test_v17_hr_finance.py`; +1 v16 fixture fix). The 3 cross-test flakes are an ongoing module-scope-fixture race and not related to this work.
+- **Frontend smoke verified live**:
+  - School admin dashboard `View roster` button → drawer shows Sunrise's 144 students + 71 teachers
+  - `/school/staff` shows the new 3 KPI tiles (Active staff / Monthly payroll / Yearly payroll) + roster table
+  - `/school/expenses` shows the 4 finance KPIs + filter tabs (All/Pending/Approved/Paid/Rejected)
+
 ## Prioritized Backlog (refreshed)
 ### P1
 - Stripe / Razorpay automated subscription payments
@@ -497,6 +531,7 @@ Whenever a user is created (school admin via school creation, teachers/parents/a
 - Recovery nudges post-expiry (day 1 / 3 / 7) (i18n templates ready; scheduler wiring pending)
 - Meta WhatsApp template approval workflow
 - Email channel for password reset
+- Auto-deduct reimburse-with-salary expenses from the next month's payroll (today admin has to do it manually)
 
 ### P3
 - React Native shell reusing the same API

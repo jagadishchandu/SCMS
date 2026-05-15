@@ -107,15 +107,13 @@ MASTER_ONLY_COLLECTIONS = (
 
 # School-scoped collections moved to per-school DB as authoritative.
 TENANT_OPERATIONAL_COLLECTIONS = (
-    "classes", "subjects", "class_teacher_map",
+    "students", "classes", "subjects", "class_teacher_map",
     "attendance", "exams", "marks", "syllabus",
     "holidays", "fee_structures", "fees", "fee_payments",
     "timetable", "activities", "activity_enrollments",
     "sick_leaves", "notifications", "bulk_uploads", "receipts",
-    "audit_logs",
+    "audit_logs", "staff", "expenses",
 )
-# Plus students which is the principal child entity
-TENANT_OPERATIONAL_COLLECTIONS = ("students",) + TENANT_OPERATIONAL_COLLECTIONS
 
 
 async def migrate_master_to_tenant(school: dict, dry_run: bool = False) -> dict:
@@ -301,6 +299,18 @@ async def init_school_db(school: dict):
     await sdb.subscription_history.create_index([("created_at", -1)])
     await sdb.subscription_history.create_index("status")
 
+    # ---- Non-teaching staff (cleaner / driver / cook / sports coach / etc.) ----
+    await sdb.staff.create_index("name")
+    await sdb.staff.create_index("role")
+    await sdb.staff.create_index("is_active")
+    await sdb.staff.create_index("phone")
+
+    # ---- Expenses + teacher reimbursement requests ----
+    await sdb.expenses.create_index([("created_at", -1)])
+    await sdb.expenses.create_index("status")
+    await sdb.expenses.create_index("category")
+    await sdb.expenses.create_index("submitted_by")
+
     # ---- Meta marker (lists which version provisioned the schema) ----
     await sdb.meta.update_one(
         {"_marker": "school_db"},
@@ -309,7 +319,7 @@ async def init_school_db(school: dict):
             "school_id": school["id"],
             "school_code": school.get("code"),
             "school_name": school.get("name"),
-            "initialized_at_v": "1.15",
+            "initialized_at_v": "1.17",
             "collections": [
                 "users", "school_admins", "teachers", "parents", "accounts_users", "students_users",
                 "classes", "subjects", "class_teacher_map", "students", "attendance",
@@ -317,7 +327,9 @@ async def init_school_db(school: dict):
                 "fee_structures", "fees", "fee_payments",
                 "timetable", "notifications", "activities", "activity_enrollments",
                 "sick_leaves", "audit_logs", "password_reset_codes",
-                "bulk_uploads", "receipts", "subscription_history", "meta",
+                "bulk_uploads", "receipts", "subscription_history",
+                "staff", "expenses",
+                "meta",
             ],
         }},
         upsert=True,
@@ -333,7 +345,9 @@ SCHOOL_DB_COLLECTIONS = (
     "fee_structures", "fees", "fee_payments",
     "timetable", "notifications", "activities", "activity_enrollments",
     "sick_leaves", "audit_logs", "password_reset_codes",
-    "bulk_uploads", "receipts", "subscription_history", "meta",
+    "bulk_uploads", "receipts", "subscription_history",
+    "staff", "expenses",
+    "meta",
 )
 
 

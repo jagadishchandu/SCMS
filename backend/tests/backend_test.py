@@ -168,7 +168,9 @@ class TestSchoolAdmin:
         r = school_session.post(f"{API}/students", json=payload, timeout=20)
         assert r.status_code in (200, 201), r.text
 
-        # create teacher
+        # create teacher (subjects now required)
+        existing_subjects = school_session.get(f"{API}/academic/subjects", timeout=15).json()
+        sub_id = existing_subjects[0]["id"] if existing_subjects else None
         tpayload = {
             "email": f"test.teacher.{uuid.uuid4().hex[:6]}@sunrise.edu",
             "password": "Teacher@123",
@@ -176,6 +178,7 @@ class TestSchoolAdmin:
             "role": "teacher",
             "employee_id": "EMP-TEST",
             "phone": "+91-90000",
+            "subjects": [sub_id] if sub_id else ["english"],
         }
         r2 = school_session.post(f"{API}/users", json=tpayload, timeout=20)
         assert r2.status_code in (200, 201), r2.text
@@ -1007,9 +1010,12 @@ class TestSingleSuperAdmin:
         assert r.status_code in (403, 422), r.status_code
 
     def test_create_teacher_still_works(self, school_session):
+        subs = school_session.get(f"{API}/academic/subjects", timeout=15).json()
+        sub_id = subs[0]["id"] if subs else "english"
         r = school_session.post(f"{API}/users", json={
             "email": f"t.{uuid.uuid4().hex[:6]}@sunrise.edu",
             "password": "T@12345678", "name": "T", "role": "teacher",
+            "subjects": [sub_id],
         }, timeout=15)
         assert r.status_code in (200, 201), r.text
 
