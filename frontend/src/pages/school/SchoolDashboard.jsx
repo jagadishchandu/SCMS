@@ -1,12 +1,29 @@
 import React, { useEffect, useState } from "react";
-import { api } from "../../lib/api";
+import { api, formatApiError } from "../../lib/api";
 import { PageHeader, KPI, Section, Empty } from "../../components/Primitives";
 import { formatDate, currency, CHART_COLORS } from "../../lib/utils";
-import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid } from "recharts";
+import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip } from "recharts";
+import { PaperPlaneTilt } from "@phosphor-icons/react";
+import toast from "react-hot-toast";
 
 export default function SchoolDashboard() {
   const [data, setData] = useState(null);
-  useEffect(() => { api.get("/analytics/school").then((r) => setData(r.data)); }, []);
+  const [sendingDigest, setSendingDigest] = useState(false);
+
+  const load = () => api.get("/analytics/school").then((r) => setData(r.data));
+  useEffect(() => { load(); }, []);
+
+  const runDigests = async () => {
+    if (!window.confirm("Send last month's WhatsApp digest to every parent in the school?")) return;
+    setSendingDigest(true);
+    try {
+      const { data: res } = await api.post("/digests/run-monthly");
+      const t = res.totals;
+      toast.success(`Digest run · sent ${t.sent}, queued ${t.queued}, failed ${t.failed} (${res.period})`);
+      load();
+    } catch (e) { toast.error(formatApiError(e)); }
+    finally { setSendingDigest(false); }
+  };
 
   if (!data) return <div className="skeleton h-40 w-full" />;
   const k = data.kpis;
@@ -19,7 +36,13 @@ export default function SchoolDashboard() {
   return (
     <div data-testid="school-dashboard">
       <PageHeader eyebrow="Overview" title="Your school at a glance"
-        subtitle="Live attendance, fees, and upcoming exams across all classes." />
+        subtitle="Live attendance, fees, and upcoming exams across all classes."
+        actions={
+          <button className="btn-primary" onClick={runDigests} disabled={sendingDigest} data-testid="send-monthly-digest-btn">
+            <PaperPlaneTilt size={16}/> {sendingDigest ? "Sending…" : "Send monthly digest"}
+          </button>
+        }
+      />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         <KPI label="Active students" value={k.total_students} accent="primary" testId="kpi-students" />

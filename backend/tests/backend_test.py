@@ -581,3 +581,104 @@ class TestPhotoUpload:
         files = {"file": ("p.png", self.PNG_BYTES, "image/png")}
         r = parent_session.post(f"{API}/students/{sid_other}/photo", files=files, timeout=15)
         assert r.status_code == 403, r.status_code
+
+
+# =========================================================================
+# Iteration 3: Monthly parent digest (preview + run-monthly)
+# =========================================================================
+
+class TestDigests:
+    """Monthly digest preview + run-monthly across roles."""
+
+    def test_preview_school_admin(self, school_session):
+        r = school_session.get(f"{API}/digests/preview/STU-00001", timeout=20)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        for k in ("label", "start", "end", "data", "message"):
+            assert k in body, body
+        data = body["data"]
+        for k in ("att_total", "att_pct", "absent", "sick", "marks_pct", "fee_due"):
+            assert k in data, data
+        msg = body["message"]
+        assert isinstance(msg, str) and "\n" in msg, msg
+        assert "Sunrise Public School" in msg
+        assert "Aarav Sharma" in msg or "STU-00001" in msg
+        assert body["label"] in msg  # period mentioned in message
+
+    def test_preview_parent_own_child(self, parent_session):
+        r = parent_session.get(f"{API}/digests/preview/STU-00001", timeout=20)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert "message" in body and "data" in body
+
+    def test_preview_parent_other_child_404(self, parent_session):
+        r = parent_session.get(f"{API}/digests/preview/STU-00002", timeout=15)
+        assert r.status_code == 404, r.status_code
+
+    def test_run_monthly_school_admin(self, school_session):
+        r = school_session.post(f"{API}/digests/run-monthly", timeout=60)
+        assert r.status_code in (200, 201), r.text
+        body = r.json()
+        assert "period" in body and "totals" in body and "by_school" in body
+        totals = body["totals"]
+        for k in ("sent", "queued", "failed"):
+            assert k in totals, totals
+        assert isinstance(body["by_school"], list)
+        assert len(body["by_school"]) == 1, body["by_school"]
+        bs = body["by_school"][0]
+        for k in ("school_id", "school_name", "students", "sent", "queued", "failed"):
+            assert k in bs, bs
+        assert bs["students"] > 0, bs
+        # Twilio not configured => queued count should match students count
+        assert bs["queued"] == bs["students"], bs
+
+    def test_notifications_have_monthly_digest_after_run(self, school_session):
+        # ensure run was called
+        school_session.post(f"{API}/digests/run-monthly", timeout=60)
+        notifs = school_session.get(f"{API}/notifications", params={"limit": 200}, timeout=20).json()
+        assert isinstance(notifs, list)
+        md = [n for n in notifs if n.get("template") == "monthly_digest"]
+        assert len(md) > 0, f"No monthly_digest notifications found; sample={notifs[:2]}"
+        # all should be whatsapp + queued + twilio_not_configured
+        assert all(n.get("channel") == "whatsapp" for n in md), [n.get("channel") for n in md[:5]]
+        assert all(n.get("status") == "queued" for n in md), [n.get("status") for n in md[:5]]
+        assert all("twilio_not_configured" in (n.get("delivery_note") or "") for n in md), \
+            [n.get("delivery_note") for n in md[:5]]
+
+    def test_run_monthly_platform_admin_all_schools(self, platform_session):
+        r = platform_session.post(f"{API}/digests/run-monthly", timeout=120)
+        assert r.status_code in (200, 201), r.text
+        body = r.json()
+        assert isinstance(body["by_school"], list)
+        assert len(body["by_school"]) >= 1, body["by_school"]
+
+    def test_run_monthly_rbac_teacher_forbidden(self, teacher_session):
+        r = teacher_session.post(f"{API}/digests/run-monthly", timeout=15)
+        assert r.status_code == 403, r.status_code
+
+    def test_run_monthly_rbac_parent_forbidden(self, parent_session):
+        r = parent_session.post(f"{API}/digests/run-monthly", timeout=15)
+        assert r.status_code == 403, r.status_code
+
+    def test_run_monthly_rbac_accounts_forbidden(self, accounts_session):
+        r = accounts_session.post(f"{API}/digests/run-monthly", timeout=15)
+        assert r.status_code == 403, r.status_code
+
+    def test_audit_logged_after_run_monthly(self, school_session):
+        before = school_session.get(f"{API}/audit", timeout=15).json()
+        before_latest = max(
+            (a.get("created_at", "") for a in before
+             if a.get("action") == "run_monthly_digest"
+             and a.get("resource") == "digest"
+             and a.get("actor_role") == "school_admin"),
+            default="",
+        )
+        r = school_session.post(f"{API}/digests/run-monthly", timeout=60)
+        assert r.status_code in (200, 201), r.text
+        after = school_session.get(f"{API}/audit", timeout=15).json()
+        match = [a for a in after if a.get("action") == "run_monthly_digest"
+                 and a.get("resource") == "digest"
+                 and a.get("actor_role") == "school_admin"
+                 and a.get("created_at", "") > before_latest]
+        assert len(match) > 0, f"Expected new run_monthly_digest audit entry after {before_latest}; got {after[:3]}"
+

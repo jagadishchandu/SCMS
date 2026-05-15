@@ -32,6 +32,7 @@ from routes.audit import router as audit_router
 from routes.subscriptions import router as subscriptions_router
 from routes.receipts import router as receipts_router
 from routes.calendar_route import router as calendar_router
+from routes.digests import router as digests_router
 
 
 async def seed_platform_admin():
@@ -390,5 +391,6 @@ api.include_router(audit_router)
 api.include_router(subscriptions_router)
 api.include_router(receipts_router)
 api.include_router(calendar_router)
+api.include_router(digests_router)
 
 app.include_router(api)

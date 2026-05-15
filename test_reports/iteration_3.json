@@ -1,0 +1,35 @@
+{
+  "summary": "SCMS iteration 3 — Monthly parent digest feature tested end-to-end. Backend: 63/63 pytest pass (53 iter1+iter2 regression + 10 new TestDigests). New coverage validated: (1) GET /api/digests/preview/STU-00001 as school_admin returns {label,start,end,data{att_total,att_pct,absent,sick,marks_pct,fee_due},message}; message contains school name 'Sunrise Public School', student name 'Aarav Sharma' and the period label and is multi-line WhatsApp-friendly. (2) GET /api/digests/preview/STU-00001 as parent of STU-00001 works; /preview/STU-00002 returns 404 for that parent (scoping via parent_user_id filter). (3) POST /api/digests/run-monthly as school_admin returns {period, totals:{sent,queued,failed}, by_school:[{school_id,school_name,students,sent,queued,failed}]}; by_school length == 1, students > 0, and queued == students (Twilio env empty, send path gated). (4) POST /api/digests/run-monthly as platform_admin (no school_id) returns by_school list across all active schools (≥1). (5) RBAC: teacher, parent, accounts all receive 403 on run-monthly. (6) After run-monthly, /api/notifications?limit=200 contains entries with template='monthly_digest', channel='whatsapp', status='queued', delivery_note containing 'twilio_not_configured'. (7) Audit log gets a fresh entry with action='run_monthly_digest', resource='digest', actor_role='school_admin' (verified by created_at timestamp newer than baseline). (8) Frontend smoke (1920x1080): school_admin login → /school dashboard renders [data-testid=school-dashboard], button [data-testid=send-monthly-digest-btn] visible; clicking it auto-accepts the confirm dialog and posts /digests/run-monthly; after reload, kpi-notifications-sent grew (357→373, +16). /school/calendar (calendar-page), /school/audit (audit-log-page), /school/fees all render without errors. Existing iter1+iter2 flows unchanged.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "(Optional/cosmetic) routes/digests.py — _compute_digest does a separate Mongo find for attendance/marks/fees per student inside the run-monthly loop. For schools with thousands of students this is O(N) round-trips per category. A single aggregation per school keyed by student_id would scale better. Not blocking for current school sizes.",
+    "(Optional) The marks-window filter uses 'entered_at' rather than the exam date. If teachers backfill marks late, those rows may be missed by the monthly digest even when the exam fell inside the month. Confirm intended semantics with the product owner.",
+    "(Optional) The composed digest message uses the parent's WhatsApp/phone from student.parent; if neither is present queue_notification still records the notification but with phone=None. Consider surfacing a 'no_phone' delivery_note for visibility."
+  ],
+  "critical_code_review_comments": [
+    "routes/digests.py: _previous_month_range correctly computes prior calendar month label (e.g. 'April 2026') using date.today; deterministic and timezone-naive — acceptable for daily/monthly digest cadence.",
+    "Parent scoping in /preview is enforced via parent_user_id filter — verified by 404 cross-parent test (STU-00002 hidden from STU-00001's parent).",
+    "RBAC on run-monthly uses require_roles('school_admin','platform_admin') — teacher/parent/accounts all return 403 as expected.",
+    "Twilio gating: notifications produced by run-monthly stay status='queued' with delivery_note='twilio_not_configured' since TWILIO env vars are unset — matches the documented MOCKED behaviour.",
+    "Audit log: log_action is invoked per-school inside the loop; meta carries period + students count — verified.",
+    "Frontend SchoolDashboard.jsx: window.confirm is used pre-call (acceptable for an irreversible blast). Consider migrating to a shadcn dialog for parity with other destructive actions in the app; not blocking.",
+    "Frontend uses react-hot-toast for the run result; the toast string includes period + sent/queued/failed counts — verified in API response shape."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": { "backend": "100% (63/63)", "frontend": "100% on smoke (digest button click, kpi delta, calendar+audit+fees pages render)" },
+  "test_credentials": "Used /app/memory/test_credentials.md verbatim — no changes required.",
+  "seed_data_creation": "Re-uses TEST_-prefixed schools/students/teachers/fee_payments seeded by earlier iter1/iter2 tests. No new persistent test data required for digests (notifications are written but are isolated by template='monthly_digest').",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: pytest /app/backend/tests/backend_test.py -v --junitxml=/app/test_reports/pytest/pytest_results.xml. New class TestDigests adds 10 cases. Note: /api/audit returns a capped/paginated list; the test_audit_logged_after_run_monthly assertion compares against the max created_at of pre-existing run_monthly_digest entries rather than total count, which is robust to that cap. MOCKED: Twilio WhatsApp delivery — monthly_digest notifications stay status='queued' with delivery_note='twilio_not_configured' until TWILIO_ACCOUNT_SID/TOKEN/FROM are set in /app/backend/.env. Frontend testid send-monthly-digest-btn lives on /school dashboard (PageHeader actions). window.confirm dialog is intercepted via page.on('dialog', dlg.accept). KPI 'Notifications sent' (kpi-notifications-sent) is the easiest visual delta after a run.",
+  "rca of the issue": "No bugs found. One non-blocking observation captured in action_items about per-student mongo round-trips inside the run-monthly loop and the use of marks.entered_at vs exam date for the monthly window."
+}
