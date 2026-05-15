@@ -1,20 +1,32 @@
 import React, { useState, useEffect } from "react";
 import { useAuth } from "../contexts/AuthContext";
 import { useNavigate, Navigate } from "react-router-dom";
-import { ROLE_HOME } from "../lib/utils";
+import { ROLE_HOME, ROLE_LABELS } from "../lib/utils";
 import toast from "react-hot-toast";
-import { GraduationCap, ArrowRight } from "@phosphor-icons/react";
+import { GraduationCap, ArrowRight, IdentificationCard } from "@phosphor-icons/react";
 
-const DEMO_ACCOUNTS = [
-  { label: "School Admin", email: "principal@sunrise.edu", password: "School@123" },
-  { label: "Teacher (Class Teacher)", email: "priya@sunrise.edu", password: "Teacher@123" },
-  { label: "Accounts", email: "accounts@sunrise.edu", password: "Accounts@123" },
-  { label: "Parent", email: "parent.stu-00001@sunrise.edu", password: "Parent@123" },
+// Roles available for login. Platform Super Admin is intentionally NOT in this list —
+// the platform admin uses their email/password directly without picking the role from the UI,
+// which keeps their existence private from regular users.
+const ROLES = [
+  { value: "school_admin", label: ROLE_LABELS.school_admin,
+    hint: "Manage your school: students, teachers, fees, attendance.",
+    placeholder: "principal@yourschool.edu" },
+  { value: "teacher", label: ROLE_LABELS.teacher,
+    hint: "Take attendance, enter marks, manage your class.",
+    placeholder: "teacher@yourschool.edu" },
+  { value: "accounts", label: ROLE_LABELS.accounts,
+    hint: "Manage fees, payments, and receipts.",
+    placeholder: "accounts@yourschool.edu" },
+  { value: "parent", label: ROLE_LABELS.parent,
+    hint: "View your child's attendance, marks and fees.",
+    placeholder: "you@example.com" },
 ];
 
 export default function Login() {
   const { user, login } = useAuth();
   const navigate = useNavigate();
+  const [role, setRole] = useState("school_admin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -31,6 +43,16 @@ export default function Login() {
     setLoading(true);
     try {
       const u = await login(email, password);
+      // Validate that the user actually has the role they chose.
+      // Exception: platform_admin can log in via any role choice (they own the system).
+      if (u.role !== role && u.role !== "platform_admin") {
+        toast.error(
+          `This account is registered as "${ROLE_LABELS[u.role] || u.role}". ` +
+          `Please select that role and try again.`,
+        );
+        setLoading(false);
+        return;
+      }
       toast.success(`Welcome, ${u.name}`);
       navigate(ROLE_HOME[u.role] || "/", { replace: true });
     } catch (err) {
@@ -40,7 +62,7 @@ export default function Login() {
     }
   };
 
-  const fill = (acc) => { setEmail(acc.email); setPassword(acc.password); };
+  const current = ROLES.find((r) => r.value === role) || ROLES[0];
 
   return (
     <div className="min-h-screen grid lg:grid-cols-2 bg-bg" data-testid="login-page">
@@ -67,10 +89,31 @@ export default function Login() {
 
           <form onSubmit={onSubmit} className="space-y-4" data-testid="login-form">
             <div>
+              <label className="label">I'm signing in as</label>
+              <div className="relative">
+                <IdentificationCard
+                  size={16}
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-muted pointer-events-none"
+                />
+                <select
+                  className="input pl-9"
+                  value={role}
+                  onChange={(e) => setRole(e.target.value)}
+                  data-testid="login-role-select"
+                >
+                  {ROLES.map((r) => (
+                    <option key={r.value} value={r.value}>{r.label}</option>
+                  ))}
+                </select>
+              </div>
+              <p className="text-xs text-ink-muted mt-1.5" data-testid="role-hint">{current.hint}</p>
+            </div>
+
+            <div>
               <label className="label">Email</label>
               <input
                 type="email" autoComplete="email" required
-                className="input" placeholder="you@school.edu"
+                className="input" placeholder={current.placeholder}
                 value={email} onChange={(e) => setEmail(e.target.value)}
                 data-testid="login-email-input"
               />
@@ -89,25 +132,10 @@ export default function Login() {
             </button>
           </form>
 
-          <div className="mt-10 pt-6 border-t border-line">
-            <div className="overline mb-3">Demo accounts</div>
-            <div className="grid grid-cols-1 gap-2">
-              {DEMO_ACCOUNTS.map((a) => (
-                <button
-                  key={a.email}
-                  onClick={() => fill(a)}
-                  className="text-left bg-white border border-line rounded-lg px-3 py-2 text-sm hover:border-primary/40 transition flex items-center justify-between group"
-                  data-testid={`demo-${a.label.toLowerCase().replace(/[^a-z]/g, "-")}`}
-                >
-                  <div>
-                    <div className="font-medium text-ink">{a.label}</div>
-                    <div className="text-xs text-ink-muted">{a.email}</div>
-                  </div>
-                  <span className="text-xs text-ink-muted group-hover:text-primary">use</span>
-                </button>
-              ))}
-            </div>
-          </div>
+          <p className="text-xs text-ink-muted mt-8" data-testid="no-account-help">
+            Don't have an account? Your school administrator creates accounts for teachers, parents and
+            accounts staff. Please ask them to send you an invite.
+          </p>
         </div>
       </div>
 
