@@ -36,6 +36,7 @@ import TeacherPerformancePage from "./pages/school/TeacherPerformancePage";
 import UploadsPage from "./pages/school/UploadsPage";
 import ActivitiesPage from "./pages/school/ActivitiesPage";
 import SchoolSettings from "./pages/school/SchoolSettings";
+import SchoolSubscription from "./pages/school/SchoolSubscription";
 
 // Teacher
 import TeacherDashboard from "./pages/teacher/TeacherDashboard";
@@ -93,6 +94,8 @@ export default function App() {
       <Route path="/school/activities" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(ActivitiesPage)}</ProtectedRoute>} />
       <Route path="/school/calendar" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(CalendarPage)}</ProtectedRoute>} />
       <Route path="/school/audit" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(AuditLogPage)}</ProtectedRoute>} />
+      <Route path="/school/settings" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(SchoolSettings)}</ProtectedRoute>} />
+      <Route path="/school/subscription" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(SchoolSubscription)}</ProtectedRoute>} />
 
       {/* Teacher */}
       <Route path="/teacher" element={<ProtectedRoute allow={["teacher"]}>{withLayout(TeacherDashboard)}</ProtectedRoute>} />

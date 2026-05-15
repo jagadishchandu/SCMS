@@ -20,8 +20,10 @@ services:
       MONGO_URL: "mongodb://mongo:27017"
       DB_NAME: "scms_db"
       JWT_SECRET: "${JWT_SECRET:-9f3b7e2a1c8d4e6f5a0b3c2d1e4f7a8b9c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f}"
-      ADMIN_EMAIL: "${ADMIN_EMAIL:-platform@scms.com}"
-      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-Platform@123}"
+      # Platform Super Admin credentials — provisioned once at startup. Override in your
+      # .env or shell to set production values (e.g. `ADMIN_EMAIL=you@school.com docker compose up`).
+      ADMIN_EMAIL: "${ADMIN_EMAIL:-jagadishchandu789@gmail.com}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-Manasa@123}"
       FRONTEND_URL: "http://localhost:3000"
       CORS_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000"
     ports:

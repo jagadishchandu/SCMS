@@ -33,6 +33,7 @@ const NAV_BY_ROLE = {
     { to: "/school/performance", label: "Teacher Performance", icon: ChartLineUp },
     { to: "/school/notifications", label: "Notifications", icon: BellRinging },
     { to: "/school/uploads", label: "Bulk Uploads", icon: UploadSimple },
+    { to: "/school/subscription", label: "Subscription", icon: Package },
     { to: "/school/settings", label: "Branding", icon: ShieldCheck },
     { to: "/school/audit", label: "Audit log", icon: ShieldCheck },
     { to: "/student-search", label: "Student Analytics", icon: MagnifyingGlass },

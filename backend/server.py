@@ -38,6 +38,9 @@ from core import scheduler as digest_scheduler
 
 
 async def seed_platform_admin():
+    """Provision the single Platform Super Admin from env vars (ADMIN_EMAIL / ADMIN_PASSWORD).
+    No other Platform Super Admins can be created from the app — this is the only seed path.
+    """
     db = get_db()
     email = os.environ.get("ADMIN_EMAIL", "platform@scms.com").lower()
     password = os.environ.get("ADMIN_PASSWORD", "Platform@123")
@@ -53,23 +56,17 @@ async def seed_platform_admin():
             "is_active": True,
             "created_at": utc_now(),
         })
-        print(f"[seed] Platform admin created: {email}")
+        print(f"[seed] Platform Super Admin created: {email}")
     elif not verify_password(password, existing["password_hash"]):
         await db.users.update_one({"email": email}, {"$set": {"password_hash": hash_password(password)}})
-        print(f"[seed] Platform admin password refreshed: {email}")
-    # Also keep the legacy platform@scms.com as a backup admin if not present (for older bookmarks)
-    legacy = await db.users.find_one({"email": "platform@scms.com"})
-    if not legacy:
-        await db.users.insert_one({
-            "id": new_id(),
-            "email": "platform@scms.com",
-            "password_hash": hash_password("Platform@123"),
-            "name": "Platform Super Admin (Legacy)",
-            "role": "platform_admin",
-            "school_id": None,
-            "is_active": True,
-            "created_at": utc_now(),
-        })
+        print(f"[seed] Platform Super Admin password refreshed: {email}")
+    # Enforce single-platform-admin: deactivate any other platform_admin accounts
+    purged = await db.users.update_many(
+        {"role": "platform_admin", "email": {"$ne": email}, "is_active": True},
+        {"$set": {"is_active": False, "deactivated_reason": "single_platform_admin_policy"}},
+    )
+    if purged.modified_count:
+        print(f"[seed] Deactivated {purged.modified_count} extra platform_admin account(s)")
 
 
 async def seed_demo_data():

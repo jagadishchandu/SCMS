@@ -32,6 +32,13 @@ async def list_users(role: str | None = None, user: dict = Depends(get_current_u
 @router.post("")
 async def create_user(payload: UserCreate, user: dict = Depends(require_roles("school_admin", "platform_admin"))):
     db = get_db()
+    # Lock down: only one Platform Super Admin (seeded from env) and one School Super Admin
+    # per school (created automatically with the school). Disallow creating more via API.
+    if payload.role in ("platform_admin", "school_admin"):
+        raise HTTPException(
+            status_code=403,
+            detail="Super Admins cannot be created from the app. Platform Super Admin is provisioned via Docker env; School Super Admin is created automatically with the school.",
+        )
     school_id = user.get("school_id")
     if not school_id and user["role"] == "platform_admin":
         raise HTTPException(status_code=400, detail="Platform admin must specify school context — please use School Admin login.")

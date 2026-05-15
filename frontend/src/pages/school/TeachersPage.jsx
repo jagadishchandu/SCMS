@@ -26,9 +26,9 @@ export default function TeachersPage() {
       />
 
       <div className="flex gap-2 mb-4" role="tablist">
-        {["teacher", "accounts", "school_admin"].map((r) => (
+        {["teacher", "accounts"].map((r) => (
           <button key={r} onClick={() => setRole(r)} className={`btn-secondary ${role === r ? "border-primary text-primary" : ""}`} data-testid={`tab-${r}`}>
-            {r === "school_admin" ? "School Admins" : r === "accounts" ? "Accounts" : "Teachers"}
+            {r === "accounts" ? "Accounts" : "Teachers"}
           </button>
         ))}
       </div>

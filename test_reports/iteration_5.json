@@ -1,0 +1,47 @@
+{
+  "summary": "Iter5: Per-child subscription billing (₹30/m, ₹300/y), payment confirmation workflow, and Single Super Admin policy. Backend: 94/95 pytest pass (added 20 new iter5 cases; all 20 green). The single failure is a PRE-EXISTING regression in /api/analytics/student/{uid} (KeyError 'not_in_class' from iter4) — unrelated to iter5 review but reported. Frontend smoke green on all 4 routes specified in review (/school/subscription, /school/teachers without School Admins tab, /school/settings, /platform/subscriptions).",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "GET /api/analytics/student/{uid}", "issue": "500 KeyError: 'not_in_class' at routes/analytics.py:29 — monthly[m] dict initialised with only present/absent/sick keys, but iter4 added not_in_class attendance status which is now persisted in DB. Reproduced for STU-00001. Pre-existing regression from iter4; not introduced by iter5 changes. Fix: when iterating attendance rows, use monthly[m].get(r['status'],0)+1 OR pre-seed the dict with all 4 statuses.", "priority": "HIGH"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Fix /api/analytics/student/{uid} KeyError on 'not_in_class' status in /app/backend/routes/analytics.py line 29. Use defaultdict(int) or .get(status, 0). Add a unit test for not_in_class in TestAnalytics.",
+    "(Optional, cosmetic) backend_test.py:TestActivities.test_create_as_school_admin returns dict (pytest warning). Should `return None` and store body via fixture if needed by another test."
+  ],
+  "critical_code_review_comments": [
+    "routes/subscriptions.py — clean separation of pricing/quote/payments. _quote_for_school is reused by /my and /quote/{school_id}. yearly.savings_vs_monthly correctly = n*360 - n*300. Verified payments insert sets school_name+school_code snapshot, which is helpful for audit even if school is renamed later.",
+    "routes/subscriptions.py:submit_payment — duplicate-pending guard checks {school_id, status:'pending_confirmation'} before insert (verified 400). Consider adding a unique partial index on subscription_payments {school_id:1, status:1} where status='pending_confirmation' to make this race-safe under concurrency.",
+    "routes/subscriptions.py:confirm_payment — extension logic uses `start = cur_end if cur_end > now else now`, which correctly stacks renewals (e.g. 30-day extension added to remaining validity). hasattr(cur_end,'tzinfo') guard is defensive but should never fail since utc_now returns tz-aware datetimes.",
+    "routes/subscriptions.py:list_payments — RBAC: school_admin filtered by their school_id, platform_admin sees all, others get 403. Verified parent/teacher/accounts get 403.",
+    "routes/users.py:create_user — rejects role='school_admin' AND role='platform_admin' with 403 and a clear human message. core/models.py UserCreate role enum also rejects platform_admin schema-level (422). Defense-in-depth ✓.",
+    "Subscription endpoint test confirmed: legacy admin platform@scms.com login is now rejected (deactivated by seed_platform_admin on startup). New admin jagadishchandu789@gmail.com logs in with role=platform_admin. /api/subscriptions/plans and /assign legacy endpoints are GONE (404) — confirms full rewrite, no stale plan-based code path remaining.",
+    "Frontend smoke: SchoolSubscription page exposes school-subscription-page + pay-btn-monthly + pay-btn-yearly testids. /school/settings (branding) loads without timeout (route registration was the previous breakage). /school/teachers has only Teachers and Accounts tabs (data-testid='tab-school_admin' count = 0). /platform/subscriptions shows Pending/Confirmed/Rejected KPI tiles, sub-tab-pending_confirmation tab present. Empty state 'Nothing to confirm right now' rendered cleanly after tests rejected all pending payments.",
+    "Cleanup note: The 95-case backend test suite uses TEST_ prefix for created entities but the iter5 subscription-payment tests do leave 'rejected'/'confirmed' rows in db.subscription_payments. These are namespaced to DEMO school and do not block re-runs (the _cleanup_pending helper rejects leftover 'pending_confirmation' rows at the top of each flow test)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml",
+    "/app/test_reports/iteration_5.json"
+  ],
+  "success_rate": {
+    "backend": "98.9% (94/95) — single failure is pre-existing iter4 regression unrelated to iter5 review",
+    "frontend": "100% on smoke (4/4 routes verified with correct testids)"
+  },
+  "test_credentials": "Used /app/memory/test_credentials.md verbatim. Verified jagadishchandu789@gmail.com/Manasa@123 (platform), principal@sunrise.edu/School@123 (school), priya@sunrise.edu/Teacher@123 (teacher), accounts@sunrise.edu/Accounts@123 (accounts), parent.stu-00001@sunrise.edu/Parent@123 (parent). Legacy platform@scms.com is correctly deactivated.",
+  "seed_data_creation": "Iter5 tests created several TEST_ subscription_payments (monthly + yearly) against DEMO school. _cleanup_pending fixture rejects any leftover pending rows before each flow test, so reruns are idempotent. Subscription on DEMO school may show status='active' with billing_cycle='yearly' after the test_confirm_payment_activates_subscription test — this is expected.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: pytest /app/backend/tests/backend_test.py -v --junitxml=/app/test_reports/pytest/pytest_results.xml. Iter5 adds: TestSubscriptionsLegacy(2), TestPerChildPricing(3), TestSubscriptionQuote(2), TestSubscriptionPaymentFlow(7), TestSingleSuperAdmin(6) = 20 new tests, all green. Note: TestAnalytics.test_student_analytics will fail with 500 KeyError on 'not_in_class' until main agent patches routes/analytics.py:29. Frontend route /school/settings was previously broken via missing route in App.js; now registered and verified loading. CREDS dict now has CREDS['platform_admin_old'] reserved only for the deactivation test — do NOT add it back to test_login_all_roles parametrize.",
+  "rca of the issue": "TestAnalytics.test_student_analytics 500: in /app/backend/routes/analytics.py:29, code does `monthly[m][r['status']] += 1` where monthly[m] was initialised as {'present':0,'absent':0,'sick':0}. Iter4 added 'not_in_class' to the AttendanceStatus literal and TestNotInClassAttendance writes such rows for STU-00001 on (today - 30 days). When student_dashboard reads attendance for the student, it encounters status='not_in_class' and KeyErrors. Mitigation: change line ~28 to pre-seed all 4 keys, or use `monthly[m][r['status']] = monthly[m].get(r['status'], 0) + 1`. The fix is 1 line in analytics.py."
+}

@@ -65,7 +65,7 @@ class TestAuth:
         r = requests.post(f"{API}/auth/login", json={"email": "x@y.com", "password": "bad"}, timeout=15)
         assert r.status_code in (400, 401)
 
-    @pytest.mark.parametrize("role", list(CREDS.keys()))
+    @pytest.mark.parametrize("role", [r for r in CREDS.keys() if r != "platform_admin_old"])
     def test_login_all_roles(self, role):
         s = login(role)
         me = s.get(f"{API}/auth/me", timeout=15)
@@ -367,11 +367,13 @@ class TestNewAdmin:
         assert me["email"] == "jagadishchandu789@gmail.com"
         assert me["role"] == "platform_admin"
 
-    def test_legacy_admin_still_works(self):
-        s = login("platform_admin_old")
-        me = s.get(f"{API}/auth/me", timeout=15).json()
-        assert me["email"] == "platform@scms.com"
-        assert me["role"] == "platform_admin"
+    def test_legacy_admin_deactivated(self):
+        """Iter5: Only ONE Platform Super Admin allowed. Legacy admin must be deactivated."""
+        email, pwd = CREDS["platform_admin_old"]
+        r = requests.post(f"{API}/auth/login", json={"email": email, "password": pwd}, timeout=15)
+        assert r.status_code in (400, 401, 403), r.status_code
+        body = r.text.lower()
+        assert "deactivated" in body or "disabled" in body or "invalid" in body, body
 
 
 class TestTwilioQueued:
@@ -454,31 +456,15 @@ class TestAudit:
             assert r.json() == []
 
 
-class TestSubscriptions:
-    def test_plans_seeded(self, platform_session):
+class TestSubscriptionsLegacy:
+    """Iter5: /plans and /assign endpoints removed. Verify gone."""
+    def test_plans_endpoint_removed(self, platform_session):
         r = platform_session.get(f"{API}/subscriptions/plans", timeout=15)
-        assert r.status_code == 200
-        plans = r.json()
-        names = {p["name"] for p in plans}
-        assert {"Starter", "Growth", "Enterprise"} <= names, names
-        assert len(plans) >= 3
+        assert r.status_code in (404, 405), r.status_code
 
-    def test_assign_plan_and_usage(self, platform_session):
-        plans = platform_session.get(f"{API}/subscriptions/plans", timeout=15).json()
-        starter = next(p for p in plans if p["name"] == "Starter")
-        schools = platform_session.get(f"{API}/schools", timeout=15).json()
-        demo = next(s for s in schools if s["code"] == "DEMO")
-        r = platform_session.post(f"{API}/subscriptions/assign",
-                                  json={"school_id": demo["id"], "plan_id": starter["id"]},
-                                  timeout=15)
-        assert r.status_code in (200, 201), r.text
-        # usage
-        u = platform_session.get(f"{API}/subscriptions/usage/{demo['id']}", timeout=15)
-        assert u.status_code == 200
-        body = u.json()
-        assert "school" in body and "usage" in body
-        assert body["school"].get("subscription", {}).get("plan_name") == "Starter"
-        assert body["usage"]["students"] >= 8
+    def test_assign_endpoint_removed(self, platform_session):
+        r = platform_session.post(f"{API}/subscriptions/assign", json={"school_id": "x", "plan_id": "y"}, timeout=15)
+        assert r.status_code in (404, 405), r.status_code
 
 
 class TestReceipts:
@@ -849,3 +835,195 @@ class TestSchedulerDisabled:
         # Confirm by hitting any auth route — no 500.
         r = requests.get(f"{API}/", timeout=10)
         assert r.status_code == 200, r.text
+
+
+# =========================================================================
+# Iteration 5: Per-child subscription pricing + payment confirmation workflow
+#              + Single Super Admin policy
+# =========================================================================
+
+PRICE_M = 30
+PRICE_Y = 300
+
+
+class TestPerChildPricing:
+    def test_pricing_constants(self, school_session):
+        r = school_session.get(f"{API}/subscriptions/pricing", timeout=15)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["per_child_monthly"] == PRICE_M
+        assert body["per_child_yearly"] == PRICE_Y
+        assert body["currency"] == "INR"
+
+    def test_pricing_accessible_to_all_roles(self, teacher_session, parent_session, accounts_session, platform_session):
+        for s in (teacher_session, parent_session, accounts_session, platform_session):
+            r = s.get(f"{API}/subscriptions/pricing", timeout=15)
+            assert r.status_code == 200, r.text
+
+    def test_pricing_unauth_rejected(self):
+        r = requests.get(f"{API}/subscriptions/pricing", timeout=15)
+        assert r.status_code in (401, 403), r.status_code
+
+
+class TestSubscriptionQuote:
+    def test_my_school_admin(self, school_session):
+        r = school_session.get(f"{API}/subscriptions/my", timeout=15)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        for k in ("school", "subscription", "quote"):
+            assert k in body, body
+        q = body["quote"]
+        n = q["students_active"]
+        assert n > 0
+        assert q["monthly"]["amount"] == n * PRICE_M
+        assert q["yearly"]["amount"] == n * PRICE_Y
+        # savings = n*360 - n*300
+        assert q["yearly"]["savings_vs_monthly"] == n * (PRICE_M * 12) - n * PRICE_Y
+
+    def test_my_rejects_other_roles(self, teacher_session, parent_session, accounts_session, platform_session):
+        for s in (teacher_session, parent_session, accounts_session, platform_session):
+            r = s.get(f"{API}/subscriptions/my", timeout=15)
+            assert r.status_code == 403, r.status_code
+
+
+class TestSubscriptionPaymentFlow:
+    def _cleanup_pending(self, platform_session, school_session):
+        # Reject any leftover pending payments for DEMO so tests start clean.
+        pays = school_session.get(f"{API}/subscriptions/payments", timeout=15).json()
+        for p in pays:
+            if p.get("status") == "pending_confirmation":
+                platform_session.post(f"{API}/subscriptions/payments/{p['id']}/reject", timeout=15)
+
+    def test_submit_monthly_then_block_duplicate(self, school_session, platform_session):
+        self._cleanup_pending(platform_session, school_session)
+        r = school_session.post(f"{API}/subscriptions/payments",
+                                json={"billing_cycle": "monthly", "payment_reference": "TEST-UTR-1"},
+                                timeout=15)
+        assert r.status_code in (200, 201), r.text
+        body = r.json()
+        assert body["status"] == "pending_confirmation"
+        assert body["billing_cycle"] == "monthly"
+        assert body["rate_per_child"] == PRICE_M
+        assert body["amount"] == body["students_count"] * PRICE_M
+
+        # 2nd should be blocked
+        r2 = school_session.post(f"{API}/subscriptions/payments",
+                                 json={"billing_cycle": "yearly"}, timeout=15)
+        assert r2.status_code == 400, r2.text
+        # cleanup: reject it
+        platform_session.post(f"{API}/subscriptions/payments/{body['id']}/reject", timeout=15)
+
+    def test_school_admin_lists_only_own(self, school_session):
+        r = school_session.get(f"{API}/subscriptions/payments", timeout=15)
+        assert r.status_code == 200
+        data = r.json()
+        # all entries should be for own school
+        me = school_session.get(f"{API}/auth/me", timeout=15).json()
+        for p in data:
+            assert p["school_id"] == me["school_id"], p
+
+    def test_platform_admin_lists_all(self, platform_session):
+        r = platform_session.get(f"{API}/subscriptions/payments", timeout=15)
+        assert r.status_code == 200
+        assert isinstance(r.json(), list)
+
+    def test_confirm_payment_activates_subscription(self, school_session, platform_session):
+        self._cleanup_pending(platform_session, school_session)
+        # submit yearly
+        sr = school_session.post(f"{API}/subscriptions/payments",
+                                 json={"billing_cycle": "yearly", "payment_reference": "TEST-UTR-Y"},
+                                 timeout=15)
+        assert sr.status_code in (200, 201), sr.text
+        pid = sr.json()["id"]
+
+        # platform confirms
+        cr = platform_session.post(f"{API}/subscriptions/payments/{pid}/confirm", timeout=15)
+        assert cr.status_code in (200, 201), cr.text
+        body = cr.json()
+        assert body["ok"] is True
+        sub = body["subscription"]
+        assert sub["status"] == "active"
+        assert sub["billing_cycle"] == "yearly"
+
+        # verify school.subscription updated via /my
+        my = school_session.get(f"{API}/subscriptions/my", timeout=15).json()
+        assert my["subscription"]["status"] == "active"
+        assert my["subscription"]["billing_cycle"] == "yearly"
+
+        # already confirmed -> 400
+        c2 = platform_session.post(f"{API}/subscriptions/payments/{pid}/confirm", timeout=15)
+        assert c2.status_code == 400
+
+    def test_reject_payment(self, school_session, platform_session):
+        self._cleanup_pending(platform_session, school_session)
+        sr = school_session.post(f"{API}/subscriptions/payments",
+                                 json={"billing_cycle": "monthly"}, timeout=15)
+        assert sr.status_code in (200, 201)
+        pid = sr.json()["id"]
+        rr = platform_session.post(f"{API}/subscriptions/payments/{pid}/reject", timeout=15)
+        assert rr.status_code in (200, 201), rr.text
+        # verify status
+        pays = platform_session.get(f"{API}/subscriptions/payments", timeout=15).json()
+        match = next(p for p in pays if p["id"] == pid)
+        assert match["status"] == "rejected"
+
+    def test_rbac_other_roles_forbidden(self, teacher_session, parent_session, accounts_session):
+        for s in (teacher_session, parent_session, accounts_session):
+            r = s.post(f"{API}/subscriptions/payments",
+                       json={"billing_cycle": "monthly"}, timeout=15)
+            assert r.status_code == 403, r.status_code
+            r2 = s.get(f"{API}/subscriptions/payments", timeout=15)
+            assert r2.status_code == 403, r2.status_code
+
+    def test_confirm_reject_only_platform_admin(self, school_session, teacher_session):
+        for s in (school_session, teacher_session):
+            r = s.post(f"{API}/subscriptions/payments/nope/confirm", timeout=15)
+            assert r.status_code == 403, r.status_code
+            r2 = s.post(f"{API}/subscriptions/payments/nope/reject", timeout=15)
+            assert r2.status_code == 403, r2.status_code
+
+
+class TestSingleSuperAdmin:
+    def test_create_school_admin_blocked(self, school_session):
+        r = school_session.post(f"{API}/users", json={
+            "email": f"newsuper.{uuid.uuid4().hex[:5]}@x.edu",
+            "password": "X@12345678", "name": "New Admin", "role": "school_admin",
+        }, timeout=15)
+        assert r.status_code == 403, r.status_code
+        assert "Super Admin" in r.text or "super admin" in r.text.lower(), r.text
+
+    def test_create_platform_admin_rejected_schema(self, school_session):
+        r = school_session.post(f"{API}/users", json={
+            "email": f"newplat.{uuid.uuid4().hex[:5]}@x.edu",
+            "password": "X@12345678", "name": "Plat", "role": "platform_admin",
+        }, timeout=15)
+        # Either schema 422 or policy 403 — both acceptable
+        assert r.status_code in (403, 422), r.status_code
+
+    def test_create_teacher_still_works(self, school_session):
+        r = school_session.post(f"{API}/users", json={
+            "email": f"t.{uuid.uuid4().hex[:6]}@sunrise.edu",
+            "password": "T@12345678", "name": "T", "role": "teacher",
+        }, timeout=15)
+        assert r.status_code in (200, 201), r.text
+
+    def test_create_accounts_still_works(self, school_session):
+        r = school_session.post(f"{API}/users", json={
+            "email": f"a.{uuid.uuid4().hex[:6]}@sunrise.edu",
+            "password": "A@12345678", "name": "A", "role": "accounts",
+        }, timeout=15)
+        assert r.status_code in (200, 201), r.text
+
+    def test_create_parent_still_works(self, school_session):
+        r = school_session.post(f"{API}/users", json={
+            "email": f"p.{uuid.uuid4().hex[:6]}@sunrise.edu",
+            "password": "P@12345678", "name": "P", "role": "parent",
+        }, timeout=15)
+        assert r.status_code in (200, 201), r.text
+
+    def test_new_platform_admin_logs_in(self):
+        s = login("platform_admin")
+        me = s.get(f"{API}/auth/me", timeout=15).json()
+        assert me["email"] == "jagadishchandu789@gmail.com"
+        assert me["role"] == "platform_admin"
+
