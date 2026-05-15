@@ -5,10 +5,12 @@ import { ROLE_HOME, ROLE_LABELS } from "../lib/utils";
 import toast from "react-hot-toast";
 import { GraduationCap, ArrowRight, IdentificationCard } from "@phosphor-icons/react";
 
-// Roles available for login. Platform Super Admin is intentionally NOT in this list —
-// the platform admin uses their email/password directly without picking the role from the UI,
-// which keeps their existence private from regular users.
+// Roles available for login. The role chosen here MUST match the role on the account —
+// otherwise the login is rejected (even for the Platform Super Admin).
 const ROLES = [
+  { value: "platform_admin", label: ROLE_LABELS.platform_admin,
+    hint: "Operate the SCMS platform across all schools.",
+    placeholder: "admin@yourorg.com" },
   { value: "school_admin", label: ROLE_LABELS.school_admin,
     hint: "Manage your school: students, teachers, fees, attendance.",
     placeholder: "principal@yourschool.edu" },
@@ -24,7 +26,7 @@ const ROLES = [
 ];
 
 export default function Login() {
-  const { user, login } = useAuth();
+  const { user, login, logout } = useAuth();
   const navigate = useNavigate();
   const [role, setRole] = useState("school_admin");
   const [email, setEmail] = useState("");
@@ -43,12 +45,14 @@ export default function Login() {
     setLoading(true);
     try {
       const u = await login(email, password);
-      // Validate that the user actually has the role they chose.
-      // Exception: platform_admin can log in via any role choice (they own the system).
-      if (u.role !== role && u.role !== "platform_admin") {
+      // Strict role validation: the role chosen at login MUST match the account role.
+      // No exceptions — even the Platform Super Admin must pick "Platform Super Admin".
+      if (u.role !== role) {
+        // Clear the cookie + auth state so the user isn't silently logged in.
+        await logout();
         toast.error(
-          `This account is registered as "${ROLE_LABELS[u.role] || u.role}". ` +
-          `Please select that role and try again.`,
+          `Wrong role selected. This account is not a "${ROLE_LABELS[role] || role}". ` +
+          `Please select the correct role and try again.`,
         );
         setLoading(false);
         return;

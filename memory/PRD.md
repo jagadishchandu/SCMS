@@ -307,13 +307,26 @@ See `/app/memory/test_credentials.md`.
 ### Test status (cumulative)
 - **Backend: 180/180** — added 9 new tests for the test-message endpoints.
 
+## v1.11 — Strict role-validation on Login + Platform Super Admin in dropdown (2026-05-15)
+
+**User-driven change**
+- The Platform Super Admin role is now part of the login dropdown (`Platform Super Admin` is the first option). No more "hidden door" — every role logs in the same way, but the chosen role MUST match the account's actual role.
+- Removed the prior implicit exception that let `platform_admin` log in under any role. Now if a user picks the wrong role (even with valid super-admin creds), the login is rejected with the toast: *"Wrong role selected. This account is not a {selected_role}. Please select the correct role and try again."*
+- On wrong-role rejection, the JWT cookie is invalidated (logout call) so the user can't bypass the check by visiting `/school` or `/platform` directly.
+- Placeholders on the login form remain generic (`admin@yourorg.com`, `principal@yourschool.edu`, etc.) — no real credentials leaked to the screen.
+
+**Verified end-to-end**
+- ✅ Platform admin creds + role=Parent → blocked + session cleared.
+- ✅ Platform admin creds + role=Platform Super Admin → redirected to `/platform` console.
+- ✅ School admin creds + role=Platform Super Admin → blocked + session cleared; visiting `/school` after redirects back to `/login`.
+
 ## Prioritized Backlog (refreshed)
 ### P1
 - Stripe / Razorpay automated subscription payments
 
 ### P2
 - Wire uploads (photos / medical certs / PDF receipts) to Azure Blob once `AZURE_STORAGE_CONNECTION_STRING` is filled
-- Recovery nudges post-expiry (day 1 / 3 / 7) before full lockout
+- Recovery nudges post-expiry (day 1 / 3 / 7) before full lockout (i18n templates ready; scheduler wiring pending)
 - Meta WhatsApp template approval workflow (for messages outside 24-hour session)
 
 ### P3
