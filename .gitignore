@@ -59,3 +59,12 @@ data/db/
 
 # Emergent platform metadata (DO NOT remove these from your fork unless you know what you're doing)
 # .emergent/
+-e 
+# Environment and credential files
+.env
+.env.*
+*.env
+credentials.json
+*.pem
+*.key
+.credentials
