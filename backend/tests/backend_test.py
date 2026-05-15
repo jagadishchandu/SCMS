@@ -602,7 +602,7 @@ class TestDigests:
         assert r.status_code == 404, r.status_code
 
     def test_run_monthly_school_admin(self, school_session):
-        r = school_session.post(f"{API}/digests/run-monthly", timeout=60)
+        r = school_session.post(f"{API}/digests/run-monthly", params={"channels": "whatsapp"}, timeout=60)
         assert r.status_code in (200, 201), r.text
         body = r.json()
         assert "period" in body and "totals" in body and "by_school" in body
@@ -615,18 +615,17 @@ class TestDigests:
         for k in ("school_id", "school_name", "students", "sent", "queued", "failed"):
             assert k in bs, bs
         assert bs["students"] > 0, bs
-        # Twilio not configured => queued count should match students count
+        # Twilio not configured => queued count should match students count (for whatsapp-only channel)
         assert bs["queued"] == bs["students"], bs
 
     def test_notifications_have_monthly_digest_after_run(self, school_session):
-        # ensure run was called
-        school_session.post(f"{API}/digests/run-monthly", timeout=60)
-        notifs = school_session.get(f"{API}/notifications", params={"limit": 200}, timeout=20).json()
+        # ensure run was called for whatsapp channel
+        school_session.post(f"{API}/digests/run-monthly", params={"channels": "whatsapp"}, timeout=60)
+        notifs = school_session.get(f"{API}/notifications", params={"limit": 500}, timeout=20).json()
         assert isinstance(notifs, list)
-        md = [n for n in notifs if n.get("template") == "monthly_digest"]
-        assert len(md) > 0, f"No monthly_digest notifications found; sample={notifs[:2]}"
-        # all should be whatsapp + queued + twilio_not_configured
-        assert all(n.get("channel") == "whatsapp" for n in md), [n.get("channel") for n in md[:5]]
+        md = [n for n in notifs if n.get("template") == "monthly_digest" and n.get("channel") == "whatsapp"]
+        assert len(md) > 0, f"No whatsapp monthly_digest notifications found; sample={notifs[:2]}"
+        # all should be queued + twilio_not_configured
         assert all(n.get("status") == "queued" for n in md), [n.get("status") for n in md[:5]]
         assert all("twilio_not_configured" in (n.get("delivery_note") or "") for n in md), \
             [n.get("delivery_note") for n in md[:5]]

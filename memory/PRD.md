@@ -164,16 +164,55 @@ See `/app/memory/test_credentials.md`.
 - **Backend: 115/115 pytest pass** (iter6 added 22 new tests; iter5 analytics fix verified holding).
 - Frontend smoke verified across teacher / school / parent / platform routes.
 
+## v1.6 — Audit CSV + Multilingual + Email digest (2026-05-15)
+
+**P2 — Audit log CSV export**
+- `GET /api/audit/export.csv?…filters…` streams CSV (UTF-8 BOM for Excel, timestamped filename, all filter params from `/api/audit`).
+- Frontend: "Download CSV" button on the audit page (`audit-export-csv` testid). Disabled when no rows; uses `fetch` with credentials for blob download.
+
+**P1 — Multilingual WhatsApp + Email templates (8 Indian languages)**
+- Languages: `en`, `hi`, `ta`, `te`, `kn`, `mr`, `bn`, `gu`.
+- New `core/i18n.py` with 5 templates × 8 languages = 40 entries: attendance_absent, marks_published, payment_confirmed, monthly_digest, subscription_renewal. `_SafeDict` ensures missing kwargs become `""` instead of KeyError.
+- Built-in templates only (no per-school editing per spec).
+- New endpoints:
+  - `GET /api/schools/{id}/language` → `{language, supported:[{code,label}]}`
+  - `PATCH /api/schools/{id}/language` (school_admin/platform_admin)
+  - `PATCH /api/users/me/language` (any authenticated user — parent preference wins over school default)
+  - `GET /api/digests/preview/{uid}?lang=` (override for testing)
+- Frontend: Language dropdown added to `/school/settings` with all 8 native-script labels (`school-language-select` testid). Auto-saves on change.
+- Language precedence: parent.user.language > school.language > `en`. Override via `?lang=` query.
+
+**P2 — Email digest channel (SMTP, provider-agnostic)**
+- New `core/email_sender.py` — works with Gmail, AWS SES, SendGrid SMTP, Mailgun SMTP, etc.
+- New env vars: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_USE_SSL`.
+- `notify.queue_notification` extended with `email` + `subject` params; email rows persisted with `delivery_note='smtp_not_configured'` when host is empty.
+- `POST /api/digests/run-monthly?channels=whatsapp,email` (default `whatsapp,email`) queues both channels per parent (skips if phone/email missing).
+- Frontend: School Dashboard "Send monthly digest" now prompts for channel string (`whatsapp` / `email` / `whatsapp,email`).
+
+**Bug/fix (caught by testing agent)**
+- `core/notify.py`: persist `subject` field on the email notification doc (was being passed to send_email but never saved).
+- Iter6 digest tests scoped to `channel='whatsapp'` to avoid bleed-through after iter7's email channel tests.
+
+**Docker / repo hygiene (earlier this turn)**
+- `frontend/Dockerfile` rewritten: multi-stage, `frontend/` as build context (not `.`), `REACT_APP_BACKEND_URL` build-arg, healthcheck. Now works with `cd frontend && docker build .`.
+- `backend/Dockerfile` rewritten to use `backend/` as build context.
+- `docker-compose.yml` updated to per-service contexts.
+- Per-service `.dockerignore` files added.
+- Root `.env.example`, `backend/.env.example`, `frontend/.env.example`.
+
+### Test status (cumulative)
+- **Backend: 145/145** — iter7 added 30 new tests, iter6 fixed 2 brittleness assertions. All green.
+- **Frontend smoke verified** for: school language selector (8 codes), audit CSV button, digest channel prompt.
+
 ## Prioritized Backlog (refreshed)
 ### P1
 - Stripe / Razorpay automated subscription payments (replace manual confirmation)
-- Email digest channel (parallel to WhatsApp)
-- Audit log CSV export from the filter UI
 
 ### P2
 - Route uploads (photos, medical certs, PDF receipts) to Azure Blob once `AZURE_STORAGE_CONNECTION_STRING` is set
-- Multilingual WhatsApp templates (English / Hindi / regional Indian languages)
+- Per-school WhatsApp template editing UI (if needed later)
+- Email-aware "Subscription expires in 7 days" auto-nudge (uses existing templates + scheduler)
 
 ### P3
-- React Native shell reusing the API
+- React Native shell reusing the same API
 - Public school directory + admissions inquiry
