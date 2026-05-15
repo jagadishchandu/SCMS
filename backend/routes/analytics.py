@@ -20,13 +20,13 @@ async def student_dashboard(student_uid: str, user: dict = Depends(get_current_u
 
     # Attendance
     att = await db.attendance.find({"school_id": s["school_id"], "student_id": s["id"]}, {"_id": 0}).to_list(5000)
-    counts = {"present": 0, "absent": 0, "sick": 0, "late": 0, "half_day": 0, "excused": 0}
+    counts = {"present": 0, "absent": 0, "sick": 0, "late": 0, "half_day": 0, "excused": 0, "not_in_class": 0}
     monthly = {}
     for r in att:
         counts[r["status"]] = counts.get(r["status"], 0) + 1
         m = r["date"][:7]
-        monthly.setdefault(m, {"present": 0, "absent": 0, "sick": 0, "late": 0, "half_day": 0, "excused": 0})
-        monthly[m][r["status"]] += 1
+        bucket = monthly.setdefault(m, {"present": 0, "absent": 0, "sick": 0, "late": 0, "half_day": 0, "excused": 0, "not_in_class": 0})
+        bucket[r["status"]] = bucket.get(r["status"], 0) + 1
     total = len(att)
     present_like = counts["present"] + counts["late"] + counts["half_day"]
     att_pct = round((present_like / total * 100) if total else 0, 1)

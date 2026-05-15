@@ -84,3 +84,48 @@ See `/app/memory/test_credentials.md`.
 - Narrow `except Exception` in activity enrollment to `DuplicateKeyError`
 - Aggregate-based replacement for N+1 counts in `/api/activities/stats/summary`
 - Bucketed aggregation refactor for `/api/analytics/risk-students` before scaling beyond ~1000 students per school
+
+## v1.4 — Per-child Subscription & Single Super Admin (2026-05-15)
+**Single Super Admin policy**
+- Only ONE Platform Super Admin exists. Provisioned from `ADMIN_EMAIL` / `ADMIN_PASSWORD` env vars in `docker-compose.yml` (defaults: `jagadishchandu789@gmail.com` / `Manasa@123`).
+- `seed_platform_admin()` auto-deactivates any other `platform_admin` rows on startup (single-admin policy enforcement).
+- `POST /api/users` rejects role `school_admin` and `platform_admin` (defense-in-depth: schema + policy).
+- Frontend `TeachersPage` no longer has a "School Admins" tab — each school keeps the single default school super admin created with the school.
+
+**Per-child subscription billing**
+- Pricing: ₹30 per active child per month, ₹300 per active child per year (≈ 16% discount).
+- New endpoints in `routes/subscriptions.py`:
+  - `GET /pricing` — current rates
+  - `GET /my` — school admin: school + current subscription + live quote + pending payment
+  - `GET /quote/{school_id}` — quote for any school (platform or own school)
+  - `POST /payments` — school admin submits a payment (status=`pending_confirmation`); 2nd request blocked while one is pending
+  - `GET /payments?status=…` — list (platform: all, school: own)
+  - `POST /payments/{id}/confirm` — platform admin approves → school.subscription becomes active (extends from current `valid_until` if still active)
+  - `POST /payments/{id}/reject` — platform admin rejects
+- New frontend pages:
+  - `/school/subscription` (`SchoolSubscription.jsx`) — quote KPIs + monthly/yearly plan cards + payment modal + history table
+  - `/platform/subscriptions` (`SubscriptionsPage.jsx` rewritten) — pending/confirmed/rejected tabs with Confirm/Reject row actions
+- Sidebar: added "Subscription" link for `school_admin`; "Branding" link `/school/settings` route now properly registered in App.js (was missing, causing the earlier Playwright timeout).
+
+**Bug fixes**
+- `routes/analytics.py` student dashboard: pre-seed attendance counters with `not_in_class` to avoid KeyError when the new attendance status appears in DB.
+
+### Test status (cumulative)
+- **Backend: 94/95 pytest pass** (iter5 added 20 new tests covering per-child pricing, payment workflow, single super admin policy — all green). The single iter4 regression (analytics KeyError on `not_in_class`) is fixed in this iteration.
+- **Frontend smoke: 4/4** routes verified — `/school/subscription`, `/school/teachers` (no School Admins tab), `/school/settings`, `/platform/subscriptions`.
+
+## Prioritized Backlog (refreshed)
+### P1
+- Audit log filters/search UI
+- Recurring sick-leave tracker + medical certificate upload
+- Email digest channel (in addition to WhatsApp)
+
+### P2
+- Stripe/Razorpay gateway for automated subscription payment (replace manual confirmation)
+- Auto-disable school features when `subscription.valid_until` lapses
+- S3 / GridFS for photo storage at scale
+- Multilingual notification templates
+
+### P3
+- React Native mobile shell reusing the same API
+- Public school directory + admissions inquiry page
