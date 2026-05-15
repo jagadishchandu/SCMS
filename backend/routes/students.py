@@ -1,25 +1,37 @@
-"""Students + parent inline + attendance + marks views per student."""
+"""Students + parent inline + attendance + marks views per student.
+
+After v1.15: all student/parent operational data is stored in the per-school DB
+(`scms_db_school_<code>`). The master `users` collection still authoritatively
+holds login records (so email lookups at login work).
+"""
 import base64
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from core.models import StudentCreate, StudentUpdate
 from core.auth import require_roles, get_current_user
-from core.db import get_db
+from core.db import get_db, tenant_db
 from core.utils import new_id, utc_now, clean_doc
 from core.audit import log_action
 
 router = APIRouter(prefix="/students", tags=["students"])
 
 
-async def _gen_uid(db, school_id: str) -> str:
-    count = await db.students.count_documents({"school_id": school_id})
+async def _gen_uid(tdb, school_id: str) -> str:
+    count = await tdb.students.count_documents({"school_id": school_id})
     return f"STU-{(count + 1):05d}"
 
 
-async def _teacher_class_filter(db, user: dict) -> dict | None:
+async def _teacher_class_filter(tdb, user: dict) -> dict | None:
+    """Build a $or filter for the classes a teacher can see, based on the
+    `class_teacher_map` + `timetable` rows in the school's tenant DB.
+    """
     if user["role"] != "teacher":
         return None
-    mappings = await db.class_teacher_map.find({"school_id": user["school_id"], "teacher_id": user["id"]}, {"_id": 0}).to_list(100)
-    timetable = await db.timetable.find({"school_id": user["school_id"], "teacher_id": user["id"]}, {"_id": 0}).to_list(500)
+    mappings = await tdb.class_teacher_map.find(
+        {"school_id": user["school_id"], "teacher_id": user["id"]}, {"_id": 0},
+    ).to_list(100)
+    timetable = await tdb.timetable.find(
+        {"school_id": user["school_id"], "teacher_id": user["id"]}, {"_id": 0},
+    ).to_list(500)
     classes = {(m["class_id"], m["section"]) for m in mappings}
     classes.update({(t["class_id"], t["section"]) for t in timetable})
     if not classes:
@@ -34,14 +46,33 @@ async def list_students(
     q: str | None = None,
     user: dict = Depends(get_current_user),
 ):
-    db = get_db()
-    if user["role"] == "parent":
-        return await db.students.find({"parent_user_id": user["id"]}, {"_id": 0}).to_list(50)
-    if user["role"] not in ("platform_admin", "school_admin", "teacher", "accounts"):
+    if user["role"] == "platform_admin":
+        # Aggregate across all schools by iterating.
+        db = get_db()
+        out = []
+        async for school in db.schools.find({}, {"_id": 0, "id": 1, "db_name": 1, "code": 1, "name": 1}):
+            tdb = await tenant_db(school["id"])
+            flt: dict = {}
+            if class_id: flt["class_id"] = class_id
+            if section: flt["section"] = section
+            if q:
+                flt["$or"] = [
+                    {"name": {"$regex": q, "$options": "i"}},
+                    {"student_uid": {"$regex": q, "$options": "i"}},
+                ]
+            out.extend(await tdb.students.find(flt, {"_id": 0}).to_list(2000))
+        return out
+
+    if user["role"] not in ("school_admin", "teacher", "accounts", "parent"):
         raise HTTPException(status_code=403, detail="Forbidden")
-    flt = {"school_id": user["school_id"]} if user["role"] != "platform_admin" else {}
+
+    tdb = await tenant_db(user["school_id"])
+    if user["role"] == "parent":
+        return await tdb.students.find({"parent_user_id": user["id"]}, {"_id": 0}).to_list(50)
+
+    flt = {"school_id": user["school_id"]}
     if user["role"] == "teacher":
-        tflt = await _teacher_class_filter(db, user)
+        tflt = await _teacher_class_filter(tdb, user)
         if tflt and tflt.get("_blocked_"):
             return []
         if tflt:
@@ -55,23 +86,27 @@ async def list_students(
             {"name": {"$regex": q, "$options": "i"}},
             {"student_uid": {"$regex": q, "$options": "i"}},
         ]
-    return await db.students.find(flt, {"_id": 0}).to_list(5000)
+    return await tdb.students.find(flt, {"_id": 0}).to_list(5000)
 
 
 @router.post("")
 async def create_student(payload: StudentCreate, user: dict = Depends(require_roles("school_admin", "teacher"))):
-    db = get_db()
+    db = get_db()  # for users (master)
+    tdb = await tenant_db(user["school_id"])
+
     # Teachers can only create students in classes/sections they teach
     if user["role"] == "teacher":
-        tflt = await _teacher_class_filter(db, user)
+        tflt = await _teacher_class_filter(tdb, user)
         if not tflt or tflt.get("_blocked_"):
             raise HTTPException(status_code=403, detail="You are not assigned to any class yet")
         allowed = {(c["class_id"], c["section"]) for c in tflt.get("$or", [])}
         if (payload.class_id, payload.section) not in allowed:
             raise HTTPException(status_code=403, detail="You can only add students to classes you teach")
-    uid = payload.student_uid or await _gen_uid(db, user["school_id"])
-    if await db.students.find_one({"school_id": user["school_id"], "student_uid": uid}):
+
+    uid = payload.student_uid or await _gen_uid(tdb, user["school_id"])
+    if await tdb.students.find_one({"school_id": user["school_id"], "student_uid": uid}):
         raise HTTPException(status_code=400, detail="Student UID already exists")
+
     parent_email = payload.parent.email or f"parent.{uid.lower()}@{user['school_id'][:6]}.local"
     parent_email = parent_email.lower()
     existing_parent = await db.users.find_one({"email": parent_email})
@@ -80,7 +115,7 @@ async def create_student(payload: StudentCreate, user: dict = Depends(require_ro
     else:
         from core.auth import hash_password
         parent_user_id = new_id()
-        await db.users.insert_one({
+        parent_doc = {
             "id": parent_user_id,
             "email": parent_email,
             "password_hash": hash_password("Parent@123"),
@@ -90,7 +125,20 @@ async def create_student(payload: StudentCreate, user: dict = Depends(require_ro
             "phone": payload.parent.phone,
             "is_active": True,
             "created_at": utc_now(),
-        })
+        }
+        # Authoritative login row goes to master `users` (so login-by-email works).
+        await db.users.insert_one(parent_doc)
+        # Mirror into tenant DB.
+        mirror = {k: v for k, v in parent_doc.items() if k != "_id"}
+        await tdb.users.update_one({"email": parent_email}, {"$set": mirror}, upsert=True)
+        await tdb.parents.update_one(
+            {"user_id": parent_user_id},
+            {"$set": {
+                "user_id": parent_user_id, "email": parent_email, "name": payload.parent.name,
+                "phone": payload.parent.phone, "created_at": parent_doc["created_at"],
+            }},
+            upsert=True,
+        )
 
     doc = {
         "id": new_id(),
@@ -111,50 +159,16 @@ async def create_student(payload: StudentCreate, user: dict = Depends(require_ro
         "photo": None,
         "created_at": utc_now(),
     }
-    await db.students.insert_one(doc)
+    await tdb.students.insert_one(doc)
     await log_action(user["id"], user["role"], user["school_id"], "create", "student", doc["id"], {"uid": uid})
-
-    # Mirror student + parent into the per-school DB so the schema is populated.
-    try:
-        from core.db import get_school_db
-        school = await db.schools.find_one({"id": user["school_id"]}, {"_id": 0})
-        if school:
-            sdb = get_school_db(school)
-            await sdb.students.update_one(
-                {"student_uid": uid}, {"$set": {k: v for k, v in doc.items() if k != "_id"}}, upsert=True,
-            )
-            parent_doc = await db.users.find_one({"id": parent_user_id}, {"_id": 0})
-            if parent_doc:
-                await sdb.users.update_one(
-                    {"email": parent_doc["email"]}, {"$set": parent_doc}, upsert=True,
-                )
-                await sdb.parents.update_one(
-                    {"user_id": parent_user_id},
-                    {"$set": {
-                        "user_id": parent_user_id, "email": parent_doc["email"],
-                        "name": parent_doc.get("name"), "phone": parent_doc.get("phone"),
-                        "student_uid": uid, "student_id": doc["id"],
-                        "created_at": parent_doc.get("created_at"),
-                    }},
-                    upsert=True,
-                )
-    except Exception as e:
-        print(f"[students] mirror to school db failed: {e}")
-
     return clean_doc(doc)
 
 
 @router.post("/{student_id}/photo")
 async def upload_photo(student_id: str, file: UploadFile = File(...), user: dict = Depends(require_roles("school_admin", "teacher", "parent"))):
-    """Upload a student photo. Stored as data URL in MongoDB (base64). Max ~2 MB.
-
-    Access:
-    - school_admin: any student in their school
-    - teacher: students in their assigned class
-    - parent: their own child
-    """
-    db = get_db()
-    s = await db.students.find_one({"id": student_id}, {"_id": 0})
+    """Upload a student photo. Stored as data URL in MongoDB (base64). Max ~2 MB."""
+    tdb = await tenant_db(user["school_id"])
+    s = await tdb.students.find_one({"id": student_id}, {"_id": 0})
     if not s:
         raise HTTPException(status_code=404, detail="Student not found")
     if user["role"] != "platform_admin" and s["school_id"] != user.get("school_id"):
@@ -162,7 +176,7 @@ async def upload_photo(student_id: str, file: UploadFile = File(...), user: dict
     if user["role"] == "parent" and s.get("parent_user_id") != user["id"]:
         raise HTTPException(status_code=403, detail="Forbidden")
     if user["role"] == "teacher":
-        tflt = await _teacher_class_filter(db, user)
+        tflt = await _teacher_class_filter(tdb, user)
         if tflt and tflt.get("_blocked_"):
             raise HTTPException(status_code=403, detail="Not your class")
 
@@ -173,24 +187,24 @@ async def upload_photo(student_id: str, file: UploadFile = File(...), user: dict
         raise HTTPException(status_code=400, detail="Only JPEG, PNG or WebP allowed")
     b64 = base64.b64encode(data).decode("ascii")
     data_url = f"data:{file.content_type};base64,{b64}"
-    await db.students.update_one({"id": student_id}, {"$set": {"photo": data_url}})
+    await tdb.students.update_one({"id": student_id}, {"$set": {"photo": data_url}})
     await log_action(user["id"], user["role"], s["school_id"], "upload_photo", "student", student_id)
     return {"ok": True, "photo": data_url}
 
 
 @router.get("/by-uid/{student_uid}")
 async def get_student_by_uid(student_uid: str, user: dict = Depends(get_current_user)):
-    db = get_db()
+    tdb = await tenant_db(user["school_id"])
     flt = {"student_uid": student_uid}
     if user["role"] != "platform_admin":
         flt["school_id"] = user["school_id"]
     if user["role"] == "parent":
         flt["parent_user_id"] = user["id"]
-    s = await db.students.find_one(flt, {"_id": 0})
+    s = await tdb.students.find_one(flt, {"_id": 0})
     if not s:
         raise HTTPException(status_code=404, detail="Student not found")
     if user["role"] == "teacher":
-        tflt = await _teacher_class_filter(db, user)
+        tflt = await _teacher_class_filter(tdb, user)
         if tflt and tflt.get("_blocked_"):
             raise HTTPException(status_code=403, detail="Not your class")
         if tflt:
@@ -202,13 +216,13 @@ async def get_student_by_uid(student_uid: str, user: dict = Depends(get_current_
 
 @router.get("/{student_id}")
 async def get_student(student_id: str, user: dict = Depends(get_current_user)):
-    db = get_db()
+    tdb = await tenant_db(user["school_id"])
     flt = {"id": student_id}
     if user["role"] != "platform_admin":
         flt["school_id"] = user["school_id"]
     if user["role"] == "parent":
         flt["parent_user_id"] = user["id"]
-    s = await db.students.find_one(flt, {"_id": 0})
+    s = await tdb.students.find_one(flt, {"_id": 0})
     if not s:
         raise HTTPException(status_code=404, detail="Student not found")
     return s
@@ -216,11 +230,11 @@ async def get_student(student_id: str, user: dict = Depends(get_current_user)):
 
 @router.patch("/{student_id}")
 async def update_student(student_id: str, payload: StudentUpdate, user: dict = Depends(require_roles("school_admin"))):
-    db = get_db()
+    tdb = await tenant_db(user["school_id"])
     update = {k: (v.model_dump() if hasattr(v, "model_dump") else v) for k, v in payload.model_dump(exclude_unset=True).items()}
     if not update:
         return {"ok": True}
-    res = await db.students.update_one({"id": student_id, "school_id": user["school_id"]}, {"$set": update})
+    res = await tdb.students.update_one({"id": student_id, "school_id": user["school_id"]}, {"$set": update})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Not found")
     await log_action(user["id"], user["role"], user["school_id"], "update", "student", student_id, update)
@@ -229,7 +243,7 @@ async def update_student(student_id: str, payload: StudentUpdate, user: dict = D
 
 @router.delete("/{student_id}")
 async def delete_student(student_id: str, user: dict = Depends(require_roles("school_admin"))):
-    db = get_db()
-    await db.students.update_one({"id": student_id, "school_id": user["school_id"]}, {"$set": {"status": "inactive"}})
+    tdb = await tenant_db(user["school_id"])
+    await tdb.students.update_one({"id": student_id, "school_id": user["school_id"]}, {"$set": {"status": "inactive"}})
     await log_action(user["id"], user["role"], user["school_id"], "deactivate", "student", student_id)
     return {"ok": True}

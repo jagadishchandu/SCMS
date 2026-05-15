@@ -128,10 +128,15 @@ async def telegram_event(
                 ],
             }) or None
             if not user:
-                # try to find by student_uid → parent_user_id
-                student = await db.students.find_one({"student_uid": code.upper()})
-                if student and student.get("parent_user_id"):
-                    user = await db.users.find_one({"id": student["parent_user_id"]})
+                # try to find by student_uid → parent_user_id, across all tenant DBs
+                from core.db import tenant_db
+                async for sch in db.schools.find({}, {"_id": 0, "id": 1}):
+                    tdb = await tenant_db(sch["id"])
+                    student = await tdb.students.find_one({"student_uid": code.upper()})
+                    if student and student.get("parent_user_id"):
+                        user = await db.users.find_one({"id": student["parent_user_id"]})
+                        if user:
+                            break
             if user:
                 await db.users.update_one(
                     {"id": user["id"]},

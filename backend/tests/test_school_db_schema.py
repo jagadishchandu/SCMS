@@ -34,7 +34,7 @@ PLATFORM = ("jagadishchandu789@gmail.com", "Manasa@123")
 
 EXPECTED_COLLECTIONS = {
     "users", "school_admins", "teachers", "parents", "accounts_users", "students_users",
-    "classes", "subjects", "class_teachers", "students", "attendance",
+    "classes", "subjects", "class_teacher_map", "students", "attendance",
     "exams", "marks", "syllabus", "holidays",
     "fee_structures", "fees", "fee_payments",
     "timetable", "notifications", "activities", "activity_enrollments",

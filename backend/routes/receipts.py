@@ -9,7 +9,7 @@ from reportlab.lib.units import mm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
 from core.auth import get_current_user
-from core.db import get_db
+from core.db import get_db, tenant_db
 
 router = APIRouter(prefix="/receipts", tags=["receipts"])
 
@@ -30,15 +30,29 @@ def _pdf_response(buf: io.BytesIO, filename: str):
 @router.get("/payment/{payment_id}.pdf")
 async def payment_receipt(payment_id: str, user: dict = Depends(get_current_user)):
     db = get_db()
-    payment = await db.fee_payments.find_one({"id": payment_id}, {"_id": 0})
+    # Search payment across tenant DBs (we don't know which school upfront).
+    payment = None
+    school = None
+    if user.get("school_id"):
+        tdb = await tenant_db(user["school_id"])
+        payment = await tdb.fee_payments.find_one({"id": payment_id}, {"_id": 0})
+        if payment:
+            school = await db.schools.find_one({"id": payment["school_id"]}, {"_id": 0})
+    if not payment:
+        # Platform admin path: iterate all schools.
+        async for s in db.schools.find({}, {"_id": 0}):
+            stdb = await tenant_db(s["id"])
+            p = await stdb.fee_payments.find_one({"id": payment_id}, {"_id": 0})
+            if p:
+                payment = p; school = s; break
     if not payment:
         raise HTTPException(status_code=404, detail="Not found")
     if user["role"] not in ("platform_admin",) and user.get("school_id") != payment["school_id"]:
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    school = await db.schools.find_one({"id": payment["school_id"]}, {"_id": 0})
-    student = await db.students.find_one({"id": payment["student_id"]}, {"_id": 0})
-    fee = await db.fees.find_one({"id": payment["fee_id"]}, {"_id": 0})
+    tdb = await tenant_db(payment["school_id"])
+    student = await tdb.students.find_one({"id": payment["student_id"]}, {"_id": 0})
+    fee = await tdb.fees.find_one({"id": payment["fee_id"]}, {"_id": 0})
 
     if user["role"] == "parent" and student.get("parent_user_id") != user["id"]:
         raise HTTPException(status_code=403, detail="Forbidden")
@@ -107,32 +121,33 @@ async def payment_receipt(payment_id: str, user: dict = Depends(get_current_user
 async def student_report(student_uid: str, user: dict = Depends(get_current_user)):
     """Student summary report PDF (attendance + marks + fees overview)."""
     db = get_db()
+    tdb = await tenant_db(user["school_id"])
     flt = {"student_uid": student_uid}
     if user["role"] != "platform_admin":
         flt["school_id"] = user["school_id"]
     if user["role"] == "parent":
         flt["parent_user_id"] = user["id"]
-    s = await db.students.find_one(flt, {"_id": 0})
+    s = await tdb.students.find_one(flt, {"_id": 0})
     if not s:
         raise HTTPException(status_code=404, detail="Student not found")
     school = await db.schools.find_one({"id": s["school_id"]}, {"_id": 0})
 
-    att = await db.attendance.find({"school_id": s["school_id"], "student_id": s["id"]}, {"_id": 0}).to_list(5000)
+    att = await tdb.attendance.find({"school_id": s["school_id"], "student_id": s["id"]}, {"_id": 0}).to_list(5000)
     counts = {"present": 0, "absent": 0, "sick": 0, "late": 0, "half_day": 0, "excused": 0}
     for r in att:
         counts[r["status"]] = counts.get(r["status"], 0) + 1
     total = len(att); present_like = counts["present"] + counts["late"] + counts["half_day"]
     pct = round(present_like / total * 100, 1) if total else 0
 
-    marks = await db.marks.find({"school_id": s["school_id"], "student_id": s["id"]}, {"_id": 0}).to_list(2000)
-    subjects = await db.subjects.find({"school_id": s["school_id"]}, {"_id": 0}).to_list(500)
+    marks = await tdb.marks.find({"school_id": s["school_id"], "student_id": s["id"]}, {"_id": 0}).to_list(2000)
+    subjects = await tdb.subjects.find({"school_id": s["school_id"]}, {"_id": 0}).to_list(500)
     sub_map = {x["id"]: x["name"] for x in subjects}
     by_subject = {}
     for m in marks:
         by_subject.setdefault(sub_map.get(m["subject_id"], m["subject_id"]), []).append(m["percentage"])
     subject_rows = [(k, f"{round(sum(v)/len(v),1)}%") for k, v in by_subject.items()]
 
-    fees = await db.fees.find({"school_id": s["school_id"], "student_id": s["id"]}, {"_id": 0}).to_list(100)
+    fees = await tdb.fees.find({"school_id": s["school_id"], "student_id": s["id"]}, {"_id": 0}).to_list(100)
     fee_total = sum(f["total"] for f in fees); fee_paid = sum(f["paid"] for f in fees); fee_due = sum(f["due"] for f in fees)
 
     styles = getSampleStyleSheet()

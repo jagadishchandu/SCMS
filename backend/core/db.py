@@ -46,6 +46,136 @@ def get_school_db(school: dict):
     return get_client()[school_db_name(school)]
 
 
+# In-process cache so we don't query `schools` on every request.
+# Keyed by school_id → db_name string. Invalidated by `_invalidate_tenant_cache`.
+_tenant_cache: dict[str, str] = {}
+
+
+def _invalidate_tenant_cache(school_id: str | None = None):
+    if school_id is None:
+        _tenant_cache.clear()
+    else:
+        _tenant_cache.pop(school_id, None)
+
+
+async def tenant_db(school_id_or_user):
+    """Return the per-school Motor DB for a given `school_id` (str) or `user` dict.
+
+    For platform admin (no school_id), returns the master DB — they only operate
+    on master-level entities (schools, plans, users index, audit) anyway, and
+    cross-school aggregation iterates over all schools explicitly.
+
+    Cached in-process by school_id → db_name.
+    """
+    if isinstance(school_id_or_user, dict):
+        school_id = school_id_or_user.get("school_id")
+    else:
+        school_id = school_id_or_user
+    if not school_id:
+        return get_db()
+    cached = _tenant_cache.get(school_id)
+    if cached:
+        return get_client()[cached]
+    master = get_db()
+    s = await master.schools.find_one({"id": school_id}, {"_id": 0, "db_name": 1, "code": 1, "id": 1, "name": 1})
+    if not s:
+        return master
+    name = s.get("db_name") or school_db_name(s)
+    _tenant_cache[school_id] = name
+    return get_client()[name]
+
+
+# Master-DB-only collections — never moved to per-school DBs:
+MASTER_ONLY_COLLECTIONS = (
+    "users",  # login is by email; we must look up before we know which school
+    "schools", "plans", "login_attempts", "password_reset_codes",
+    "whatsapp_status_updates", "whatsapp_inbound", "telegram_inbound",
+    "subscription_payments",
+)
+
+# School-scoped collections moved to per-school DB as authoritative.
+TENANT_OPERATIONAL_COLLECTIONS = (
+    "classes", "subjects", "class_teacher_map",
+    "attendance", "exams", "marks", "syllabus",
+    "holidays", "fee_structures", "fees", "fee_payments",
+    "timetable", "activities", "activity_enrollments",
+    "sick_leaves", "notifications", "bulk_uploads", "receipts",
+    "audit_logs",
+)
+# Plus students which is the principal child entity
+TENANT_OPERATIONAL_COLLECTIONS = ("students",) + TENANT_OPERATIONAL_COLLECTIONS
+
+
+async def migrate_master_to_tenant(school: dict, dry_run: bool = False) -> dict:
+    """One-time copy of every school_id-scoped doc from master DB to a school's
+    per-school DB. Skips docs already present (by their `id` field) so it is
+    safe to call repeatedly.
+
+    Returns a per-collection count summary.
+    """
+    master = get_db()
+    sdb = get_school_db(school)
+    school_id = school["id"]
+    summary: dict[str, int] = {}
+
+    for coll in TENANT_OPERATIONAL_COLLECTIONS:
+        try:
+            cursor = master[coll].find({"school_id": school_id}, {"_id": 0})
+            docs = await cursor.to_list(50_000)
+        except Exception as e:
+            summary[coll] = -1
+            print(f"[migrate] {school_id} {coll} read failed: {e}")
+            continue
+        if not docs:
+            summary[coll] = 0
+            continue
+        if dry_run:
+            summary[coll] = len(docs)
+            continue
+        # Existing ids in tenant DB
+        existing_ids = set()
+        try:
+            async for d in sdb[coll].find({}, {"id": 1, "_id": 0}):
+                if d.get("id"):
+                    existing_ids.add(d["id"])
+        except Exception:
+            existing_ids = set()
+        to_insert = [d for d in docs if d.get("id") and d["id"] not in existing_ids]
+        if to_insert:
+            try:
+                await sdb[coll].insert_many(to_insert, ordered=False)
+            except Exception as e:
+                # Likely duplicate-key races — ignore, count actual difference below.
+                print(f"[migrate] {school_id} {coll} insert_many warn: {e}")
+        summary[coll] = len(to_insert)
+
+    # Mirror users belonging to this school (without overwriting hashes)
+    try:
+        async for u in master.users.find({"school_id": school_id}, {"_id": 0}):
+            await sdb.users.update_one({"email": u["email"]}, {"$set": u}, upsert=True)
+            role = u.get("role")
+            role_to_collection = {
+                "school_admin": "school_admins", "teacher": "teachers",
+                "accounts": "accounts_users", "parent": "parents",
+                "student": "students_users",
+            }
+            target = role_to_collection.get(role)
+            if target:
+                await sdb[target].update_one(
+                    {"user_id": u["id"]},
+                    {"$set": {
+                        "user_id": u["id"], "email": u["email"], "name": u.get("name"),
+                        "phone": u.get("phone"), "created_at": u.get("created_at"),
+                    }},
+                    upsert=True,
+                )
+    except Exception as e:
+        print(f"[migrate] {school_id} users mirror error: {e}")
+
+    summary["_users_mirrored"] = True
+    return summary
+
+
 async def init_school_db(school: dict):
     """Create the full per-school schema (indexes + marker docs) for a school's
     dedicated database. Idempotent — safe to call repeatedly.
@@ -76,8 +206,8 @@ async def init_school_db(school: dict):
     await sdb.classes.create_index([("name", 1), ("sections", 1)])
     await sdb.subjects.create_index("name")
     await sdb.subjects.create_index("code", sparse=True)
-    await sdb.class_teachers.create_index([("class_id", 1), ("section", 1)], unique=True)
-    await sdb.class_teachers.create_index("teacher_id")
+    await sdb.class_teacher_map.create_index([("class_id", 1), ("section", 1)], unique=True)
+    await sdb.class_teacher_map.create_index("teacher_id")
 
     # ---- Students & parents (parent info embedded on student doc + linked user) ----
     await sdb.students.create_index("student_uid", unique=True)
@@ -170,7 +300,7 @@ async def init_school_db(school: dict):
             "initialized_at_v": "1.14",
             "collections": [
                 "users", "school_admins", "teachers", "parents", "accounts_users", "students_users",
-                "classes", "subjects", "class_teachers", "students", "attendance",
+                "classes", "subjects", "class_teacher_map", "students", "attendance",
                 "exams", "marks", "syllabus", "holidays",
                 "fee_structures", "fees", "fee_payments",
                 "timetable", "notifications", "activities", "activity_enrollments",
@@ -186,7 +316,7 @@ async def init_school_db(school: dict):
 # Collections we always expect to exist in a freshly-initialised school DB.
 SCHOOL_DB_COLLECTIONS = (
     "users", "school_admins", "teachers", "parents", "accounts_users", "students_users",
-    "classes", "subjects", "class_teachers", "students", "attendance",
+    "classes", "subjects", "class_teacher_map", "students", "attendance",
     "exams", "marks", "syllabus", "holidays",
     "fee_structures", "fees", "fee_payments",
     "timetable", "notifications", "activities", "activity_enrollments",
@@ -203,7 +333,7 @@ async def school_db_status(school: dict) -> dict:
     counts = {}
     for name in SCHOOL_DB_COLLECTIONS:
         try:
-            counts[name] = await sdb[name].estimated_document_count() if name in existing else 0
+            counts[name] = await sdb[name].count_documents({}) if name in existing else 0
         except Exception:
             counts[name] = 0
     marker = await sdb.meta.find_one({"_marker": "school_db"}, {"_id": 0})

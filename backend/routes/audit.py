@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from core.auth import get_current_user
-from core.db import get_db
+from core.db import get_db, tenant_db
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
@@ -76,7 +76,12 @@ async def list_audit(
         return []
     flt = _build_filter(user, actor_role=actor_role, action=action, resource=resource,
                         school_id=school_id, date_from=date_from, date_to=date_to, q=q)
-    docs = await db.audit_logs.find(flt, {"_id": 0}).sort("created_at", -1).to_list(min(limit, 1000))
+    # School admin reads from per-school DB (school-scoped). Platform admin from master.
+    if user["role"] == "school_admin":
+        tdb = await tenant_db(user["school_id"])
+        docs = await tdb.audit_logs.find(flt, {"_id": 0}).sort("created_at", -1).to_list(min(limit, 1000))
+    else:
+        docs = await db.audit_logs.find(flt, {"_id": 0}).sort("created_at", -1).to_list(min(limit, 1000))
     return await _decorate_with_actor(db, docs)
 
 
@@ -87,9 +92,15 @@ async def audit_facets(user: dict = Depends(get_current_user)):
     if user["role"] not in ("platform_admin", "school_admin"):
         return {"actions": [], "resources": [], "roles": []}
     flt: dict = {} if user["role"] == "platform_admin" else {"school_id": user["school_id"]}
-    actions = await db.audit_logs.distinct("action", flt)
-    resources = await db.audit_logs.distinct("resource", flt)
-    roles = await db.audit_logs.distinct("actor_role", flt)
+    if user["role"] == "school_admin":
+        tdb = await tenant_db(user["school_id"])
+        actions = await tdb.audit_logs.distinct("action", flt)
+        resources = await tdb.audit_logs.distinct("resource", flt)
+        roles = await tdb.audit_logs.distinct("actor_role", flt)
+    else:
+        actions = await db.audit_logs.distinct("action", flt)
+        resources = await db.audit_logs.distinct("resource", flt)
+        roles = await db.audit_logs.distinct("actor_role", flt)
     return {
         "actions": sorted([a for a in actions if a]),
         "resources": sorted([r for r in resources if r]),
@@ -115,7 +126,11 @@ async def export_csv(
     db = get_db()
     flt = _build_filter(user, actor_role=actor_role, action=action, resource=resource,
                         school_id=school_id, date_from=date_from, date_to=date_to, q=q)
-    docs = await db.audit_logs.find(flt, {"_id": 0}).sort("created_at", -1).to_list(min(limit, 20000))
+    if user["role"] == "school_admin":
+        tdb = await tenant_db(user["school_id"])
+        docs = await tdb.audit_logs.find(flt, {"_id": 0}).sort("created_at", -1).to_list(min(limit, 20000))
+    else:
+        docs = await db.audit_logs.find(flt, {"_id": 0}).sort("created_at", -1).to_list(min(limit, 20000))
     docs = await _decorate_with_actor(db, docs)
 
     buf = io.StringIO()

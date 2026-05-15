@@ -1,7 +1,7 @@
 """Student analytics dashboard + school dashboard."""
 from fastapi import APIRouter, Depends, HTTPException
 from core.auth import get_current_user
-from core.db import get_db
+from core.db import get_db, tenant_db
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -9,17 +9,18 @@ router = APIRouter(prefix="/analytics", tags=["analytics"])
 @router.get("/student/{student_uid}")
 async def student_dashboard(student_uid: str, user: dict = Depends(get_current_user)):
     db = get_db()
+    tdb = await tenant_db(user["school_id"])
     flt = {"student_uid": student_uid}
     if user["role"] != "platform_admin":
         flt["school_id"] = user["school_id"]
     if user["role"] == "parent":
         flt["parent_user_id"] = user["id"]
-    s = await db.students.find_one(flt, {"_id": 0})
+    s = await tdb.students.find_one(flt, {"_id": 0})
     if not s:
         raise HTTPException(status_code=404, detail="Student not found")
 
     # Attendance
-    att = await db.attendance.find({"school_id": s["school_id"], "student_id": s["id"]}, {"_id": 0}).to_list(5000)
+    att = await tdb.attendance.find({"school_id": s["school_id"], "student_id": s["id"]}, {"_id": 0}).to_list(5000)
     counts = {"present": 0, "absent": 0, "sick": 0, "late": 0, "half_day": 0, "excused": 0, "not_in_class": 0}
     monthly = {}
     for r in att:
@@ -32,10 +33,10 @@ async def student_dashboard(student_uid: str, user: dict = Depends(get_current_u
     att_pct = round((present_like / total * 100) if total else 0, 1)
 
     # Marks
-    marks = await db.marks.find({"school_id": s["school_id"], "student_id": s["id"]}, {"_id": 0}).to_list(2000)
-    subjects = await db.subjects.find({"school_id": s["school_id"]}, {"_id": 0}).to_list(500)
+    marks = await tdb.marks.find({"school_id": s["school_id"], "student_id": s["id"]}, {"_id": 0}).to_list(2000)
+    subjects = await tdb.subjects.find({"school_id": s["school_id"]}, {"_id": 0}).to_list(500)
     subject_map = {sub["id"]: sub["name"] for sub in subjects}
-    exams = await db.exams.find({"school_id": s["school_id"]}, {"_id": 0}).to_list(500)
+    exams = await tdb.exams.find({"school_id": s["school_id"]}, {"_id": 0}).to_list(500)
     exam_map = {e["id"]: e["name"] for e in exams}
 
     # Subject-wise avg & exam trend
@@ -52,8 +53,8 @@ async def student_dashboard(student_uid: str, user: dict = Depends(get_current_u
     overall_pct = round(sum(m["percentage"] for m in marks) / len(marks), 1) if marks else 0
 
     # Class average comparison (same class)
-    class_marks = await db.marks.find({"school_id": s["school_id"]}, {"_id": 0}).to_list(20000)
-    class_students = await db.students.find({"school_id": s["school_id"], "class_id": s["class_id"]}, {"_id": 0, "id": 1}).to_list(2000)
+    class_marks = await tdb.marks.find({"school_id": s["school_id"]}, {"_id": 0}).to_list(20000)
+    class_students = await tdb.students.find({"school_id": s["school_id"], "class_id": s["class_id"]}, {"_id": 0, "id": 1}).to_list(2000)
     class_ids = {c["id"] for c in class_students}
     class_marks = [m for m in class_marks if m["student_id"] in class_ids]
     class_by_subject = {}
@@ -77,7 +78,7 @@ async def student_dashboard(student_uid: str, user: dict = Depends(get_current_u
         improvement = {"diff": diff, "status": "improving" if diff > 1 else ("declining" if diff < -1 else "stable")}
 
     # Fees
-    fees = await db.fees.find({"school_id": s["school_id"], "student_id": s["id"]}, {"_id": 0}).to_list(100)
+    fees = await tdb.fees.find({"school_id": s["school_id"], "student_id": s["id"]}, {"_id": 0}).to_list(100)
     fee_total = sum(f["total"] for f in fees)
     fee_paid = sum(f["paid"] for f in fees)
     fee_due = sum(f["due"] for f in fees)
@@ -136,18 +137,32 @@ async def risk_students(limit: int = 5, user: dict = Depends(get_current_user)):
     win30 = (today - timedelta(days=30)).isoformat()
     win60 = (today - timedelta(days=60)).isoformat()
 
-    flt = {} if user["role"] == "platform_admin" else {"school_id": user["school_id"]}
-    students = await db.students.find({**flt, "status": "active"}, {"_id": 0}).to_list(5000)
-    classes = await db.classes.find(flt, {"_id": 0}).to_list(500)
-    subjects = await db.subjects.find(flt, {"_id": 0}).to_list(500)
+    # Aggregate across schools or scope to one
+    if user["role"] == "platform_admin" and not user.get("school_id"):
+        schools = await db.schools.find({}, {"_id": 0, "id": 1}).to_list(1000)
+    else:
+        schools = [{"id": user["school_id"]}]
+    students = []
+    classes = []
+    subjects = []
+    tdbs: dict[str, object] = {}
+    for sch in schools:
+        tdb = await tenant_db(sch["id"])
+        tdbs[sch["id"]] = tdb
+        students.extend(await tdb.students.find({"status": "active"}, {"_id": 0}).to_list(5000))
+        classes.extend(await tdb.classes.find({}, {"_id": 0}).to_list(500))
+        subjects.extend(await tdb.subjects.find({}, {"_id": 0}).to_list(500))
     class_map = {c["id"]: c["name"] for c in classes}
 
     candidates = []
     for s in students:
+        tdb = tdbs.get(s["school_id"])
+        if tdb is None:
+            continue
         # attendance — current 30-day window vs prior 30 days
-        a_cur = await db.attendance.find({"school_id": s["school_id"], "student_id": s["id"],
+        a_cur = await tdb.attendance.find({"school_id": s["school_id"], "student_id": s["id"],
                                           "date": {"$gte": win30}}, {"_id": 0}).to_list(200)
-        a_prev = await db.attendance.find({"school_id": s["school_id"], "student_id": s["id"],
+        a_prev = await tdb.attendance.find({"school_id": s["school_id"], "student_id": s["id"],
                                            "date": {"$gte": win60, "$lt": win30}}, {"_id": 0}).to_list(200)
 
         def att_pct(rs):
@@ -164,9 +179,9 @@ async def risk_students(limit: int = 5, user: dict = Depends(get_current_user)):
         from datetime import datetime, timezone
         cur_dt = datetime.fromisoformat(win30).replace(tzinfo=timezone.utc)
         prev_dt = datetime.fromisoformat(win60).replace(tzinfo=timezone.utc)
-        m_cur = await db.marks.find({"school_id": s["school_id"], "student_id": s["id"],
+        m_cur = await tdb.marks.find({"school_id": s["school_id"], "student_id": s["id"],
                                      "entered_at": {"$gte": cur_dt}}, {"_id": 0}).to_list(500)
-        m_prev = await db.marks.find({"school_id": s["school_id"], "student_id": s["id"],
+        m_prev = await tdb.marks.find({"school_id": s["school_id"], "student_id": s["id"],
                                       "entered_at": {"$gte": prev_dt, "$lt": cur_dt}}, {"_id": 0}).to_list(500)
         cur_mark = round(sum(m["percentage"] for m in m_cur) / len(m_cur), 1) if m_cur else None
         prev_mark = round(sum(m["percentage"] for m in m_prev) / len(m_prev), 1) if m_prev else None
@@ -216,30 +231,53 @@ async def school_dashboard(user: dict = Depends(get_current_user)):
     sid = user.get("school_id")
     flt = {"school_id": sid} if sid else {}
 
-    total_students = await db.students.count_documents({**flt, "status": "active"})
+    # Aggregate across all schools or scope to one tenant DB
+    if user["role"] == "platform_admin" and not sid:
+        schools = await db.schools.find({}, {"_id": 0, "id": 1}).to_list(1000)
+    else:
+        schools = [{"id": sid}]
+    tdbs = []
+    for sch in schools:
+        tdbs.append(await tenant_db(sch["id"]))
+
+    async def _sum(coll: str, q: dict, count_only: bool = False, list_limit: int = 5000) -> int | list:
+        out: list = []
+        total = 0
+        for tdb in tdbs:
+            if count_only:
+                total += await tdb[coll].count_documents(q)
+            else:
+                out.extend(await tdb[coll].find(q, {"_id": 0}).to_list(list_limit))
+        return total if count_only else out
+
+    total_students = await _sum("students", {"status": "active"}, count_only=True)
     total_teachers = await db.users.count_documents({**flt, "role": "teacher", "is_active": True})
     total_users = await db.users.count_documents({**flt, "is_active": True})
-    total_classes = await db.classes.count_documents(flt)
+    total_classes = await _sum("classes", {}, count_only=True)
 
     # Today's attendance
     from datetime import date
     today = date.today().isoformat()
-    today_att = await db.attendance.find({**flt, "date": today}, {"_id": 0}).to_list(5000)
+    today_att = await _sum("attendance", {"date": today})
     present_today = sum(1 for r in today_att if r["status"] in ("present", "late", "half_day"))
     att_pct_today = round(present_today / len(today_att) * 100, 1) if today_att else 0
 
-    fees = await db.fees.find(flt, {"_id": 0}).to_list(10000)
+    fees = await _sum("fees", {})
     billed = sum(f["total"] for f in fees)
     collected = sum(f["paid"] for f in fees)
     outstanding = sum(f["due"] for f in fees)
 
-    # Notifications
+    # Notifications (still in master DB)
     notif_total = await db.notifications.count_documents(flt)
 
-    # Upcoming exams
-    upcoming = await db.exams.find({**flt, "start_date": {"$gte": today}}, {"_id": 0}).sort("start_date", 1).to_list(10)
-    # Upcoming holidays
-    upcoming_holidays = await db.holidays.find({**flt, "date": {"$gte": today}}, {"_id": 0}).sort("date", 1).to_list(10)
+    # Upcoming exams + holidays from per-school DBs
+    upcoming = []
+    upcoming_holidays = []
+    for tdb in tdbs:
+        upcoming.extend(await tdb.exams.find({"start_date": {"$gte": today}}, {"_id": 0}).sort("start_date", 1).to_list(10))
+        upcoming_holidays.extend(await tdb.holidays.find({"date": {"$gte": today}}, {"_id": 0}).sort("date", 1).to_list(10))
+    upcoming.sort(key=lambda x: x.get("start_date", ""))
+    upcoming_holidays.sort(key=lambda x: x.get("date", ""))
 
     return {
         "kpis": {
@@ -270,6 +308,7 @@ async def teacher_performance(teacher_id: str | None = None, user: dict = Depend
         raise HTTPException(status_code=403, detail="Forbidden")
 
     school_id = user.get("school_id")
+    tdb = await tenant_db(school_id)
     q = {"school_id": school_id, "role": "teacher"}
     if teacher_id:
         q["id"] = teacher_id
@@ -278,8 +317,8 @@ async def teacher_performance(teacher_id: str | None = None, user: dict = Depend
     results = []
     for t in teachers:
         # find assigned classes (class teacher + timetable)
-        mappings = await db.class_teacher_map.find({"school_id": school_id, "teacher_id": t["id"]}, {"_id": 0}).to_list(50)
-        timetable = await db.timetable.find({"school_id": school_id, "teacher_id": t["id"]}, {"_id": 0}).to_list(500)
+        mappings = await tdb.class_teacher_map.find({"school_id": school_id, "teacher_id": t["id"]}, {"_id": 0}).to_list(50)
+        timetable = await tdb.timetable.find({"school_id": school_id, "teacher_id": t["id"]}, {"_id": 0}).to_list(500)
         class_keys = {(m["class_id"], m["section"]) for m in mappings} | {(tt["class_id"], tt["section"]) for tt in timetable}
 
         if not class_keys:
@@ -289,24 +328,24 @@ async def teacher_performance(teacher_id: str | None = None, user: dict = Depend
         # attendance pct in those classes
         students_in_classes = []
         for c, s in class_keys:
-            ss = await db.students.find({"school_id": school_id, "class_id": c, "section": s}, {"_id": 0, "id": 1}).to_list(2000)
+            ss = await tdb.students.find({"school_id": school_id, "class_id": c, "section": s}, {"_id": 0, "id": 1}).to_list(2000)
             students_in_classes.extend([x["id"] for x in ss])
 
         att_pct = 0
         if students_in_classes:
-            att = await db.attendance.find({"school_id": school_id, "student_id": {"$in": students_in_classes}}, {"_id": 0}).to_list(20000)
+            att = await tdb.attendance.find({"school_id": school_id, "student_id": {"$in": students_in_classes}}, {"_id": 0}).to_list(20000)
             present_like = sum(1 for a in att if a["status"] in ("present", "late", "half_day"))
             att_pct = round((present_like / len(att) * 100) if att else 0, 1)
 
         # marks improvement: avg percentage
         marks_avg = 0
         if students_in_classes:
-            marks = await db.marks.find({"school_id": school_id, "student_id": {"$in": students_in_classes}}, {"_id": 0}).to_list(20000)
+            marks = await tdb.marks.find({"school_id": school_id, "student_id": {"$in": students_in_classes}}, {"_id": 0}).to_list(20000)
             marks_avg = round(sum(m["percentage"] for m in marks) / len(marks), 1) if marks else 0
 
         # timely submission heuristic: any marks/attendance submitted at all
-        att_submitted = await db.attendance.count_documents({"school_id": school_id, "marked_by": t["id"]})
-        marks_submitted = await db.marks.count_documents({"school_id": school_id, "entered_by": t["id"]})
+        att_submitted = await tdb.attendance.count_documents({"school_id": school_id, "marked_by": t["id"]})
+        marks_submitted = await tdb.marks.count_documents({"school_id": school_id, "entered_by": t["id"]})
         compliance_pct = 100 if (att_submitted > 0 or marks_submitted > 0) else 40
 
         # admin review (placeholder)

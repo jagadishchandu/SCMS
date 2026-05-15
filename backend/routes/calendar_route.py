@@ -1,7 +1,7 @@
 """Calendar feed — holidays + exam schedule events for the month."""
 from fastapi import APIRouter, Depends
 from core.auth import get_current_user
-from core.db import get_db
+from core.db import get_db, tenant_db
 
 router = APIRouter(prefix="/calendar", tags=["calendar"])
 
@@ -9,11 +9,18 @@ router = APIRouter(prefix="/calendar", tags=["calendar"])
 @router.get("/events")
 async def list_events(month: str | None = None, user: dict = Depends(get_current_user)):
     """Returns list of {type, title, date, end_date?, meta} from holidays + exams."""
-    db = get_db()
-    flt = {} if user["role"] == "platform_admin" else {"school_id": user["school_id"]}
-
-    holidays = await db.holidays.find(flt, {"_id": 0}).to_list(2000)
-    exams = await db.exams.find(flt, {"_id": 0}).to_list(2000)
+    holidays = []
+    exams = []
+    if user["role"] == "platform_admin" and not user.get("school_id"):
+        db = get_db()
+        async for s in db.schools.find({}, {"_id": 0, "id": 1}):
+            tdb = await tenant_db(s["id"])
+            holidays.extend(await tdb.holidays.find({}, {"_id": 0}).to_list(500))
+            exams.extend(await tdb.exams.find({}, {"_id": 0}).to_list(500))
+    else:
+        tdb = await tenant_db(user["school_id"])
+        holidays = await tdb.holidays.find({"school_id": user["school_id"]}, {"_id": 0}).to_list(2000)
+        exams = await tdb.exams.find({"school_id": user["school_id"]}, {"_id": 0}).to_list(2000)
 
     events = []
     for h in holidays:

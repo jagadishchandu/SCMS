@@ -27,7 +27,7 @@ def is_enabled() -> bool:
 
 # -------------- Monthly digest --------------
 async def _run_digest_for_all_schools():
-    from core.db import get_db
+    from core.db import get_db, tenant_db
     from routes.digests import _previous_month_range, _compute_digest, _compose_message
     from core.notify import queue_notification
     from core.audit import log_action
@@ -37,12 +37,13 @@ async def _run_digest_for_all_schools():
     schools = await db.schools.find({"is_active": True}, {"_id": 0}).to_list(500)
     total = 0
     for school in schools:
+        tdb = await tenant_db(school["id"])
         lang_default = school.get("language") or "en"
-        students = await db.students.find({"school_id": school["id"], "status": "active"}, {"_id": 0}).to_list(5000)
+        students = await tdb.students.find({"school_id": school["id"], "status": "active"}, {"_id": 0}).to_list(5000)
         for s in students:
             parent_user = await db.users.find_one({"id": s.get("parent_user_id")}, {"_id": 0, "language": 1, "email": 1}) if s.get("parent_user_id") else None
             lang = (parent_user or {}).get("language") or lang_default
-            digest = await _compute_digest(db, school, s, start_iso, end_iso)
+            digest = await _compute_digest(tdb, school, s, start_iso, end_iso)
             msg = _compose_message(school, s, label, digest, lang)
             phone = (s.get("parent", {}) or {}).get("whatsapp") or (s.get("parent", {}) or {}).get("phone")
             email = (s.get("parent", {}) or {}).get("email") or (parent_user or {}).get("email")

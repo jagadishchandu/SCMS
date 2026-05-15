@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends
 from core.models import HolidayCreate
 from core.auth import require_roles, get_current_user
-from core.db import get_db
+from core.db import get_db, tenant_db
 from core.utils import new_id, utc_now
 from core.notify import queue_notification
 
@@ -11,14 +11,20 @@ router = APIRouter(prefix="/holidays", tags=["holidays"])
 
 @router.get("")
 async def list_holidays(user: dict = Depends(get_current_user)):
-    db = get_db()
-    flt = {} if user["role"] == "platform_admin" else {"school_id": user["school_id"]}
-    return await db.holidays.find(flt, {"_id": 0}).sort("date", 1).to_list(500)
+    if user["role"] == "platform_admin" and not user.get("school_id"):
+        db = get_db()
+        out = []
+        async for s in db.schools.find({}, {"_id": 0, "id": 1}):
+            tdb = await tenant_db(s["id"])
+            out.extend(await tdb.holidays.find({}, {"_id": 0}).sort("date", 1).to_list(200))
+        return out
+    tdb = await tenant_db(user["school_id"])
+    return await tdb.holidays.find({"school_id": user["school_id"]}, {"_id": 0}).sort("date", 1).to_list(500)
 
 
 @router.post("")
 async def create_holiday(payload: HolidayCreate, user: dict = Depends(require_roles("school_admin"))):
-    db = get_db()
+    tdb = await tenant_db(user["school_id"])
     doc = {
         "id": new_id(),
         "school_id": user["school_id"],
@@ -29,10 +35,9 @@ async def create_holiday(payload: HolidayCreate, user: dict = Depends(require_ro
         "description": payload.description,
         "created_at": utc_now(),
     }
-    await db.holidays.insert_one(doc)
+    await tdb.holidays.insert_one(doc)
     doc.pop("_id", None)
-    # notify all parents in school
-    students = await db.students.find({"school_id": user["school_id"]}, {"_id": 0}).to_list(5000)
+    students = await tdb.students.find({"school_id": user["school_id"]}, {"_id": 0}).to_list(5000)
     for s in students:
         await queue_notification(
             user["school_id"], "parent", s.get("parent_user_id"),
@@ -46,6 +51,6 @@ async def create_holiday(payload: HolidayCreate, user: dict = Depends(require_ro
 
 @router.delete("/{holiday_id}")
 async def delete_holiday(holiday_id: str, user: dict = Depends(require_roles("school_admin"))):
-    db = get_db()
-    await db.holidays.delete_one({"id": holiday_id, "school_id": user["school_id"]})
+    tdb = await tenant_db(user["school_id"])
+    await tdb.holidays.delete_one({"id": holiday_id, "school_id": user["school_id"]})
     return {"ok": True}

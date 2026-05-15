@@ -4,7 +4,7 @@ import openpyxl
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from core.auth import require_roles
-from core.db import get_db
+from core.db import get_db, tenant_db
 from core.utils import new_id, utc_now
 
 router = APIRouter(prefix="/uploads", tags=["uploads"])
@@ -79,10 +79,13 @@ async def upload_students(file: UploadFile = File(...), user: dict = Depends(req
     allowed_class_sections = None
     if user["role"] == "teacher":
         from routes.students import _teacher_class_filter
-        tflt = await _teacher_class_filter(db, user)
+        tdb = await tenant_db(user["school_id"])
+        tflt = await _teacher_class_filter(tdb, user)
         if not tflt or tflt.get("_blocked_"):
             raise HTTPException(status_code=403, detail="You are not assigned to any class yet")
         allowed_class_sections = {(c["class_id"], c["section"]) for c in tflt.get("$or", [])}
+    else:
+        tdb = await tenant_db(user["school_id"])
     rows = _read_excel(await file.read())
     inserted, errors = 0, []
     for idx, r in enumerate(rows, start=2):
@@ -93,7 +96,7 @@ async def upload_students(file: UploadFile = File(...), user: dict = Depends(req
                 errors.append({"row": idx, "error": "Class/section not in your assigned classes"})
                 continue
             from core.auth import hash_password
-            count = await db.students.count_documents({"school_id": user["school_id"]})
+            count = await tdb.students.count_documents({"school_id": user["school_id"]})
             uid = f"STU-{(count + 1):05d}"
             parent_email = (r.get("parent_email") or f"parent.{uid.lower()}@local").lower()
             existing_parent = await db.users.find_one({"email": parent_email})
@@ -101,7 +104,7 @@ async def upload_students(file: UploadFile = File(...), user: dict = Depends(req
                 parent_user_id = existing_parent["id"]
             else:
                 parent_user_id = new_id()
-                await db.users.insert_one({
+                parent_doc = {
                     "id": parent_user_id,
                     "email": parent_email,
                     "password_hash": hash_password("Parent@123"),
@@ -111,8 +114,18 @@ async def upload_students(file: UploadFile = File(...), user: dict = Depends(req
                     "phone": str(r.get("parent_phone") or ""),
                     "is_active": True,
                     "created_at": utc_now(),
-                })
-            await db.students.insert_one({
+                }
+                await db.users.insert_one(parent_doc)
+                mirror = {k: v for k, v in parent_doc.items() if k != "_id"}
+                await tdb.users.update_one({"email": parent_email}, {"$set": mirror}, upsert=True)
+                await tdb.parents.update_one(
+                    {"user_id": parent_user_id},
+                    {"$set": {"user_id": parent_user_id, "email": parent_email,
+                              "name": mirror["name"], "phone": mirror.get("phone"),
+                              "created_at": mirror["created_at"]}},
+                    upsert=True,
+                )
+            await tdb.students.insert_one({
                 "id": new_id(),
                 "school_id": user["school_id"],
                 "student_uid": uid,
@@ -136,7 +149,7 @@ async def upload_students(file: UploadFile = File(...), user: dict = Depends(req
             inserted += 1
         except Exception as e:
             errors.append({"row": idx, "error": str(e)})
-    await db.upload_logs.insert_one({
+    await tdb.bulk_uploads.insert_one({
         "id": new_id(), "school_id": user["school_id"], "kind": "students",
         "rows": len(rows), "inserted": inserted, "errors": errors,
         "by": user["id"], "created_at": utc_now(),
@@ -152,19 +165,19 @@ async def upload_attendance(
     section: str = Form(...),
     user: dict = Depends(require_roles("school_admin", "teacher")),
 ):
-    db = get_db()
+    tdb = await tenant_db(user["school_id"])
     rows = _read_excel(await file.read())
     inserted, errors = 0, []
     for idx, r in enumerate(rows, start=2):
         try:
-            student = await db.students.find_one({"school_id": user["school_id"], "student_uid": r["student_uid"]})
+            student = await tdb.students.find_one({"school_id": user["school_id"], "student_uid": r["student_uid"]})
             if not student:
                 errors.append({"row": idx, "error": f"Student {r['student_uid']} not found"})
                 continue
             date_val = str(r["date"])
             if "T" in date_val:
                 date_val = date_val.split("T")[0]
-            await db.attendance.update_one(
+            await tdb.attendance.update_one(
                 {"school_id": user["school_id"], "student_id": student["id"], "date": date_val},
                 {"$set": {
                     "id": new_id(),
@@ -189,12 +202,12 @@ async def upload_attendance(
 # ---------- Holidays ----------
 @router.post("/holidays")
 async def upload_holidays(file: UploadFile = File(...), user: dict = Depends(require_roles("school_admin"))):
-    db = get_db()
+    tdb = await tenant_db(user["school_id"])
     rows = _read_excel(await file.read())
     inserted, errors = 0, []
     for idx, r in enumerate(rows, start=2):
         try:
-            await db.holidays.insert_one({
+            await tdb.holidays.insert_one({
                 "id": new_id(),
                 "school_id": user["school_id"],
                 "title": r.get("title"),

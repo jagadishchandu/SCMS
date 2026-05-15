@@ -221,14 +221,18 @@ class TestAttendance:
 class TestMarks:
     def test_marks_for_student(self, school_session):
         students = school_session.get(f"{API}/students", timeout=15).json()
-        sid = students[0]["id"]
-        r = school_session.get(f"{API}/marks", params={"student_id": sid}, timeout=15)
-        assert r.status_code == 200
-        data = r.json()
-        assert isinstance(data, list)
-        assert len(data) > 0
-        m = data[0]
-        assert "percentage" in m or "marks_obtained" in m
+        # Find a seeded demo student (STU-00xxx) which has marks; TEST students from
+        # other test runs have no marks and would make this test flaky.
+        seeded = [s for s in students if (s.get("student_uid") or "").startswith("STU-0")]
+        candidates = seeded or students
+        for s in candidates:
+            r = school_session.get(f"{API}/marks", params={"student_id": s["id"]}, timeout=15)
+            assert r.status_code == 200
+            data = r.json()
+            if data:
+                assert "percentage" in data[0] or "marks_obtained" in data[0]
+                return
+        assert False, "No student with marks was found"
 
 
 # ---------- HOLIDAYS ----------
@@ -428,10 +432,6 @@ class TestAudit:
         assert isinstance(r.json(), list)
 
     def test_audit_after_create_student(self, school_session):
-        # Capture current count (limit high so growth is visible past the default page cap)
-        before = school_session.get(f"{API}/audit", params={"limit": 1000}, timeout=15).json()
-        before_n = len(before)
-
         classes = school_session.get(f"{API}/academic/classes", timeout=15).json()
         uid = f"STU-AUD{uuid.uuid4().hex[:5].upper()}"
         payload = {
@@ -444,13 +444,17 @@ class TestAudit:
         }
         r = school_session.post(f"{API}/students", json=payload, timeout=20)
         assert r.status_code in (200, 201), r.text
+        new_student = r.json()
 
-        after = school_session.get(f"{API}/audit", params={"limit": 1000}, timeout=15).json()
-        assert len(after) > before_n, f"audit should grow, before={before_n} after={len(after)}"
-        # at least one create / student entry
-        match = [a for a in after if a.get("action") == "create" and a.get("resource") == "student"
-                 and a.get("actor_role") == "school_admin"]
-        assert len(match) > 0, after[:3]
+        # Fetch the most recent audit page and assert our specific student audit
+        # entry exists. Counting growth is fragile when the per-school audit log
+        # has already reached the page cap.
+        after = school_session.get(f"{API}/audit", params={"limit": 1000, "resource": "student"}, timeout=15).json()
+        match = [a for a in after if a.get("resource") == "student"
+                 and a.get("resource_id") == new_student["id"]]
+        assert len(match) > 0, f"create-student audit entry not found in {len(after)} rows"
+        assert match[0]["actor_role"] == "school_admin"
+        assert match[0]["action"] == "create"
 
     def test_audit_non_admin_empty(self, teacher_session, parent_session):
         for s in (teacher_session, parent_session):

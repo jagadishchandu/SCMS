@@ -418,12 +418,50 @@ Whenever a user is created (school admin via school creation, teachers/parents/a
 - **Backend: 218/218 pass** (was 204; +14 new schema tests, zero regressions).
 - **Live verified**: DEMO school's `db-status` endpoint returns all 29 collections present with doc counts.
 
+## v1.15 — Per-school DB promoted to AUTHORITATIVE store (2026-05-15)
+
+**Goal**: every school's operational data (students, classes, attendance, marks, fees, holidays, timetable, activities, sick leaves, audit logs) now physically lives in its own MongoDB database `scms_db_school_<code>`. Master DB keeps only cross-cutting tables (`users` for email-login lookups, `schools`, `plans`, `login_attempts`, `password_reset_codes`, webhook inbound logs, platform-wide `audit_logs`).
+
+**Infrastructure (`core/db.py`)**
+- New `tenant_db(school_id_or_user)` helper — returns the per-school Motor DB. In-process cache keyed by `school_id → db_name` to avoid querying `schools` on every request.
+- New `migrate_master_to_tenant(school)` — one-time copy of every `school_id`-scoped doc from master to that school's tenant DB. Idempotent; skips rows already in tenant. Runs for every school on backend startup.
+- Constants documenting the split: `MASTER_ONLY_COLLECTIONS`, `TENANT_OPERATIONAL_COLLECTIONS`.
+
+**Refactored routes** (now read/write per-school DB):
+- `routes/students.py` — students + parent mirror
+- `routes/academic.py` — classes, subjects, class_teacher_map
+- `routes/attendance.py` — attendance
+- `routes/marks.py` — exams, marks, syllabus
+- `routes/fees.py` — fee_structures, fees, fee_payments
+- `routes/holidays.py` — holidays
+- `routes/timetable.py` — timetable
+- `routes/activities.py` — activities, activity_enrollments
+- `routes/sick_leaves.py` — sick_leaves (+ auto-attendance writes)
+- `routes/analytics.py` — student/risk/school/teacher dashboards (cross-school aggregation iterates all tenant DBs for platform admin)
+- `routes/calendar_route.py`, `routes/digests.py`, `routes/receipts.py`, `routes/uploads.py` — all reads + writes per-school
+- `routes/audit.py` — school admin reads audit from their own per-school DB; platform admin from master
+- `routes/webhooks.py`, `routes/subscriptions.py`, `core/scheduler.py` — adjusted to look up students per tenant
+
+**Audit dual-write** (`core/audit.py`)
+- `log_action()` writes the entry to master `audit_logs` AND mirrors it to the per-school DB's `audit_logs` when a school_id is present. School admin sees only their school; platform admin sees everything.
+
+**Naming consistency**: `class_teachers` collection in schema renamed to `class_teacher_map` to match the actual code (was a latent bug).
+
+**New tests — `backend/tests/test_tenant_authoritative.py` (11 cases)** prove that every operational write goes to the per-school DB and NOT to master:
+- student / class / subject created → present in tenant, absent in master
+- attendance / exam / mark / fee_structure / fee / payment created → tenant only, receipt PDF still renders
+- holiday / timetable slot / activity / enrollment / sick leave created → tenant only
+- `/api/schools/{id}/db-status` counts grow as we write each entity
+
+### Test status (cumulative)
+- **Backend: 229/229 pass** (was 218; +11 new tenant-authoritative tests, 0 regressions).
+- **Live verified**: school admin can log in, see all 120 students, navigate to all pages — proving the per-tenant DB read path works through the UI.
+
 ## Prioritized Backlog (refreshed)
 ### P1
 - Stripe / Razorpay automated subscription payments
 
 ### P2
-- Promote per-school DBs from "shadow schema" to authoritative data store (route refactor — would need every route to use `get_school_db(school)` instead of master `get_db()`)
 - Wire uploads (photos / medical certs / PDF receipts) to Azure Blob once `AZURE_STORAGE_CONNECTION_STRING` is filled
 - Recovery nudges post-expiry (day 1 / 3 / 7) (i18n templates ready; scheduler wiring pending)
 - Meta WhatsApp template approval workflow

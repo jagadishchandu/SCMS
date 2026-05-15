@@ -404,17 +404,22 @@ async def lifespan(app: FastAPI):
         await seed_demo_data()
         await backfill_demo_payments()
         await backfill_demo_activities()
-        # provision per-school DB for any schools that don't yet have one
+        # provision per-school DB for any schools that don't yet have one,
+        # then migrate any school_id-scoped operational data from master to tenant.
         try:
-            from core.db import init_school_db, school_db_name
+            from core.db import init_school_db, school_db_name, migrate_master_to_tenant
             db = get_db()
             schools = await db.schools.find({}, {"_id": 0}).to_list(1000)
             for s in schools:
                 if not s.get("db_name"):
                     await db.schools.update_one({"id": s["id"]}, {"$set": {"db_name": school_db_name(s)}})
                 await init_school_db(s)
+                migrated = await migrate_master_to_tenant(s)
+                non_zero = {k: v for k, v in migrated.items() if isinstance(v, int) and v > 0}
+                if non_zero:
+                    print(f"[migrate] {s['code']}: {non_zero}")
         except Exception as e:
-            print(f"[startup] per-school DB init error: {e}")
+            print(f"[startup] per-school DB init/migrate error: {e}")
         digest_scheduler.start()
     except Exception as e:
         print(f"[startup] error: {e}")

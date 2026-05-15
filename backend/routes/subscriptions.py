@@ -44,7 +44,9 @@ def _calc(student_count: int, cycle: str) -> dict:
 
 
 async def _quote_for_school(db, school_id: str) -> dict:
-    students = await db.students.count_documents({"school_id": school_id, "status": "active"})
+    from core.db import tenant_db
+    tdb = await tenant_db(school_id)
+    students = await tdb.students.count_documents({"school_id": school_id, "status": "active"})
     monthly = _calc(students, "monthly")
     yearly = _calc(students, "yearly")
     yearly_undiscounted = students * PRICE_PER_CHILD_MONTHLY * 12
@@ -271,10 +273,12 @@ async def usage(school_id: str, user: dict = Depends(get_current_user)):
     if user["role"] != "platform_admin" and user.get("school_id") != school_id:
         raise HTTPException(status_code=403, detail="Forbidden")
     db = get_db()
+    from core.db import tenant_db
+    tdb = await tenant_db(school_id)
     s = await db.schools.find_one({"id": school_id}, {"_id": 0})
     if not s:
         raise HTTPException(status_code=404, detail="Not found")
-    students = await db.students.count_documents({"school_id": school_id, "status": "active"})
+    students = await tdb.students.count_documents({"school_id": school_id, "status": "active"})
     teachers = await db.users.count_documents({"school_id": school_id, "role": "teacher", "is_active": True})
     notifs = await db.notifications.count_documents({"school_id": school_id})
     return {
