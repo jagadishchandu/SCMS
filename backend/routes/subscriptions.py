@@ -231,6 +231,39 @@ async def reject_payment(payment_id: str, user: dict = Depends(require_roles("pl
     return {"ok": True}
 
 
+class AdminSetValidUntil(BaseModel):
+    school_id: str
+    valid_until: str  # ISO-8601 datetime (e.g. "2026-06-01T00:00:00Z")
+    reason: str | None = None
+
+
+@router.post("/admin/set-valid-until")
+async def admin_set_valid_until(payload: AdminSetValidUntil, user: dict = Depends(require_roles("platform_admin"))):
+    """Platform admin override: directly set a school's subscription.valid_until.
+    Used for goodwill extensions, refunds, or to test the renewal-nudge cron."""
+    from datetime import datetime as _dt
+    db = get_db()
+    school = await db.schools.find_one({"id": payload.school_id})
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+    try:
+        vu = _dt.fromisoformat(payload.valid_until.replace("Z", "+00:00"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="valid_until must be ISO-8601 (e.g. 2026-06-01T00:00:00Z)")
+    sub = school.get("subscription") or {}
+    sub.update({
+        "status": "active",
+        "valid_until": vu,
+        "billing_cycle": sub.get("billing_cycle") or "monthly",
+        "amount": sub.get("amount") or 0,
+    })
+    await db.schools.update_one({"id": payload.school_id}, {"$set": {"subscription": sub}})
+    await log_action(user["id"], user["role"], payload.school_id, "admin_set_valid_until",
+                     "subscription", payload.school_id,
+                     meta={"valid_until": vu.isoformat(), "reason": payload.reason})
+    return {"ok": True, "school_id": payload.school_id, "valid_until": vu.isoformat()}
+
+
 # ----------------- usage stats (used by older overview cards) -----------------
 
 @router.get("/usage/{school_id}")
@@ -248,3 +281,15 @@ async def usage(school_id: str, user: dict = Depends(get_current_user)):
         "school": s,
         "usage": {"students": students, "teachers": teachers, "notifications_sent": notifs},
     }
+
+
+# ----------------- manual renewal nudge (admin trigger) -----------------
+
+@router.post("/nudge-renewals")
+async def run_renewal_nudge(user: dict = Depends(require_roles("platform_admin"))):
+    """Manually trigger the 'subscription expiring in 7 days' nudge for all eligible schools.
+    Useful for testing without waiting for the daily cron (also runs daily @ 08:00 IST when
+    ENABLE_DIGEST_SCHEDULER=true). Respects the 24h cooldown."""
+    from core.scheduler import _run_subscription_nudges
+    sent = await _run_subscription_nudges()
+    return {"ok": True, "messages_queued": sent}

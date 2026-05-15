@@ -204,14 +204,39 @@ See `/app/memory/test_credentials.md`.
 - **Backend: 145/145** — iter7 added 30 new tests, iter6 fixed 2 brittleness assertions. All green.
 - **Frontend smoke verified** for: school language selector (8 codes), audit CSV button, digest channel prompt.
 
+## v1.7 — Subscription renewal auto-nudge (2026-05-15)
+
+**P2 — Renewal nudge cron (7-day window)**
+- New scheduler job in `core/scheduler.py`: `subscription_nudge` runs **daily @ 08:00 IST** when `ENABLE_DIGEST_SCHEDULER=true`.
+- Logic: finds schools whose `subscription.status='active'` and `valid_until` is within the next 7 days; sends a renewal nudge to the school admin via **both WhatsApp + Email** (when phone/email available).
+- Uses the existing `subscription_renewal` template from `core/i18n.py` (already localized to all 8 languages). Language chosen via admin.language > school.language > English.
+- **24-hour cooldown**: each school is nudged at most once per 24 hours (prevents spam if the cron retries).
+- Includes `{days_left}` and `{renew_url}` placeholders. Renew URL is built from `FRONTEND_URL` + `/school/subscription`.
+
+**New endpoints**
+- `POST /api/subscriptions/nudge-renewals` (platform_admin) — manual trigger for testing or ad-hoc runs.
+- `POST /api/subscriptions/admin/set-valid-until` (platform_admin) — directly set a school's `subscription.valid_until` for goodwill extensions, refunds, or testing the nudge cron. Validates ISO-8601 date, audit-logs every change.
+
+**Test coverage**
+- 8 new tests in `backend/tests/test_renewal_nudge.py` — 8/8 PASS:
+  - Outside 7-day window → 0 messages
+  - Already expired → 0 messages
+  - Within window → sends 1-2 messages (WhatsApp + Email)
+  - Cooldown: second trigger within 24h → 0
+  - RBAC: school admin & teacher both 403 for the manual nudge endpoint
+  - Admin-set-valid-until: school admin 403, invalid date 400
+
+**Verified live**: trigger sent 2 messages (WhatsApp + Email) in Hindi to `principal@sunrise.edu`, with subject *"Your SCMS subscription expires in 5 day(s)"*.
+
 ## Prioritized Backlog (refreshed)
 ### P1
-- Stripe / Razorpay automated subscription payments (replace manual confirmation)
+- Stripe / Razorpay automated subscription payments (replace manual confirmation + nudge for self-renewal)
 
 ### P2
-- Route uploads (photos, medical certs, PDF receipts) to Azure Blob once `AZURE_STORAGE_CONNECTION_STRING` is set
+- Wire uploads (photos, medical certs, PDF receipts) to Azure Blob once `AZURE_STORAGE_CONNECTION_STRING` is filled
+- "Send test email" button on /school/settings to validate SMTP creds before relying on digest/nudge
 - Per-school WhatsApp template editing UI (if needed later)
-- Email-aware "Subscription expires in 7 days" auto-nudge (uses existing templates + scheduler)
+- Auto-disable school features after `valid_until` (toggle `ENABLE_SUBSCRIPTION_GUARD=true` to switch on)
 
 ### P3
 - React Native shell reusing the same API
