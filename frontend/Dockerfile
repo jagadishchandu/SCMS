@@ -1,19 +1,24 @@
 # ============ Build stage ============
+# Build context is the `frontend/` directory itself.
+# Usage:
+#   cd frontend && docker build -t scms-frontend .
+# Or from repo root via docker-compose (see docker-compose.yml).
+
 FROM node:20-alpine AS build
 
-WORKDIR /app/frontend
+WORKDIR /app
 
 # Allow overriding the backend URL at build time:
-#   docker build --build-arg REACT_APP_BACKEND_URL=https://api.example.com -f frontend/Dockerfile .
+#   docker build --build-arg REACT_APP_BACKEND_URL=https://api.example.com -t scms-frontend .
 ARG REACT_APP_BACKEND_URL=""
 ENV REACT_APP_BACKEND_URL=$REACT_APP_BACKEND_URL
 
 # Install deps (cached layer)
-COPY frontend/package.json frontend/yarn.lock* ./
+COPY package.json yarn.lock* ./
 RUN yarn install --frozen-lockfile || yarn install
 
 # Build
-COPY frontend/ ./
+COPY . .
 RUN yarn build
 
 # ============ Runtime stage ============
@@ -22,8 +27,8 @@ FROM nginx:alpine
 # wget is used for the container healthcheck
 RUN apk add --no-cache wget
 
-COPY --from=build /app/frontend/build /usr/share/nginx/html
-COPY frontend/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/build /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 3000
 

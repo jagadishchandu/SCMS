@@ -19,12 +19,16 @@ export default function SchoolDashboard() {
   useEffect(() => { load(); }, []);
 
   const runDigests = async () => {
-    if (!window.confirm("Send last month's WhatsApp digest to every parent in the school?")) return;
+    const choice = window.prompt(
+      "Send last month's parent digest. Choose channels: 'whatsapp', 'email', or 'whatsapp,email'",
+      "whatsapp,email",
+    );
+    if (!choice) return;
     setSendingDigest(true);
     try {
-      const { data: res } = await api.post("/digests/run-monthly");
+      const { data: res } = await api.post("/digests/run-monthly", null, { params: { channels: choice } });
       const t = res.totals;
-      toast.success(`Digest run · sent ${t.sent}, queued ${t.queued}, failed ${t.failed} (${res.period})`);
+      toast.success(`Digest run (${res.channels.join(" + ")}) · sent ${t.sent}, queued ${t.queued}, failed ${t.failed} (${res.period})`);
       load();
     } catch (e) { toast.error(formatApiError(e)); }
     finally { setSendingDigest(false); }

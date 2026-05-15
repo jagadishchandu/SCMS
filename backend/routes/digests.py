@@ -1,13 +1,13 @@
 """Monthly parent digest — composes attendance + marks + fees summary per child
-and queues WhatsApp messages via the notification pipeline.
+and queues WhatsApp + Email messages via the notification pipeline.
 
 Endpoints:
 - POST /api/digests/run-monthly        → School Admin runs for own school (or any if platform_admin)
 - GET  /api/digests/preview/{student_uid} → Returns the digest message body for a single student (debug)
 
-The notification pipeline already handles the Twilio gating: if Twilio env vars
-are not set the message is persisted as `queued` and ready for retry when
-Twilio is configured.
+The notification pipeline handles delivery gating: if Twilio (WhatsApp) or SMTP
+(email) env vars are not set the message is persisted as `queued` and ready for
+retry when configured.
 """
 from fastapi import APIRouter, Depends, HTTPException
 from datetime import date, datetime, timedelta, timezone
@@ -16,6 +16,7 @@ from core.auth import get_current_user, require_roles
 from core.db import get_db
 from core.notify import queue_notification
 from core.audit import log_action
+from core.i18n import render
 
 router = APIRouter(prefix="/digests", tags=["digests"])
 
@@ -59,26 +60,32 @@ async def _compute_digest(db, school: dict, student: dict, start_iso: str, end_i
             "marks_pct": overall_pct, "fee_due": due}
 
 
-def _compose_message(school: dict, student: dict, label: str, d: dict) -> str:
-    parts = [f"📚 {school['name']} — Monthly update for {student['name']} ({student['student_uid']})"]
-    parts.append(f"Period: {label}")
-    if d["att_total"]:
-        parts.append(f"Attendance: {d['att_pct']}% over {d['att_total']} days "
-                     f"(absent: {d['absent']}, sick: {d['sick']})")
+def _compose_message(school: dict, student: dict, label: str, d: dict, lang: str = "en") -> str:
+    """Render the localized monthly digest message via i18n templates."""
+    att_total = d["att_total"]
+    if att_total:
+        att_line = f"{d['att_pct']}% over {att_total} days (absent: {d['absent']}, sick: {d['sick']})"
     else:
-        parts.append("Attendance: no records this month")
-    if d["marks_pct"] is not None:
-        parts.append(f"Marks average: {d['marks_pct']}%")
+        att_line = "no records"
+    marks_line = f"{d['marks_pct']}%" if d["marks_pct"] is not None else "—"
     if d["fee_due"] > 0:
-        parts.append(f"Fees outstanding: INR {d['fee_due']:,.0f}")
+        fee_line = f"INR {d['fee_due']:,.0f} outstanding"
     else:
-        parts.append("Fees: all clear ✅")
-    parts.append("Reply STOP to opt out.")
-    return "\n".join(parts)
+        fee_line = "all clear"
+    return render(
+        "monthly_digest", lang,
+        school_name=school["name"],
+        student_name=student["name"],
+        student_uid=student["student_uid"],
+        period=label,
+        att_line=att_line,
+        marks_line=marks_line,
+        fee_line=fee_line,
+    )
 
 
 @router.get("/preview/{student_uid}")
-async def preview(student_uid: str, user: dict = Depends(get_current_user)):
+async def preview(student_uid: str, lang: str | None = None, user: dict = Depends(get_current_user)):
     db = get_db()
     flt = {"student_uid": student_uid}
     if user["role"] != "platform_admin":
@@ -91,25 +98,34 @@ async def preview(student_uid: str, user: dict = Depends(get_current_user)):
     school = await db.schools.find_one({"id": s["school_id"]}, {"_id": 0})
     label, start_iso, end_iso = _previous_month_range()
     digest = await _compute_digest(db, school, s, start_iso, end_iso)
+    # Effective language: parent.language → school.language → 'en'
+    parent = await db.users.find_one({"id": s.get("parent_user_id")}, {"_id": 0, "language": 1}) if s.get("parent_user_id") else None
+    effective_lang = lang or (parent or {}).get("language") or school.get("language") or "en"
     return {
         "label": label, "start": start_iso, "end": end_iso,
+        "language": effective_lang,
         "data": digest,
-        "message": _compose_message(school, s, label, digest),
+        "message": _compose_message(school, s, label, digest, effective_lang),
     }
 
 
 @router.post("/run-monthly")
 async def run_monthly(
     school_id: str | None = None,
+    channels: str = "whatsapp,email",
     user: dict = Depends(require_roles("school_admin", "platform_admin")),
 ):
     """Generate and queue the previous-month digest for every active student.
 
     - school_admin: scoped to own school_id automatically
     - platform_admin: must pass school_id; if omitted, runs for all schools
+    - channels: comma-separated list of channels to use, from {whatsapp, email}
     """
     db = get_db()
     label, start_iso, end_iso = _previous_month_range()
+    wanted_channels = [c.strip() for c in channels.split(",") if c.strip() in ("whatsapp", "email")]
+    if not wanted_channels:
+        wanted_channels = ["whatsapp"]
 
     targets = []
     if user["role"] == "school_admin":
@@ -130,32 +146,51 @@ async def run_monthly(
         if not school:
             continue
         students = await db.students.find({"school_id": sid, "status": "active"}, {"_id": 0}).to_list(5000)
-        school_sent = 0; school_queued = 0; school_failed = 0
+        school_sent = 0
+        school_queued = 0
+        school_failed = 0
         for s in students:
+            parent_user = await db.users.find_one({"id": s.get("parent_user_id")}, {"_id": 0}) if s.get("parent_user_id") else None
+            lang = (parent_user or {}).get("language") or school.get("language") or "en"
             digest = await _compute_digest(db, school, s, start_iso, end_iso)
-            msg = _compose_message(school, s, label, digest)
+            msg = _compose_message(school, s, label, digest, lang)
             phone = (s.get("parent", {}) or {}).get("whatsapp") or (s.get("parent", {}) or {}).get("phone")
-            doc = await queue_notification(
-                sid, "parent", s.get("parent_user_id"), phone,
-                "whatsapp", "monthly_digest", msg,
-                context={"student_id": s["id"], "period": label,
-                         "att_pct": digest["att_pct"], "marks_pct": digest["marks_pct"],
-                         "fee_due": digest["fee_due"]},
-            )
-            if doc["status"] == "sent":
-                sent += 1; school_sent += 1
-            elif doc["status"] == "failed":
-                failed += 1; school_failed += 1
-            else:
-                queued += 1; school_queued += 1
+            email = (s.get("parent", {}) or {}).get("email") or (parent_user or {}).get("email")
+            context = {"student_id": s["id"], "period": label, "language": lang,
+                       "att_pct": digest["att_pct"], "marks_pct": digest["marks_pct"],
+                       "fee_due": digest["fee_due"]}
+
+            for ch in wanted_channels:
+                if ch == "whatsapp" and not phone:
+                    continue
+                if ch == "email" and not email:
+                    continue
+                doc = await queue_notification(
+                    sid, "parent", s.get("parent_user_id"),
+                    phone if ch == "whatsapp" else None,
+                    ch, "monthly_digest", msg,
+                    context=context,
+                    email=email if ch == "email" else None,
+                    subject=f"Monthly update — {s['name']} ({label})",
+                )
+                if doc["status"] == "sent":
+                    sent += 1
+                    school_sent += 1
+                elif doc["status"] == "failed":
+                    failed += 1
+                    school_failed += 1
+                else:
+                    queued += 1
+                    school_queued += 1
         by_school.append({"school_id": sid, "school_name": school["name"],
                           "students": len(students), "sent": school_sent,
                           "queued": school_queued, "failed": school_failed})
         await log_action(user["id"], user["role"], sid, "run_monthly_digest", "digest",
-                         meta={"period": label, "students": len(students)})
+                         meta={"period": label, "students": len(students), "channels": wanted_channels})
 
     return {
         "period": label,
+        "channels": wanted_channels,
         "totals": {"sent": sent, "queued": queued, "failed": failed},
         "by_school": by_school,
     }

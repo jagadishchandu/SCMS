@@ -102,3 +102,21 @@ async def deactivate_user(user_id: str, user: dict = Depends(require_roles("scho
         raise HTTPException(status_code=403, detail="Forbidden")
     await db.users.update_one({"id": user_id}, {"$set": {"is_active": False}})
     return {"ok": True}
+
+
+from pydantic import BaseModel as _BaseModel
+from core.i18n import SUPPORTED_LANGUAGES
+
+
+class LanguagePayload(_BaseModel):
+    language: str
+
+
+@router.patch("/me/language")
+async def set_my_language(payload: LanguagePayload, user: dict = Depends(get_current_user)):
+    """Any authenticated user can set their own notification language preference."""
+    if payload.language not in SUPPORTED_LANGUAGES:
+        raise HTTPException(status_code=400, detail=f"Unsupported language. Choose one of: {SUPPORTED_LANGUAGES}")
+    db = get_db()
+    await db.users.update_one({"id": user["id"]}, {"$set": {"language": payload.language}})
+    return {"ok": True, "language": payload.language}

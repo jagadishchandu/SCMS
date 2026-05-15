@@ -11,8 +11,7 @@ services:
 
   backend:
     build:
-      context: .
-      dockerfile: backend/Dockerfile
+      context: ./backend
     restart: unless-stopped
     depends_on:
       - mongo
@@ -37,13 +36,20 @@ services:
       AZURE_STORAGE_CONNECTION_STRING: "${AZURE_STORAGE_CONNECTION_STRING:-}"
       AZURE_STORAGE_CONTAINER: "${AZURE_STORAGE_CONTAINER:-}"
       AZURE_STORAGE_ACCOUNT_URL: "${AZURE_STORAGE_ACCOUNT_URL:-}"
+      # SMTP — provider-agnostic email channel for digests and other notifications.
+      # Leave SMTP_HOST blank to keep email notifications queued.
+      SMTP_HOST: "${SMTP_HOST:-}"
+      SMTP_PORT: "${SMTP_PORT:-587}"
+      SMTP_USER: "${SMTP_USER:-}"
+      SMTP_PASSWORD: "${SMTP_PASSWORD:-}"
+      SMTP_FROM: "${SMTP_FROM:-}"
+      SMTP_USE_SSL: "${SMTP_USE_SSL:-false}"
     ports:
       - "8001:8001"
 
   frontend:
     build:
-      context: .
-      dockerfile: frontend/Dockerfile
+      context: ./frontend
       args:
         # The React build bakes this in at build time. Set it to your public API URL.
         # For local docker-compose, the nginx config also proxies /api/* to the backend service.

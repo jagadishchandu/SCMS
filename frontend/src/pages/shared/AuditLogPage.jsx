@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { api, formatApiError } from "../../lib/api";
 import { PageHeader, Section, Empty } from "../../components/Primitives";
 import { formatDate, ROLE_LABELS } from "../../lib/utils";
-import { MagnifyingGlass, FunnelSimple, X } from "@phosphor-icons/react";
+import { MagnifyingGlass, FunnelSimple, X, DownloadSimple } from "@phosphor-icons/react";
 import toast from "react-hot-toast";
 
 const ROLES = ["platform_admin", "school_admin", "teacher", "accounts", "parent"];
@@ -36,6 +36,26 @@ export default function AuditLogPage() {
 
   const activeFilters = useMemo(() =>
     Object.entries(filters).filter(([k, v]) => v && k !== "limit").length, [filters]);
+
+  const exportCsv = async () => {
+    try {
+      const params = Object.fromEntries(Object.entries(filters).filter(([_, v]) => v));
+      // Use raw fetch to download blob with cookies
+      const url = new URL(`${api.defaults.baseURL}/audit/export.csv`);
+      Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+      const res = await fetch(url.toString(), { credentials: "include" });
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      const blob = await res.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      const cd = res.headers.get("content-disposition") || "";
+      const m = cd.match(/filename="?([^";]+)"?/);
+      a.download = m ? m[1] : `audit-${Date.now()}.csv`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(a.href);
+      toast.success("Audit log exported");
+    } catch (err) { toast.error(formatApiError(err)); }
+  };
 
   return (
     <div data-testid="audit-log-page">
@@ -101,6 +121,9 @@ export default function AuditLogPage() {
           </button>
           <button className="btn-secondary" onClick={clear} disabled={activeFilters === 0} data-testid="audit-clear">
             <X size={14} /> Clear
+          </button>
+          <button className="btn-secondary ml-auto" onClick={exportCsv} disabled={rows.length === 0} data-testid="audit-export-csv">
+            <DownloadSimple size={14} /> Download CSV{rows.length ? ` (${rows.length})` : ""}
           </button>
         </div>
       </Section>

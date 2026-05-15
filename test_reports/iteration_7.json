@@ -1,0 +1,41 @@
+{
+  "summary": "Iter7: Tested Audit CSV export, Multilingual WhatsApp/Email templates (8 Indian languages), Email digest channel (SMTP-based). Created /app/backend/tests/test_iter7.py with 30 new tests — 30/30 PASS after one minor backend fix (subject field was not persisted on email notifications). Frontend smoke verified: school-language-select renders all 8 codes (en,hi,ta,te,kn,mr,bn,gu) and audit-export-csv button is present + correctly disabled when rows are empty. Regression: 142/145 across iter6+iter7 suites; the 3 failures in iter6's TestDigests are pre-existing brittleness due to channel='whatsapp' assumptions that break once iter7's email-channel tests run first in the same session — they pass cleanly in isolation; NOT a real regression (no code path broken).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/digests/run-monthly?channels=email (or whatsapp,email)", "issue": "FIXED in this iter: core/notify.py:queue_notification accepted `subject` kwarg but never stored it in the notification doc. Added doc['subject'] = subject so email notif rows now contain the subject string per the request spec."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter7.py",
+    "/app/test_reports/pytest/iter7_results.xml"
+  ],
+  "action_items": [
+    "Optional cleanup: iter6 TestDigests::test_run_monthly_school_admin and test_notifications_have_monthly_digest_after_run assume channel='whatsapp' exclusively. Since iter7 introduces email channel by default-when-asked, these two iter6 tests need their assertions loosened to filter by channel='whatsapp' before counting/asserting. Not blocking — they pass in isolation."
+  ],
+  "critical_code_review_comments": [
+    "core/i18n.py — clean: SUPPORTED_LANGUAGES = ['en','hi','ta','te','kn','mr','bn','gu'] matches spec exactly. render() uses _SafeDict so a missing kwarg produces an empty string rather than KeyError — robust. supported_languages() returns [{code,label},...] used by GET /schools/{id}/language. Templates cover all 5 names × 8 langs = 40 entries.",
+    "routes/audit.py:/export.csv — proper BOM (utf-8-sig) for Excel, correct Content-Disposition attachment header, filename timestamped. Header row matches spec exactly. 403 enforced for non-admins. _build_filter shared between /audit and /export.csv ensures filter parity (DRY). Verified action / actor_role / date_from / date_to / school_id all apply.",
+    "routes/users.py — PATCH /users/me/language is open to any authenticated user. Good. Invalid language returns 400 with list of 8 codes.",
+    "routes/schools.py — GET /schools/{id}/language defaults to 'en' if school doc has no language field. PATCH /schools/{id}/language: validation message contains all 8 codes (verified). RBAC: school_admin restricted to own school; teacher/parent get 403.",
+    "core/notify.py — FIXED: doc was missing 'subject' field for email channel. Now stored. Other branches (whatsapp, email/SMTP-not-configured/sent/failed) all handled correctly. delivery_note='smtp_not_configured' is returned when SMTP_HOST empty — verified via test.",
+    "Digest preview language precedence: parent.user.language > school.language > default 'en'. Override via ?lang= takes top priority. This is good UX (per-recipient preference wins) but consider documenting it in API docs.",
+    "Old iter6 tests `test_run_monthly_school_admin` and `test_notifications_have_monthly_digest_after_run` are now brittle — they assert all monthly_digest notifications are channel='whatsapp', but with iter7's run-monthly?channels=whatsapp,email earlier in session, email rows leak into the unfiltered notifications list. Main agent should add a `.filter(channel='whatsapp')` to those iter6 assertions OR scope the fixtures."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter7.py (created — 30 tests)",
+    "/app/backend/core/notify.py (1-line fix: persist `subject` field on notification doc)"
+  ],
+  "success_rate": {"backend": "100% on iter7 (30/30); 142/145 (98%) on combined iter6+iter7 — 3 iter6 failures are pre-existing brittleness, not real regressions", "frontend": "100% on smoke (school-language-select with 8 codes + audit-export-csv testids present and behaviors correct)"},
+  "test_credentials": "Used /app/memory/test_credentials.md verbatim.",
+  "seed_data_creation": "Iter7 tests left STU-00001 parent's language preference set to 'hi' and school 'DEMO' language set to 'hi'. They also queued ~50 email-channel monthly_digest notifications (smtp_not_configured) during the run-monthly tests. Re-running iter7 is idempotent.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run `pytest /app/backend/tests/test_iter7.py -v` — expect 30/30 PASS. Combined run `pytest backend/tests/` shows 3 iter6 brittleness failures (only when iter7 is run first); they pass in isolation. The notify.py subject-field fix is in place. Key test classes added: TestAuditCSVExport(8), TestSchoolLanguage(4), TestUserLanguage(3), TestDigestI18n(9 incl 7 parametrized langs), TestDigestChannels(2), TestRegressionSmoke(4).",
+  "rca of the issue": "Bug: email channel notification doc was missing the `subject` field. RCA: core/notify.py:queue_notification declared `subject: str | None = None` in its signature and used it in send_email(), but never wrote it to the doc dict. Fix: added `doc['subject'] = subject` next to `doc['email'] = email`. Verified via TestDigestChannels::test_run_whatsapp_and_email — now passes with subject correctly persisted."
+}

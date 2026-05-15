@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { api, formatApiError } from "../../lib/api";
 import { useAuth } from "../../contexts/AuthContext";
 import { PageHeader, Section } from "../../components/Primitives";
-import { GraduationCap, FloppyDisk } from "@phosphor-icons/react";
+import { GraduationCap, FloppyDisk, Translate } from "@phosphor-icons/react";
 import toast from "react-hot-toast";
 
 const PRESET_COLORS = [
@@ -17,16 +17,34 @@ export default function SchoolSettings() {
   const [color, setColor] = useState("#4E5B3A");
   const [tagline, setTagline] = useState("");
   const [saving, setSaving] = useState(false);
+  const [lang, setLang] = useState("en");
+  const [supportedLangs, setSupportedLangs] = useState([]);
+  const [savingLang, setSavingLang] = useState(false);
 
   const load = async () => {
     if (!user?.school_id) return;
-    const { data } = await api.get(`/schools/${user.school_id}`);
+    const [{ data }, { data: langData }] = await Promise.all([
+      api.get(`/schools/${user.school_id}`),
+      api.get(`/schools/${user.school_id}/language`),
+    ]);
     setSchool(data);
     setLogo(data?.branding?.logo || "");
     setColor(data?.branding?.primary_color || "#4E5B3A");
     setTagline(data?.branding?.tagline || "");
+    setLang(langData?.language || "en");
+    setSupportedLangs(langData?.supported || []);
   };
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [user?.school_id]);
+
+  const saveLanguage = async (next) => {
+    setLang(next);
+    setSavingLang(true);
+    try {
+      await api.patch(`/schools/${user.school_id}/language`, { language: next });
+      toast.success("Default notification language updated");
+    } catch (e) { toast.error(formatApiError(e)); }
+    finally { setSavingLang(false); }
+  };
 
   const onLogoFile = (e) => {
     const f = e.target.files?.[0];
@@ -98,6 +116,29 @@ export default function SchoolSettings() {
             <input className="input" maxLength={64} placeholder="e.g. Learning that lifts every child"
               value={tagline} onChange={(e) => setTagline(e.target.value)} data-testid="branding-tagline-input" />
             <div className="text-[11px] text-ink-muted mt-1">{tagline.length}/64</div>
+          </Section>
+
+          <Section title="Notification language">
+            <div className="flex items-start gap-3">
+              <Translate size={18} className="text-primary mt-2.5 shrink-0" />
+              <div className="flex-1">
+                <p className="text-sm text-ink-soft mb-2">
+                  Default language used for WhatsApp + Email messages sent to parents who haven't set their own preference.
+                </p>
+                <select
+                  className="input w-full max-w-sm"
+                  value={lang}
+                  onChange={(e) => saveLanguage(e.target.value)}
+                  disabled={savingLang}
+                  data-testid="school-language-select"
+                >
+                  {supportedLangs.map((l) => (
+                    <option key={l.code} value={l.code}>{l.label}</option>
+                  ))}
+                </select>
+                {savingLang && <div className="text-xs text-ink-muted mt-1">Saving…</div>}
+              </div>
+            </div>
           </Section>
 
           <button className="btn-primary" onClick={save} disabled={saving} data-testid="branding-save-btn">

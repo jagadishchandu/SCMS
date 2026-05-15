@@ -102,3 +102,38 @@ async def update_branding(school_id: str, payload: SchoolBranding, user: dict = 
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Not found")
     return {"ok": True, "branding": branding}
+
+
+from pydantic import BaseModel as _BaseModel
+from core.i18n import SUPPORTED_LANGUAGES, supported_languages
+
+
+class LanguagePayload(_BaseModel):
+    language: str
+
+
+@router.get("/{school_id}/language")
+async def get_school_language(school_id: str, user: dict = Depends(get_current_user)):
+    if user["role"] not in ("platform_admin",) and user.get("school_id") != school_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    db = get_db()
+    s = await db.schools.find_one({"id": school_id}, {"_id": 0, "language": 1})
+    return {
+        "language": (s or {}).get("language") or "en",
+        "supported": supported_languages(),
+    }
+
+
+@router.patch("/{school_id}/language")
+async def set_school_language(school_id: str, payload: LanguagePayload, user: dict = Depends(get_current_user)):
+    if user["role"] not in ("school_admin", "platform_admin"):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if user["role"] == "school_admin" and user.get("school_id") != school_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if payload.language not in SUPPORTED_LANGUAGES:
+        raise HTTPException(status_code=400, detail=f"Unsupported language. Choose one of: {SUPPORTED_LANGUAGES}")
+    db = get_db()
+    res = await db.schools.update_one({"id": school_id}, {"$set": {"language": payload.language}})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"ok": True, "language": payload.language}

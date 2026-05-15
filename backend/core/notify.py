@@ -1,8 +1,9 @@
-"""Notification helper: WhatsApp via Twilio (if configured) + DB log fallback."""
+"""Notification helper: WhatsApp via Twilio + Email via SMTP + DB log fallback."""
 import os
 import logging
 from .db import get_db
 from .utils import new_id, utc_now
+from .email_sender import send_email
 
 log = logging.getLogger("scms.notify")
 
@@ -69,6 +70,8 @@ async def queue_notification(
     template: str,
     message: str,
     context: dict | None = None,
+    email: str | None = None,
+    subject: str | None = None,
 ):
     db = get_db()
     doc = {
@@ -77,6 +80,8 @@ async def queue_notification(
         "recipient_type": recipient_type,
         "recipient_id": recipient_id,
         "phone": phone,
+        "email": email,
+        "subject": subject,
         "channel": channel,
         "template": template,
         "message": message,
@@ -96,6 +101,20 @@ async def queue_notification(
             # Twilio not configured — stay queued (mock log)
             doc["status"] = "queued"
             doc["delivery_note"] = "twilio_not_configured"
+        else:
+            doc["status"] = "failed"
+            doc["delivery_error"] = sid_or_err
+
+    # Attempt real delivery for email channel
+    elif channel == "email" and email:
+        sent, sid_or_err = send_email(email, subject or "Update from your school", message)
+        if sent:
+            doc["status"] = "sent"
+            doc["provider_sid"] = sid_or_err
+            doc["sent_at"] = utc_now()
+        elif sid_or_err is None:
+            doc["status"] = "queued"
+            doc["delivery_note"] = "smtp_not_configured"
         else:
             doc["status"] = "failed"
             doc["delivery_error"] = sid_or_err
