@@ -53,3 +53,18 @@ Platform Admin (SaaS operator), School Principal, Teacher / Class Teacher, Accou
 
 ## Demo Credentials
 See `/app/memory/test_credentials.md`.
+
+## v1.2 — Monthly Parent Digest (2026-01-15)
+- **New backend endpoints**
+  - `GET /api/digests/preview/{student_uid}` — composed digest preview for a single student (debug aid; parent-scoped automatically).
+  - `POST /api/digests/run-monthly` — triggers the previous-calendar-month digest for every active student.
+    - `school_admin` runs for their own school.
+    - `platform_admin` can pass `?school_id=...` or omit it to run across all active schools.
+- **Digest content**: school name, student name + UID, period (e.g. "April 2026"), attendance % + absent/sick counts, marks average for the month, fees outstanding, opt-out line. Composed once per student and queued via the existing `notifications` pipeline (so Twilio gating applies seamlessly).
+- **Frontend**: "Send monthly digest" button on the School Admin Dashboard (`data-testid=send-monthly-digest-btn`), guarded by a confirm dialog, with toast summary of sent/queued/failed.
+- **Audit**: every run logs an `action='run_monthly_digest'` entry per school with `meta.period` and `meta.students`.
+- **Test status**: **63/63 pytest pass** (53 iter1+2 + 10 new TestDigests) + frontend smoke including KPI delta verification.
+
+### Notes from testing agent (non-blocking)
+- For schools with thousands of students, the per-student Mongo round-trips in the run-monthly loop can be optimised with an aggregation. Fine for current scale.
+- Marks-window uses `entered_at` (not exam date). If teachers backfill marks late, those rows may be missed in the monthly digest. Document with the product owner.
