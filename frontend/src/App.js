@@ -35,6 +35,7 @@ import TimetablePage from "./pages/school/TimetablePage";
 import TeacherPerformancePage from "./pages/school/TeacherPerformancePage";
 import UploadsPage from "./pages/school/UploadsPage";
 import ActivitiesPage from "./pages/school/ActivitiesPage";
+import SchoolSettings from "./pages/school/SchoolSettings";
 
 // Teacher
 import TeacherDashboard from "./pages/teacher/TeacherDashboard";

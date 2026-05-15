@@ -42,6 +42,12 @@ class SchoolUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 
+class SchoolBranding(BaseModel):
+    logo: Optional[str] = None  # data URL or http URL
+    primary_color: Optional[str] = None  # CSS color string e.g. #4E5B3A
+    tagline: Optional[str] = None
+
+
 # ---------- Users / Teachers ----------
 class UserCreate(BaseModel):
     email: EmailStr

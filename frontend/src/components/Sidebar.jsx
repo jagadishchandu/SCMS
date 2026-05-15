@@ -33,6 +33,7 @@ const NAV_BY_ROLE = {
     { to: "/school/performance", label: "Teacher Performance", icon: ChartLineUp },
     { to: "/school/notifications", label: "Notifications", icon: BellRinging },
     { to: "/school/uploads", label: "Bulk Uploads", icon: UploadSimple },
+    { to: "/school/settings", label: "Branding", icon: ShieldCheck },
     { to: "/school/audit", label: "Audit log", icon: ShieldCheck },
     { to: "/student-search", label: "Student Analytics", icon: MagnifyingGlass },
   ],
@@ -136,7 +137,7 @@ export default function Sidebar({ mobileOpen, onCloseMobile }) {
       {/* Mobile drawer */}
       {mobileOpen && (
         <div className="fixed inset-0 z-50 lg:hidden" data-testid="mobile-drawer">
-          <div className="absolute inset-0 bg-ink/40" onClick={onCloseMobile} />
+          <div className="absolute inset-0 bg-black/40" onClick={onCloseMobile} />
           <aside className="relative w-72 max-w-[85vw] h-full bg-bg border-r border-line flex flex-col">
             <button onClick={onCloseMobile} className="absolute top-3 right-3 btn-ghost p-1.5" data-testid="mobile-drawer-close"><X size={16} /></button>
             <Header />

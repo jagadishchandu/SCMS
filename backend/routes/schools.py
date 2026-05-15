@@ -1,6 +1,6 @@
 """Schools routes - platform admin only for create/list-all."""
 from fastapi import APIRouter, Depends, HTTPException
-from core.models import SchoolCreate, SchoolUpdate
+from core.models import SchoolCreate, SchoolUpdate, SchoolBranding
 from core.auth import require_roles, hash_password, get_current_user
 from core.db import get_db, init_school_db, school_db_name
 from core.utils import new_id, utc_now, clean_doc
@@ -83,3 +83,22 @@ async def get_school(school_id: str, user: dict = Depends(get_current_user)):
     if not s:
         raise HTTPException(status_code=404, detail="Not found")
     return s
+
+
+@router.patch("/{school_id}/branding")
+async def update_branding(school_id: str, payload: SchoolBranding, user: dict = Depends(get_current_user)):
+    if user["role"] not in ("school_admin", "platform_admin"):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if user["role"] == "school_admin" and user.get("school_id") != school_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    db = get_db()
+    branding = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None}
+    # validate logo size if data URL
+    if branding.get("logo", "").startswith("data:"):
+        # rough size check ~ 1.4x bytes
+        if len(branding["logo"]) > 2 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="Logo too large (max ~1.4 MB)")
+    res = await db.schools.update_one({"id": school_id}, {"$set": {"branding": branding}})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"ok": True, "branding": branding}

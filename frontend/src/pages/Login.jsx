@@ -120,7 +120,7 @@ export default function Login() {
         />
         <div className="absolute inset-0 bg-gradient-to-tr from-primary/30 via-transparent to-terracotta/20" />
         <div className="relative h-full flex flex-col justify-end p-12 text-white">
-          <div className="max-w-md backdrop-blur-sm bg-ink/30 rounded-lg p-6 border border-white/10">
+          <div className="max-w-md backdrop-blur-sm bg-black/40 rounded-lg p-6 border border-white/10">
             <div className="text-xs uppercase tracking-widest opacity-80 mb-2">Built for schools</div>
             <h2 className="font-display text-2xl font-medium mb-2">
               One calm place for attendance, marks, fees and parent updates.

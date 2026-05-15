@@ -68,3 +68,19 @@ See `/app/memory/test_credentials.md`.
 ### Notes from testing agent (non-blocking)
 - For schools with thousands of students, the per-student Mongo round-trips in the run-monthly loop can be optimised with an aggregation. Fine for current scale.
 - Marks-window uses `entered_at` (not exam date). If teachers backfill marks late, those rows may be missed in the monthly digest. Document with the product owner.
+
+## v1.3 — Per-school DB, Risk Flags, Activities, Mobile Attendance Cards (2026-01-15)
+- **Per-school database provisioning**: Every school now also has a dedicated MongoDB database `scms_db_school_<code-slug>` with full schema/indexes (students/attendance/marks/exams/fees/activities/etc), seeded with a `meta._marker='school_db'` document. School documents now carry `db_name`. This is foundation infrastructure — operational reads/writes still go through the master DB with `school_id` filtering (verified by tests). Future migration to true per-tenant data isolation can route queries to `get_school_db(school)` without changing the API.
+- **Predictive risk flag**: `GET /api/analytics/risk-students?limit=5` scores students using 30-day rolling windows (attendance drop + marks drop + absolute floor penalties). Top 5 displayed on the School Admin Dashboard as a "Students at risk" card with photo, reasons (badges), and a clickable link to the student analytics page. RBAC: school_admin & platform_admin only.
+- **Monthly digest scheduler**: `core/scheduler.py` uses APScheduler in-process. Gated by env `ENABLE_DIGEST_SCHEDULER=true` (default false in the preview). When enabled, fires on the 1st of every month at 09:00 IST via cron trigger.
+- **Teacher mobile attendance cards** at `/teacher/attendance-cards`: 3-phase flow (pick class/section/date → swipe-style card per student → review/submit). 3 large status buttons: **Present**, **Absent**, **Not in class**. Card flow uses progress bar, prev/skip/finish controls, mobile-first layout (constrained max-width). New attendance status `not_in_class` added to the model.
+- **Extra-curricular activities** at `/school/activities`: CRUD activities (categories: sport / music / art / club / other), per-activity coach + schedule, multi-select enrollment from student list, donut chart for category mix, horizontal bar chart for top activities by enrollment, per-activity card showing student count + Enroll/Delete buttons. Backend: `/api/activities` CRUD + `/{id}/enroll` + `/{id}/roster` + `/stats/summary`. Seeded with 5 demo activities (Cricket, Football, Chess Club, Violin, Painting) and 23 enrollments across 8 students.
+
+### Test status (cumulative)
+- **78/78 pytest pass** (63 from iter1–3 regression + 15 new iter4 cases)
+- Frontend smoke: dashboard risk widget, activities CRUD + modal flow, full teacher att-cards take→done→save flow with notification queueing toast — all green.
+
+### Non-blocking testing-agent suggestions (deferred)
+- Narrow `except Exception` in activity enrollment to `DuplicateKeyError`
+- Aggregate-based replacement for N+1 counts in `/api/activities/stats/summary`
+- Bucketed aggregation refactor for `/api/analytics/risk-students` before scaling beyond ~1000 students per school

@@ -97,12 +97,12 @@ export default function CalendarPage() {
         </div>
         <div className="grid grid-cols-7 gap-1 min-w-[700px]">
           {cells.map((d, i) => {
-            if (!d) return <div key={i} className="aspect-square bg-bg-subtle/50 rounded-md" />;
+            if (!d) return <div key={i} className="aspect-square bg-bg-subtle rounded-md" />;
             const key = isoDate(d);
             const isToday = key === todayKey;
             const dayEvents = eventsByDate[key] || [];
             return (
-              <div key={i} className={`aspect-square rounded-md p-1.5 border ${isToday ? "border-primary bg-primary-light/40" : "border-line bg-white"} text-left overflow-hidden`} data-testid={`cal-day-${key}`}>
+              <div key={i} className={`aspect-square rounded-md p-1.5 border ${isToday ? "border-primary bg-primary-light" : "border-line bg-bg-surface"} text-left overflow-hidden`} data-testid={`cal-day-${key}`}>
                 <div className={`text-xs ${isToday ? "font-semibold text-primary" : "text-ink-soft"}`}>{d.getDate()}</div>
                 <div className="mt-1 space-y-0.5">
                   {dayEvents.slice(0, 2).map((e, idx) => (

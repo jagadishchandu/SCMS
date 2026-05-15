@@ -25,7 +25,20 @@ TWILIO_WHATSAPP_FROM="+14155238886"  # or your registered WA number
 ```
 When unset, notifications stay `queued` in the DB (mock log).
 
-## API endpoints (new in this iteration)
+## v1.3 endpoints (new in this iteration)
+- `GET /api/analytics/risk-students?limit=5` — predictive risk top-K (school_admin / platform_admin)
+- `GET /api/activities`, `POST`, `PATCH /{id}`, `DELETE /{id}` — activities CRUD
+- `POST /api/activities/{id}/enroll` `{ student_ids: [...] }` — bulk enroll
+- `DELETE /api/activities/{id}/enroll/{student_id}` — un-enroll
+- `GET /api/activities/{id}/roster` — students enrolled
+- `GET /api/activities/stats/summary` — KPI feed for the Activities page
+- New attendance status: `not_in_class` (used by the teacher card flow)
+- New scheduler env: `ENABLE_DIGEST_SCHEDULER=true` enables 1st-of-month 09:00 IST cron
+
+## Per-school databases (new)
+Each school has its own physical MongoDB database named `scms_db_school_<slug-of-code>` (auto-created on POST /api/schools). Operational reads/writes still flow through the master `scms_db` for simplicity and cross-school analytics, but every per-school DB carries identical indexes + a `meta` marker, ready for future routing to true per-tenant isolation.
+
+## API endpoints (existing, summary)
 - `GET /api/calendar/events` — holidays + exams events feed for monthly calendar
 - `GET /api/audit` — audit log (school_admin: own school; platform_admin: all)
 - `GET /api/subscriptions/plans` — list plans (auto-seeds 3 default plans on first call)
