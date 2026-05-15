@@ -61,6 +61,34 @@ async def create_user(payload: UserCreate, user: dict = Depends(require_roles("s
         "created_at": utc_now(),
     }
     await db.users.insert_one(doc)
+
+    # Mirror into the per-school DB so the schema is populated for the school.
+    try:
+        from core.db import get_school_db
+        school = await db.schools.find_one({"id": school_id}, {"_id": 0})
+        if school:
+            sdb = get_school_db(school)
+            mirror = {k: v for k, v in doc.items() if k != "_id"}
+            await sdb.users.update_one({"email": email}, {"$set": mirror}, upsert=True)
+            role_to_collection = {
+                "teacher": "teachers",
+                "accounts": "accounts_users",
+                "parent": "parents",
+                "student": "students_users",
+            }
+            target = role_to_collection.get(doc["role"])
+            if target:
+                await sdb[target].update_one(
+                    {"user_id": doc["id"]},
+                    {"$set": {
+                        "user_id": doc["id"], "email": email, "name": doc["name"],
+                        "phone": doc.get("phone"), "created_at": doc["created_at"],
+                    }},
+                    upsert=True,
+                )
+    except Exception as e:
+        print(f"[users] mirror to school db failed: {e}")
+
     return clean_doc(doc)
 
 

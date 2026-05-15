@@ -47,24 +47,119 @@ def get_school_db(school: dict):
 
 
 async def init_school_db(school: dict):
-    """Create initial schema/indexes for a school's dedicated database.
-    Idempotent — safe to call repeatedly."""
+    """Create the full per-school schema (indexes + marker docs) for a school's
+    dedicated database. Idempotent — safe to call repeatedly.
+
+    Master DB (DB_NAME) continues to hold all operational rows with school_id
+    isolation. The per-school DB is provisioned with ALL entity collections so
+    that a future per-tenant migration only needs to copy rows — no schema work.
+    """
     sdb = get_school_db(school)
+
+    # ---- Identity & access ----
+    # Mirror of users belonging to this school (school_admin / teacher / accounts / parent).
+    # Platform Super Admin lives only in the master DB.
+    await sdb.users.create_index("email", unique=True)
+    await sdb.users.create_index("role")
+    await sdb.users.create_index([("role", 1), ("is_active", 1)])
+    await sdb.users.create_index("phone")
+    await sdb.users.create_index("telegram_chat_id")
+
+    # Convenience role-scoped collection markers (everything still queries `users`,
+    # but these markers prove the schema exists for each role).
+    for role_marker in ("school_admins", "teachers", "parents", "accounts_users", "students_users"):
+        await sdb[role_marker].create_index("user_id", unique=True, sparse=True)
+        await sdb[role_marker].create_index("email", unique=True, sparse=True)
+
+    # ---- Academic structure ----
+    await sdb.classes.create_index("name")
+    await sdb.classes.create_index([("name", 1), ("sections", 1)])
+    await sdb.subjects.create_index("name")
+    await sdb.subjects.create_index("code", sparse=True)
+    await sdb.class_teachers.create_index([("class_id", 1), ("section", 1)], unique=True)
+    await sdb.class_teachers.create_index("teacher_id")
+
+    # ---- Students & parents (parent info embedded on student doc + linked user) ----
     await sdb.students.create_index("student_uid", unique=True)
     await sdb.students.create_index([("class_id", 1), ("section", 1)])
+    await sdb.students.create_index("parent_user_id")
+    await sdb.students.create_index("status")
+
+    # ---- Attendance ----
     await sdb.attendance.create_index([("student_id", 1), ("date", 1)], unique=True)
     await sdb.attendance.create_index([("class_id", 1), ("section", 1), ("date", 1)])
-    await sdb.marks.create_index([("student_id", 1), ("exam_id", 1), ("subject_id", 1)], unique=True)
-    await sdb.classes.create_index("name")
-    await sdb.subjects.create_index("name")
+    await sdb.attendance.create_index("date")
+    await sdb.attendance.create_index("status")
+
+    # ---- Exams, marks, syllabus ----
     await sdb.exams.create_index([("class_id", 1), ("start_date", 1)])
-    await sdb.fees.create_index([("student_id", 1), ("structure_id", 1)])
-    await sdb.fee_payments.create_index("fee_id")
+    await sdb.exams.create_index("status")
+    await sdb.marks.create_index(
+        [("student_id", 1), ("exam_id", 1), ("subject_id", 1)], unique=True,
+    )
+    await sdb.marks.create_index([("exam_id", 1), ("class_id", 1), ("section", 1)])
+    await sdb.syllabus.create_index([("class_id", 1), ("subject_id", 1)])
+    await sdb.syllabus.create_index("status")
+
+    # ---- Holidays & calendar ----
     await sdb.holidays.create_index("date")
+    await sdb.holidays.create_index("name")
+
+    # ---- Fees ----
+    await sdb.fee_structures.create_index([("class_id", 1), ("term", 1)])
+    await sdb.fee_structures.create_index("name")
+    await sdb.fees.create_index([("student_id", 1), ("structure_id", 1)])
+    await sdb.fees.create_index("status")
+    await sdb.fee_payments.create_index("fee_id")
+    await sdb.fee_payments.create_index([("student_id", 1), ("created_at", -1)])
+    await sdb.fee_payments.create_index("receipt_no", sparse=True)
+
+    # ---- Timetable ----
     await sdb.timetable.create_index([("teacher_id", 1), ("day", 1)])
+    await sdb.timetable.create_index([("class_id", 1), ("section", 1), ("day", 1)])
+
+    # ---- Notifications & messaging ----
     await sdb.notifications.create_index([("created_at", -1)])
+    await sdb.notifications.create_index("status")
+    await sdb.notifications.create_index("channel")
+    await sdb.notifications.create_index("recipient")
+
+    # ---- Activities / extra-curricular ----
     await sdb.activities.create_index("name")
-    await sdb.activity_enrollments.create_index([("activity_id", 1), ("student_id", 1)], unique=True)
+    await sdb.activities.create_index("category")
+    await sdb.activity_enrollments.create_index(
+        [("activity_id", 1), ("student_id", 1)], unique=True,
+    )
+
+    # ---- Sick leave tracker + medical certs ----
+    await sdb.sick_leaves.create_index([("student_id", 1), ("start_date", 1)])
+    await sdb.sick_leaves.create_index("status")
+    await sdb.sick_leaves.create_index("end_date")
+
+    # ---- Audit log (school-scoped subset) ----
+    await sdb.audit_logs.create_index([("created_at", -1)])
+    await sdb.audit_logs.create_index("action")
+    await sdb.audit_logs.create_index("resource")
+    await sdb.audit_logs.create_index("actor_id")
+
+    # ---- Password reset codes (per-school subset for visibility) ----
+    await sdb.password_reset_codes.create_index([("email", 1), ("created_at", -1)])
+    await sdb.password_reset_codes.create_index("expires_at")
+    await sdb.password_reset_codes.create_index("consumed_at")
+
+    # ---- Bulk uploads log ----
+    await sdb.bulk_uploads.create_index([("created_at", -1)])
+    await sdb.bulk_uploads.create_index("kind")
+
+    # ---- Receipts / generated PDFs (cache only — actual PDFs streamed on demand) ----
+    await sdb.receipts.create_index("payment_id", sparse=True)
+    await sdb.receipts.create_index([("created_at", -1)])
+
+    # ---- Subscription history per school ----
+    await sdb.subscription_history.create_index([("created_at", -1)])
+    await sdb.subscription_history.create_index("status")
+
+    # ---- Meta marker (lists which version provisioned the schema) ----
     await sdb.meta.update_one(
         {"_marker": "school_db"},
         {"$set": {
@@ -72,11 +167,59 @@ async def init_school_db(school: dict):
             "school_id": school["id"],
             "school_code": school.get("code"),
             "school_name": school.get("name"),
-            "initialized_at_v": "1.3",
+            "initialized_at_v": "1.14",
+            "collections": [
+                "users", "school_admins", "teachers", "parents", "accounts_users", "students_users",
+                "classes", "subjects", "class_teachers", "students", "attendance",
+                "exams", "marks", "syllabus", "holidays",
+                "fee_structures", "fees", "fee_payments",
+                "timetable", "notifications", "activities", "activity_enrollments",
+                "sick_leaves", "audit_logs", "password_reset_codes",
+                "bulk_uploads", "receipts", "subscription_history", "meta",
+            ],
         }},
         upsert=True,
     )
     return school_db_name(school)
+
+
+# Collections we always expect to exist in a freshly-initialised school DB.
+SCHOOL_DB_COLLECTIONS = (
+    "users", "school_admins", "teachers", "parents", "accounts_users", "students_users",
+    "classes", "subjects", "class_teachers", "students", "attendance",
+    "exams", "marks", "syllabus", "holidays",
+    "fee_structures", "fees", "fee_payments",
+    "timetable", "notifications", "activities", "activity_enrollments",
+    "sick_leaves", "audit_logs", "password_reset_codes",
+    "bulk_uploads", "receipts", "subscription_history", "meta",
+)
+
+
+async def school_db_status(school: dict) -> dict:
+    """Return a snapshot of the per-school DB: name, all collections and their
+    document counts, plus the marker doc. Useful for /db-status endpoint."""
+    sdb = get_school_db(school)
+    existing = await sdb.list_collection_names()
+    counts = {}
+    for name in SCHOOL_DB_COLLECTIONS:
+        try:
+            counts[name] = await sdb[name].estimated_document_count() if name in existing else 0
+        except Exception:
+            counts[name] = 0
+    marker = await sdb.meta.find_one({"_marker": "school_db"}, {"_id": 0})
+    missing = [c for c in SCHOOL_DB_COLLECTIONS if c not in existing]
+    return {
+        "db_name": school_db_name(school),
+        "school_id": school["id"],
+        "school_code": school.get("code"),
+        "school_name": school.get("name"),
+        "expected_collections": list(SCHOOL_DB_COLLECTIONS),
+        "existing_collections": sorted(existing),
+        "missing_collections": missing,
+        "counts": counts,
+        "marker": marker,
+        "is_initialized": marker is not None and not missing,
+    }
 
 
 async def ensure_indexes():

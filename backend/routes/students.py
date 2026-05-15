@@ -113,6 +113,34 @@ async def create_student(payload: StudentCreate, user: dict = Depends(require_ro
     }
     await db.students.insert_one(doc)
     await log_action(user["id"], user["role"], user["school_id"], "create", "student", doc["id"], {"uid": uid})
+
+    # Mirror student + parent into the per-school DB so the schema is populated.
+    try:
+        from core.db import get_school_db
+        school = await db.schools.find_one({"id": user["school_id"]}, {"_id": 0})
+        if school:
+            sdb = get_school_db(school)
+            await sdb.students.update_one(
+                {"student_uid": uid}, {"$set": {k: v for k, v in doc.items() if k != "_id"}}, upsert=True,
+            )
+            parent_doc = await db.users.find_one({"id": parent_user_id}, {"_id": 0})
+            if parent_doc:
+                await sdb.users.update_one(
+                    {"email": parent_doc["email"]}, {"$set": parent_doc}, upsert=True,
+                )
+                await sdb.parents.update_one(
+                    {"user_id": parent_user_id},
+                    {"$set": {
+                        "user_id": parent_user_id, "email": parent_doc["email"],
+                        "name": parent_doc.get("name"), "phone": parent_doc.get("phone"),
+                        "student_uid": uid, "student_id": doc["id"],
+                        "created_at": parent_doc.get("created_at"),
+                    }},
+                    upsert=True,
+                )
+    except Exception as e:
+        print(f"[students] mirror to school db failed: {e}")
+
     return clean_doc(doc)
 
 

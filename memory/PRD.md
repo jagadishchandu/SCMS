@@ -377,15 +377,57 @@ See `/app/memory/test_credentials.md`.
 - **Backend: 204/204 pass** (was 194; +10 new password-reset tests).
 - **Frontend smoke**: full forgot-password journey verified — Step 1 → Step 2 transition, invalid code toast, back-to-login navigation.
 
+## v1.14 — Full per-school DB schema + mirroring + status endpoint (2026-05-15)
+
+**Goal**: when a super admin creates a school, automatically provision a dedicated MongoDB database named after the school and create the full entity schema (29 collections) so the school's data has a proper home from day one.
+
+**`core/db.py` — schema-completeness**
+`init_school_db()` now provisions **29 collections** in the per-school DB (`scms_db_school_<code>`):
+- Identity: `users`, `school_admins`, `teachers`, `parents`, `accounts_users`, `students_users`
+- Academic: `classes`, `subjects`, `class_teachers`
+- Students/attendance: `students`, `attendance`
+- Exams/marks: `exams`, `marks`, `syllabus`
+- Calendar/fees: `holidays`, `fee_structures`, `fees`, `fee_payments`, `timetable`
+- Engagement: `notifications`, `activities`, `activity_enrollments`, `sick_leaves`
+- System: `audit_logs`, `password_reset_codes`, `bulk_uploads`, `receipts`, `subscription_history`, `meta`
+
+Each collection gets relevant indexes (unique compound keys, sort-friendly indexes, sparse indexes for nullable cols). The `meta` collection now records `initialized_at_v=1.14` plus the full collection list for verification. Schema is idempotent — re-running `init_school_db` is safe and applied to every existing school on every backend startup.
+
+**User mirroring**
+Whenever a user is created (school admin via school creation, teachers/parents/accounts via `POST /users`, parents via `POST /students`), the row + the role-specific marker (`school_admins`, `teachers`, `parents`, `accounts_users`, `students_users`) are also written into the per-school DB. Passwords are stored ONLY as bcrypt hashes (verified `$2…` format) in both master and per-school DBs — plaintext is never persisted.
+
+**New endpoints**
+- `GET /api/schools/{id}/db-status` — returns `db_name`, `expected_collections`, `existing_collections`, `missing_collections`, per-collection doc `counts`, the marker doc, and `is_initialized`. Visible to platform admin OR own school admin (others → 403).
+- `POST /api/schools/{id}/db-init` (platform admin only) — re-runs the schema initializer for a school. Useful for older schools that need newly-added collections.
+
+**Bug fix**: `routes/students.py` previously projected away `password_hash` when mirroring the parent user into the per-school DB. Now the hash is preserved so the per-school `users` collection is a true mirror.
+
+**New tests — `backend/tests/test_school_db_schema.py` (14 cases)**
+- DB name derived from school code
+- DB exists in MongoDB after school creation
+- All 29 expected collections are present (`list_collection_names`)
+- Marker doc has school_id/code/name + initialized_at_v
+- School admin user has `password_hash` in master DB (no plaintext)
+- School admin mirrored into school DB's `users` and `school_admins`
+- Teacher creation mirrors into school DB's `users` and `teachers`
+- Student creation mirrors student into `students`, parent into `users` + `parents`, with bcrypt hash
+- `db-status`: platform admin can read; school admin can read own; school admin cannot read another school's (403); teacher cannot read (403)
+- `db-init`: idempotent; rejects non-platform-admin
+
+### Test status (cumulative)
+- **Backend: 218/218 pass** (was 204; +14 new schema tests, zero regressions).
+- **Live verified**: DEMO school's `db-status` endpoint returns all 29 collections present with doc counts.
+
 ## Prioritized Backlog (refreshed)
 ### P1
 - Stripe / Razorpay automated subscription payments
 
 ### P2
+- Promote per-school DBs from "shadow schema" to authoritative data store (route refactor — would need every route to use `get_school_db(school)` instead of master `get_db()`)
 - Wire uploads (photos / medical certs / PDF receipts) to Azure Blob once `AZURE_STORAGE_CONNECTION_STRING` is filled
-- Recovery nudges post-expiry (day 1 / 3 / 7) before full lockout (i18n templates ready; scheduler wiring pending)
+- Recovery nudges post-expiry (day 1 / 3 / 7) (i18n templates ready; scheduler wiring pending)
 - Meta WhatsApp template approval workflow
-- Email channel for password reset (current flow is Telegram-only; useful for users without Telegram linked)
+- Email channel for password reset
 
 ### P3
 - React Native shell reusing the same API

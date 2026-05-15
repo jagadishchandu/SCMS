@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from core.models import SchoolCreate, SchoolUpdate, SchoolBranding
 from core.auth import require_roles, hash_password, get_current_user
-from core.db import get_db, init_school_db, school_db_name
+from core.db import get_db, init_school_db, school_db_name, get_school_db, school_db_status
 from core.utils import new_id, utc_now, clean_doc
 
 router = APIRouter(prefix="/schools", tags=["schools"])
@@ -59,7 +59,49 @@ async def create_school(payload: SchoolCreate, user: dict = Depends(require_role
     }
     await db.users.insert_one(admin_doc)
 
+    # Mirror the school admin into the per-school DB so the schema isn't empty
+    # and admins can verify their DB is wired correctly.
+    try:
+        sdb = get_school_db(school_doc)
+        mirror = {k: v for k, v in admin_doc.items() if k != "_id"}
+        await sdb.users.update_one({"email": mirror["email"]}, {"$set": mirror}, upsert=True)
+        await sdb.school_admins.update_one(
+            {"user_id": mirror["id"]},
+            {"$set": {"user_id": mirror["id"], "email": mirror["email"], "name": mirror["name"], "created_at": mirror["created_at"]}},
+            upsert=True,
+        )
+    except Exception as e:
+        print(f"[schools] mirror admin to school db failed: {e}")
+
     return {"school": clean_doc(school_doc), "admin_email": admin_doc["email"]}
+
+
+@router.get("/{school_id}/db-status")
+async def get_school_db_status(school_id: str, user: dict = Depends(get_current_user)):
+    """Return the per-school DB name, all collections, doc counts, missing collections,
+    and marker. Visible to platform_admin and the school's own school_admin."""
+    if user["role"] not in ("platform_admin", "school_admin"):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if user["role"] == "school_admin" and user.get("school_id") != school_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    db = get_db()
+    school = await db.schools.find_one({"id": school_id}, {"_id": 0})
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+    return await school_db_status(school)
+
+
+@router.post("/{school_id}/db-init")
+async def reinit_school_db(school_id: str, user: dict = Depends(require_roles("platform_admin"))):
+    """Re-run the schema initializer for a school. Idempotent.
+    Useful when new collections are added to SCHOOL_DB_COLLECTIONS and we want
+    older schools to receive the new indexes."""
+    db = get_db()
+    school = await db.schools.find_one({"id": school_id}, {"_id": 0})
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+    await init_school_db(school)
+    return await school_db_status(school)
 
 
 @router.patch("/{school_id}")
