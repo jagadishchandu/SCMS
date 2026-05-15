@@ -1,0 +1,159 @@
+{
+  "theme_and_archetype": {
+    "theme": "LIGHT",
+    "archetype": "Archetype 1: Organic & Earthy (Trust, Growth, Calm)",
+    "description": "A professional, trustworthy, and calm aesthetic designed for school administrators, teachers, and parents. Avoids standard SaaS blue/purple gradients. Uses grounded, matte, and physical tones to reduce visual fatigue during dense data entry and analytics tasks."
+  },
+  "typography": {
+    "font_imports": [
+      "@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Manrope:wght@400;500;600;700&display=swap');"
+    ],
+    "headings": {
+      "family": "Outfit, sans-serif",
+      "weight_strategy": "Use font-medium (500) to font-semibold (600) for elegance. Avoid overly heavy blacks.",
+      "tracking": "tracking-tight",
+      "h1": "text-4xl sm:text-5xl lg:text-6xl",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl",
+      "h3": "text-xl sm:text-2xl",
+      "h4": "text-lg sm:text-xl"
+    },
+    "body": {
+      "family": "Manrope, sans-serif",
+      "weight": "font-normal (400)",
+      "size": "text-base (mobile: text-sm)",
+      "small": "text-sm",
+      "line_height": "leading-relaxed"
+    },
+    "labels_and_overlines": {
+      "style": "uppercase, text-xs, tracking-widest, font-semibold, text-secondary"
+    }
+  },
+  "color_system": {
+    "background": {
+      "default": "#F9F8F6",
+      "surface": "#FFFFFF",
+      "subtle": "#F2EFEB"
+    },
+    "primary": {
+      "DEFAULT": "#4E5B3A",
+      "hover": "#3A452B",
+      "light": "#E6EADF",
+      "foreground": "#FFFFFF"
+    },
+    "secondary": {
+      "DEFAULT": "#B7A77A",
+      "hover": "#8A7F4F",
+      "foreground": "#2F3E2E"
+    },
+    "accent": {
+      "terracotta": "#D4A373",
+      "sand": "#E6E1D6",
+      "sage": "#8F9C82"
+    },
+    "text": {
+      "primary": "#2F3E2E",
+      "secondary": "#5C6656",
+      "muted": "#8A9382"
+    },
+    "border": {
+      "DEFAULT": "#E6E1D6",
+      "subtle": "#F2EFEB",
+      "strong": "#D5CFC1"
+    },
+    "status": {
+      "success": "#6B8E23",
+      "success_bg": "#F0F4E8",
+      "warning": "#E9C46A",
+      "warning_bg": "#FDF8E8",
+      "danger": "#E76F51",
+      "danger_bg": "#FCECE8",
+      "info": "#4A7C59",
+      "info_bg": "#EDF3EF"
+    },
+    "chart_palette": [
+      "#4E5B3A",
+      "#B7A77A",
+      "#D4A373",
+      "#8F9C82",
+      "#6B8E23",
+      "#E9C46A"
+    ]
+  },
+  "layout_and_spacing": {
+    "container_padding": "p-6 md:p-8 lg:p-12",
+    "dashboard_grid": "grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6",
+    "bento_grid": "grid grid-cols-1 md:grid-cols-8 lg:grid-cols-12 gap-8",
+    "radius": "rounded-lg",
+    "card_style": "bg-white border border-[#E6E1D6] rounded-lg shadow-none transition-all duration-200 hover:shadow-sm hover:border-[#D5CFC1]",
+    "density": "Control Room strategy for dashboards: efficient use of space with tight gap-4 or gap-6. Generous spacing (py-16) for parent portal and login pages."
+  },
+  "surface_strategies": {
+    "header": "Solid surface #FFFFFF with a crisp 1px bottom border #E6E1D6. No glassmorphism in the main admin dashboard to keep data clear.",
+    "sidebar": "Background #F9F8F6, active items in #E6EADF with primary text #4E5B3A. Subtle 1px right border #E6E1D6.",
+    "tables": "Flat white background, crisp 1px borders on rows. Sticky headers with subtle background #F2EFEB.",
+    "login_page": "Split screen layout: Left side clean form on #FFFFFF, right side hero abstract image (hero_abstract_bg) covering full height."
+  },
+  "component_rules": {
+    "buttons": "Solid primary colors. No generic gradients. Focus states must have ring-2 ring-primary/30 ring-offset-2.",
+    "inputs": "Shadcn default with border-[#E6E1D6] focus:border-[#4E5B3A] focus:ring-[#4E5B3A]/20.",
+    "badges": "Soft backgrounds (status_bg) with dark text (status). No harsh neon colors.",
+    "charts": "Recharts with customized tooltips (white background, border, subtle shadow). Use the chart_palette colors.",
+    "tabs": "Underline style preferred over pill style for a more mature, academic look.",
+    "icons": "Use Phosphor Icons (regular or light weight) for a consistent, professional, non-generic look. Fallback to lucide-react if Phosphor is unavailable."
+  },
+  "motion_and_interactions": {
+    "hover": "Subtle transform -translate-y-[1px] on interactive cards. Color darkening on buttons.",
+    "transitions": "transition-all duration-200 ease-in-out",
+    "loading": "Use Skeleton loaders (Shadcn) with a warm subtle pulse (#F2EFEB to #E6E1D6) rather than cold gray."
+  },
+  "image_urls": [
+    {
+      "category": "hero_background",
+      "url": "https://static.prod-images.emergentagent.com/jobs/41728215-3124-4536-9339-78ba88e973ed/images/a7e28c82e63311bdeda4dbc3d20ccb1c4ffcff86be9ad6000b3399e70e73be91.png",
+      "description": "Abstract earthy geometric background, sage green and terracotta shapes, matte texture, minimal, calming, soft lighting. Used for login page background or marketing hero.",
+      "slug_name": "hero_abstract_bg"
+    },
+    {
+      "category": "interior_vibe",
+      "url": "https://static.prod-images.emergentagent.com/jobs/41728215-3124-4536-9339-78ba88e973ed/images/6fb69ef846bd13fcf7e172a5ccfb8ae1a6ac753522cfe8013d1098c474c373df.png",
+      "description": "Modern school hallway interior, sunlight coming through large windows. Good for parent portal banners or about sections.",
+      "slug_name": "school_interior"
+    },
+    {
+      "category": "education_focus",
+      "url": "https://static.prod-images.emergentagent.com/jobs/41728215-3124-4536-9339-78ba88e973ed/images/a088469669c6b1cf739bea2256c3a9fcdf9d69f4548d093f22dd831efa925bc5.png",
+      "description": "Close up of an open textbook with soft morning light, wooden desk, reading glasses. Good for syllabus or academic sections.",
+      "slug_name": "education_focus"
+    },
+    {
+      "category": "school_architecture",
+      "url": "https://images.unsplash.com/photo-1621192754911-ffe0d95929dd?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjY2NzN8MHwxfHNlYXJjaHwxfHxzY2hvb2wlMjBidWlsZGluZyUyMG1vZGVybiUyMGFyY2hpdGVjdHVyZXxlbnwwfHx8fDE3Nzg4NjE0MjV8MA&ixlib=rb-4.1.0&q=85",
+      "description": "White concrete building near green trees. Use for Platform Admin school listing thumbnails.",
+      "slug_name": "school_architecture_thumb"
+    },
+    {
+      "category": "student_profile",
+      "url": "https://images.unsplash.com/photo-1514369118554-e20d93546b30?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAxODF8MHwxfHNlYXJjaHwxfHxzdHVkZW50JTIwc3R1ZHlpbmclMjBwb3J0cmFpdHxlbnwwfHx8fDE3Nzg4NjE0MjV8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Student studying. Use as a fallback for student profile pictures.",
+      "slug_name": "student_profile_fallback"
+    },
+    {
+      "category": "logo",
+      "url": "https://images.unsplash.com/photo-1599305445671-ac291c95aaa9?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzF8MHwxfHNlYXJjaHwxfHxsb2dvfGVufDB8fHx8MTcyNDA2Njk2MHww&ixlib=rb-4.1.0&q=85",
+      "description": "Minimalist logo placeholder for school logos.",
+      "slug_name": "school_logo"
+    }
+  ],
+  "instructions_to_main_agent": [
+    "CRITICAL: All files must be .js or .jsx. Do NOT use .tsx.",
+    "CRITICAL: Add data-testid attributes to ALL interactive elements, buttons, links, and forms. Use kebab-case and role-based naming (e.g., data-testid='login-submit-button').",
+    "CRITICAL: Apply the custom colors as Tailwind config variables (e.g., colors: { primary: { DEFAULT: '#4E5B3A', hover: '#3A452B' } }).",
+    "CRITICAL: Use Outfit for all headings and Manrope for body text. Add them to index.css and Tailwind config.",
+    "Do NOT use default Shadcn border radius. Set radius to 0.5rem (rounded-lg) in global CSS.",
+    "Avoid overusing the Shadcn Card component if it leads to excessive nesting. Use semantic HTML (section, div) with border and bg-white for cleaner DOM.",
+    "Do not use generic blue/purple gradients. Adhere strictly to the Organic & Earthy palette.",
+    "Ensure tenant isolation logic is visually clear (e.g., displaying the current school name prominently in the Topbar for School Admin/Teachers).",
+    "For the Parent Portal, use a slightly softer and wider layout compared to the data-dense Admin dashboards.",
+    "Ensure all text meets APCA/WCAG contrast ratios against the background colors."
+  ]
+}
