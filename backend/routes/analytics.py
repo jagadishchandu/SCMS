@@ -124,6 +124,90 @@ async def student_dashboard(student_uid: str, user: dict = Depends(get_current_u
     }
 
 
+@router.get("/risk-students")
+async def risk_students(limit: int = 5, user: dict = Depends(get_current_user)):
+    """Top students with the highest predictive risk (combined attendance drop
+    + marks decline over the last 30 days). Visible to School Admin & Platform Admin."""
+    if user["role"] not in ("school_admin", "platform_admin"):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    db = get_db()
+    from datetime import date, timedelta
+    today = date.today()
+    win30 = (today - timedelta(days=30)).isoformat()
+    win60 = (today - timedelta(days=60)).isoformat()
+
+    flt = {} if user["role"] == "platform_admin" else {"school_id": user["school_id"]}
+    students = await db.students.find({**flt, "status": "active"}, {"_id": 0}).to_list(5000)
+    classes = await db.classes.find(flt, {"_id": 0}).to_list(500)
+    subjects = await db.subjects.find(flt, {"_id": 0}).to_list(500)
+    class_map = {c["id"]: c["name"] for c in classes}
+
+    candidates = []
+    for s in students:
+        # attendance — current 30-day window vs prior 30 days
+        a_cur = await db.attendance.find({"school_id": s["school_id"], "student_id": s["id"],
+                                          "date": {"$gte": win30}}, {"_id": 0}).to_list(200)
+        a_prev = await db.attendance.find({"school_id": s["school_id"], "student_id": s["id"],
+                                           "date": {"$gte": win60, "$lt": win30}}, {"_id": 0}).to_list(200)
+
+        def att_pct(rs):
+            if not rs:
+                return None
+            pres = sum(1 for r in rs if r["status"] in ("present", "late", "half_day"))
+            return round(pres / len(rs) * 100, 1)
+
+        cur_att = att_pct(a_cur)
+        prev_att = att_pct(a_prev)
+        att_drop = (prev_att - cur_att) if (cur_att is not None and prev_att is not None) else 0
+
+        # marks — average percentage current vs prior window
+        from datetime import datetime, timezone
+        cur_dt = datetime.fromisoformat(win30).replace(tzinfo=timezone.utc)
+        prev_dt = datetime.fromisoformat(win60).replace(tzinfo=timezone.utc)
+        m_cur = await db.marks.find({"school_id": s["school_id"], "student_id": s["id"],
+                                     "entered_at": {"$gte": cur_dt}}, {"_id": 0}).to_list(500)
+        m_prev = await db.marks.find({"school_id": s["school_id"], "student_id": s["id"],
+                                      "entered_at": {"$gte": prev_dt, "$lt": cur_dt}}, {"_id": 0}).to_list(500)
+        cur_mark = round(sum(m["percentage"] for m in m_cur) / len(m_cur), 1) if m_cur else None
+        prev_mark = round(sum(m["percentage"] for m in m_prev) / len(m_prev), 1) if m_prev else None
+        mark_drop = (prev_mark - cur_mark) if (cur_mark is not None and prev_mark is not None) else 0
+
+        # current absolutes also contribute to score
+        absolute_att_penalty = max(0, 80 - (cur_att or 100)) if cur_att is not None else 0  # 0–80
+        absolute_mark_penalty = max(0, 50 - (cur_mark or 100)) if cur_mark is not None else 0  # 0–50
+
+        # weighted risk score (higher = worse). Each "drop" pt counts heavier.
+        score = round((max(0, att_drop) * 1.5) + (max(0, mark_drop) * 1.5)
+                      + (absolute_att_penalty * 0.6) + (absolute_mark_penalty * 0.6), 1)
+
+        if score <= 0:
+            continue
+
+        reasons = []
+        if att_drop > 5: reasons.append(f"attendance ↓ {att_drop:.0f}%")
+        if mark_drop > 5: reasons.append(f"marks ↓ {mark_drop:.0f}%")
+        if cur_att is not None and cur_att < 75: reasons.append(f"attendance only {cur_att}%")
+        if cur_mark is not None and cur_mark < 50: reasons.append(f"marks {cur_mark}%")
+
+        candidates.append({
+            "student": {
+                "id": s["id"], "student_uid": s["student_uid"], "name": s["name"],
+                "class_name": class_map.get(s["class_id"], s["class_id"]),
+                "section": s.get("section"), "photo": s.get("photo"),
+            },
+            "score": score,
+            "cur_attendance_pct": cur_att,
+            "prev_attendance_pct": prev_att,
+            "att_drop": round(att_drop, 1),
+            "cur_marks_pct": cur_mark,
+            "prev_marks_pct": prev_mark,
+            "mark_drop": round(mark_drop, 1),
+            "reasons": reasons or ["minor decline"],
+        })
+    candidates.sort(key=lambda c: c["score"], reverse=True)
+    return candidates[:limit]
+
+
 @router.get("/school")
 async def school_dashboard(user: dict = Depends(get_current_user)):
     if user["role"] not in ("platform_admin", "school_admin"):

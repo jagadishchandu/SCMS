@@ -29,6 +29,7 @@ const NAV_BY_ROLE = {
     { to: "/school/holidays", label: "Holidays", icon: Calendar },
     { to: "/school/fees", label: "Fees", icon: Receipt },
     { to: "/school/timetable", label: "Timetable", icon: Calendar },
+    { to: "/school/activities", label: "Activities", icon: ChartLineUp },
     { to: "/school/performance", label: "Teacher Performance", icon: ChartLineUp },
     { to: "/school/notifications", label: "Notifications", icon: BellRinging },
     { to: "/school/uploads", label: "Bulk Uploads", icon: UploadSimple },
@@ -37,7 +38,8 @@ const NAV_BY_ROLE = {
   ],
   teacher: [
     { to: "/teacher", label: "My Dashboard", icon: Gauge, end: true },
-    { to: "/teacher/attendance", label: "Mark Attendance", icon: ClipboardText },
+    { to: "/teacher/attendance-cards", label: "Take Attendance", icon: ClipboardText },
+    { to: "/teacher/attendance", label: "Attendance (grid)", icon: ClipboardText },
     { to: "/teacher/marks", label: "Enter Marks", icon: FileText },
     { to: "/teacher/students", label: "My Students", icon: GraduationCap },
     { to: "/teacher/timetable", label: "My Timetable", icon: Calendar },

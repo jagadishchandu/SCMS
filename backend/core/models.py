@@ -115,7 +115,7 @@ class StudentUpdate(BaseModel):
 
 
 # ---------- Attendance ----------
-AttendanceStatus = Literal["present", "absent", "sick", "late", "half_day", "excused"]
+AttendanceStatus = Literal["present", "absent", "sick", "late", "half_day", "excused", "not_in_class"]
 
 
 class AttendanceEntry(BaseModel):

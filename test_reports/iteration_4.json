@@ -1,0 +1,36 @@
+{
+  "summary": "SCMS iteration 4 — Per-school DB provisioning, risk-students endpoint, activities module, not_in_class attendance status, and disabled scheduler all verified. Backend: 78/78 pytest pass (63 iter1–3 regression + 15 new iter4 cases). Frontend smoke (1920x1080) for all 3 new flows green.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": { "ui_bugs": [], "integration_issues": [], "design_issues": [] },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "(Optional) backend/routes/activities.py:enroll — duplicate insert is caught with a bare `except Exception` and ignored. Narrow to motor `DuplicateKeyError` to avoid masking real insert failures and to differentiate 'duplicate' from 'transient mongo error'.",
+    "(Optional) backend/routes/activities.py:stats/summary — runs N+1 count_documents (one per activity). For schools with many activities, an aggregate $group on activity_enrollments by activity_id would replace the per-activity loop with a single round-trip.",
+    "(Optional) backend/routes/analytics.py:risk-students — O(students × 4) Mongo round-trips per call (attendance cur/prev + marks cur/prev). Acceptable today (8 students) but should be refactored to bucketed aggregations before scaling to ≥1000 students.",
+    "(Cosmetic) backend/routes/activities.py:create_activity returns dict comprehension `{k:v for k,v in doc.items() if k!='_id'}` — `insert_one(doc)` mutates `doc` to include `_id`, which is what the comprehension strips. Cleaner to use `dict(doc); del doc['_id']` or insert a copy.",
+    "(Cosmetic) The /api/activities/{id}/roster does not include enrolment metadata (e.g. enrolled_at). The frontend roster currently only shows student details, which matches today's UI, but it would be useful in future for showing 'joined on' dates."
+  ],
+  "critical_code_review_comments": [
+    "core/db.py — slugify is regex-safe (re.sub non-alnum→_), 48-char cap, and falls back to 'school' for empty. school_db_name composes `${DB_NAME}_school_${slug}` which matched the live Mongo databases (scms_db_school_demo etc) — verified via listDatabases.",
+    "core/db.py:init_school_db creates schema-equivalent indexes on the per-school DB (students.student_uid UNIQUE, attendance composite UNIQUE, marks composite UNIQUE, activity_enrollments composite UNIQUE) — idempotent and safe to re-run.",
+    "server.py lifespan now back-fills `db_name` onto every school doc and runs init_school_db for each. Verified DEMO school has db_name populated. Intentional design: reads/writes still hit master DB with school_id filter — per-school DB is purely a forward-looking infrastructure step.",
+    "routes/analytics.py:risk_students — RBAC gates school_admin/platform_admin only; teacher/parent/accounts return 403 (verified). Score weighting (drop*1.5 + abs penalty*0.6) is documented inline. Sorted desc, sliced to `limit`. Empty/zero-score students are filtered out.",
+    "routes/activities.py — create requires school_admin (teacher/parent return 403 ✓). enroll requires school_admin OR teacher. Roster + stats are open to all authenticated school users. school_id scoping applied on every query.",
+    "core/scheduler.py — gated by ENABLE_DIGEST_SCHEDULER env (false by default → no APScheduler instantiated). Import-only (APScheduler+cron) lazy inside start(); module import does not crash even if APScheduler is missing. Health endpoint still 200.",
+    "core/models.py AttendanceStatus literal now includes 'not_in_class' — verified end-to-end: POST /api/attendance/bulk with status='not_in_class' returns 200/201 and GET /api/attendance lists the record with that status.",
+    "Frontend SchoolDashboard.jsx — adds [data-testid=risk-students-list] containing one <li data-testid=risk-{uid}/> per item; gracefully handles empty list (visible only when risk data exists). Send-monthly-digest-btn remains.",
+    "Frontend ActivitiesPage.jsx — KPI tiles, card grid, new-activity modal, enroll modal, stats summary. All key elements carry data-testid. Created activity is appended to grid after submit. Modal closes with Escape / submit / cross — verified.",
+    "Frontend TeacherAttendanceCards.jsx — 3-phase state machine (picker → take → done) with cards, 3 status buttons (present/absent/not_in_class), prev/skip/finish, then save. Save toast: 'Saved 18 entries · 2 parent alerts queued' — confirms bulk POST + parent notification queueing reached the success branch."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py", "/app/test_reports/pytest/pytest_results.xml", "/app/test_reports/iteration_4.json"],
+  "success_rate": { "backend": "100% (78/78)", "frontend": "100% on smoke (dashboard risk + digest btn, activities CRUD modal, teacher att-cards full flow with save toast)" },
+  "test_credentials": "Used /app/memory/test_credentials.md verbatim. No changes.",
+  "seed_data_creation": "Tests create TEST_-prefixed schools/activities/students. Persistent test data is namespaced and does not interfere with seeded DEMO data. mongosh listDatabases shows expected scms_db_school_<slug> databases including scms_db_school_demo + several scms_db_school_test* from create-school tests.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: pytest /app/backend/tests/backend_test.py -v --junitxml=/app/test_reports/pytest/pytest_results.xml. Iter4 added: TestPerSchoolDB (2), TestRiskStudents (4), TestActivities (6), TestNotInClassAttendance (1), TestSchedulerDisabled (2). MOCKED: Twilio WhatsApp delivery (env empty) — monthly_digest + parent-alert notifications stay status='queued' with delivery_note='twilio_not_configured'. MOCKED: APScheduler — ENABLE_DIGEST_SCHEDULER unset/'false' → scheduler.start() short-circuits, no jobs registered. For the teacher att-cards flow on a fresh date, Save toast text is 'Saved N entries · M parent alerts queued'. Per-school DBs are physical Mongo databases but all reads/writes go through master scms_db with school_id filter — this is intentional per the iter4 design note.",
+  "rca of the issue": "No bugs found. All 5 iter4 features behave per spec; 8 iter1–3 regression suites remain green. The only review-level callouts are non-blocking performance/style suggestions captured in action_items."
+}

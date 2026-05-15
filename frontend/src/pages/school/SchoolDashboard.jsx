@@ -3,14 +3,19 @@ import { api, formatApiError } from "../../lib/api";
 import { PageHeader, KPI, Section, Empty } from "../../components/Primitives";
 import { formatDate, currency, CHART_COLORS } from "../../lib/utils";
 import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip } from "recharts";
-import { PaperPlaneTilt } from "@phosphor-icons/react";
+import { PaperPlaneTilt, Warning, UserCircle } from "@phosphor-icons/react";
+import { Link } from "react-router-dom";
 import toast from "react-hot-toast";
 
 export default function SchoolDashboard() {
   const [data, setData] = useState(null);
+  const [risks, setRisks] = useState([]);
   const [sendingDigest, setSendingDigest] = useState(false);
 
-  const load = () => api.get("/analytics/school").then((r) => setData(r.data));
+  const load = () => Promise.all([
+    api.get("/analytics/school").then((r) => setData(r.data)),
+    api.get("/analytics/risk-students", { params: { limit: 5 } }).then((r) => setRisks(r.data)).catch(() => setRisks([])),
+  ]);
   useEffect(() => { load(); }, []);
 
   const runDigests = async () => {
@@ -109,6 +114,39 @@ export default function SchoolDashboard() {
             ))}
           </ul>}
       </Section>
+
+      <div className="mt-6">
+        <Section
+          title={`Students at risk · top ${risks.length}`}
+          action={<Link to="/student-search" className="btn-ghost text-xs">Open analytics →</Link>}
+        >
+          {risks.length === 0 ? <Empty title="No risk flags right now" message="Attendance and marks look healthy across the board." /> :
+            <ul className="divide-y divide-line" data-testid="risk-students-list">
+              {risks.map((r) => (
+                <li key={r.student.id} className="py-3 flex items-center gap-3" data-testid={`risk-${r.student.student_uid}`}>
+                  <div className="w-10 h-10 rounded-full bg-bg-subtle overflow-hidden grid place-items-center border border-line shrink-0">
+                    {r.student.photo ? <img src={r.student.photo} alt={r.student.name} className="w-full h-full object-cover" /> : <UserCircle size={22} className="text-ink-muted" />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Link to={`/student/${r.student.student_uid}`} className="font-medium text-ink hover:text-primary">{r.student.name}</Link>
+                      <span className="text-xs text-ink-muted">{r.student.student_uid} · {r.student.class_name} {r.student.section}</span>
+                    </div>
+                    <div className="text-xs text-ink-soft mt-0.5 flex gap-2 flex-wrap">
+                      {r.reasons.map((x, i) => <span key={i} className="badge-warning">{x}</span>)}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="flex items-center justify-end gap-1 text-status-danger font-display text-lg leading-none">
+                      <Warning size={16} weight="fill" /> {r.score}
+                    </div>
+                    <div className="text-[10px] text-ink-muted">risk score</div>
+                  </div>
+                </li>
+              ))}
+            </ul>}
+        </Section>
+      </div>
     </div>
   );
 }

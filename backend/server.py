@@ -33,6 +33,8 @@ from routes.subscriptions import router as subscriptions_router
 from routes.receipts import router as receipts_router
 from routes.calendar_route import router as calendar_router
 from routes.digests import router as digests_router
+from routes.activities import router as activities_router
+from core import scheduler as digest_scheduler
 
 
 async def seed_platform_admin():
@@ -294,6 +296,34 @@ async def seed_demo_data():
             "date": d, "type": "public", "created_at": utc_now(),
         })
 
+    # extra-curricular activities
+    demo_activities = [
+        {"name": "Cricket", "category": "sport", "coach": "Coach Naik", "schedule": "Mon, Wed 4-5pm"},
+        {"name": "Football", "category": "sport", "coach": "Coach Pereira", "schedule": "Tue, Thu 4-5pm"},
+        {"name": "Chess Club", "category": "club", "coach": "Mr. Verma", "schedule": "Fri 3-4pm"},
+        {"name": "Violin", "category": "music", "coach": "Ms. Bose", "schedule": "Sat 10-11am"},
+        {"name": "Painting", "category": "art", "coach": "Ms. Saxena", "schedule": "Sat 11am-12pm"},
+    ]
+    activity_ids = []
+    for a in demo_activities:
+        aid = new_id()
+        await db.activities.insert_one({
+            "id": aid, "school_id": school_id, **a, "is_active": True, "created_at": utc_now(),
+        })
+        activity_ids.append(aid)
+    # enroll students randomly
+    import random as _r
+    _r.seed(11)
+    for s in students:
+        for aid in _r.sample(activity_ids, k=_r.randint(1, 2)):
+            try:
+                await db.activity_enrollments.insert_one({
+                    "id": new_id(), "school_id": school_id, "activity_id": aid,
+                    "student_id": s["id"], "created_at": utc_now(),
+                })
+            except Exception:
+                pass
+
     print(f"[seed] Demo data complete. School: {school_id}")
 
 
@@ -331,6 +361,41 @@ async def backfill_demo_payments():
         print(f"[seed] Backfilled {inserted} fee_payments for DEMO school.")
 
 
+async def backfill_demo_activities():
+    """One-time backfill: ensure DEMO school has a few activities + enrollments."""
+    db = get_db()
+    school = await db.schools.find_one({"code": "DEMO"})
+    if not school:
+        return
+    if await db.activities.count_documents({"school_id": school["id"]}) > 0:
+        return
+    demo_activities = [
+        {"name": "Cricket", "category": "sport", "coach": "Coach Naik", "schedule": "Mon, Wed 4-5pm"},
+        {"name": "Football", "category": "sport", "coach": "Coach Pereira", "schedule": "Tue, Thu 4-5pm"},
+        {"name": "Chess Club", "category": "club", "coach": "Mr. Verma", "schedule": "Fri 3-4pm"},
+        {"name": "Violin", "category": "music", "coach": "Ms. Bose", "schedule": "Sat 10-11am"},
+        {"name": "Painting", "category": "art", "coach": "Ms. Saxena", "schedule": "Sat 11am-12pm"},
+    ]
+    aids = []
+    for a in demo_activities:
+        aid = new_id()
+        await db.activities.insert_one({"id": aid, "school_id": school["id"], **a, "is_active": True, "created_at": utc_now()})
+        aids.append(aid)
+    import random as _r
+    _r.seed(11)
+    students = await db.students.find({"school_id": school["id"]}, {"_id": 0, "id": 1}).to_list(2000)
+    for s in students:
+        for aid in _r.sample(aids, k=_r.randint(1, 2)):
+            try:
+                await db.activity_enrollments.insert_one({
+                    "id": new_id(), "school_id": school["id"], "activity_id": aid,
+                    "student_id": s["id"], "created_at": utc_now(),
+                })
+            except Exception:
+                pass
+    print(f"[seed] Backfilled {len(aids)} activities for DEMO school.")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
@@ -338,9 +403,26 @@ async def lifespan(app: FastAPI):
         await seed_platform_admin()
         await seed_demo_data()
         await backfill_demo_payments()
+        await backfill_demo_activities()
+        # provision per-school DB for any schools that don't yet have one
+        try:
+            from core.db import init_school_db, school_db_name
+            db = get_db()
+            schools = await db.schools.find({}, {"_id": 0}).to_list(1000)
+            for s in schools:
+                if not s.get("db_name"):
+                    await db.schools.update_one({"id": s["id"]}, {"$set": {"db_name": school_db_name(s)}})
+                await init_school_db(s)
+        except Exception as e:
+            print(f"[startup] per-school DB init error: {e}")
+        digest_scheduler.start()
     except Exception as e:
         print(f"[startup] error: {e}")
     yield
+    try:
+        digest_scheduler.shutdown()
+    except Exception:
+        pass
 
 
 app = FastAPI(title="SCMS API", version="1.0.0", lifespan=lifespan)
@@ -392,5 +474,6 @@ api.include_router(subscriptions_router)
 api.include_router(receipts_router)
 api.include_router(calendar_router)
 api.include_router(digests_router)
+api.include_router(activities_router)
 
 app.include_router(api)

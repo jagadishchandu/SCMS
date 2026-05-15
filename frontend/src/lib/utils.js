@@ -30,6 +30,7 @@ export const ATTENDANCE_STATUSES = [
   { value: "late", label: "Late", color: "info" },
   { value: "half_day", label: "Half Day", color: "warning" },
   { value: "excused", label: "Excused", color: "neutral" },
+  { value: "not_in_class", label: "Not in class", color: "warning" },
 ];
 
 export function statusBadge(status) {

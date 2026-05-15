@@ -682,3 +682,170 @@ class TestDigests:
                  and a.get("created_at", "") > before_latest]
         assert len(match) > 0, f"Expected new run_monthly_digest audit entry after {before_latest}; got {after[:3]}"
 
+
+
+# =========================================================================
+# Iteration 4: per-school DB, risk-students, activities, not_in_class, scheduler
+# =========================================================================
+
+class TestPerSchoolDB:
+    def test_demo_school_has_db_name(self, platform_session):
+        schools = platform_session.get(f"{API}/schools", timeout=15).json()
+        demo = next(s for s in schools if s["code"] == "DEMO")
+        # After startup backfill, db_name should be set
+        assert demo.get("db_name", "").startswith("scms_db_school_"), demo
+
+    def test_create_school_returns_db_name(self, platform_session):
+        code = f"DBT{uuid.uuid4().hex[:6].upper()}"
+        payload = {
+            "name": f"TEST DB {code}", "code": code, "address": "a", "phone": "+91",
+            "email": f"info-{code.lower()}@x.edu", "academic_year": "2025-2026",
+            "admin_email": f"adb.{code.lower()}@test.edu",
+            "admin_password": "Admin@123", "admin_name": "DB Admin",
+        }
+        r = platform_session.post(f"{API}/schools", json=payload, timeout=20)
+        assert r.status_code in (200, 201), r.text
+        body = r.json()
+        # Either the response contains db_name OR fetching the school list reflects it
+        if "db_name" not in body:
+            schools = platform_session.get(f"{API}/schools", timeout=15).json()
+            s = next((x for x in schools if x["code"] == code), None)
+            assert s is not None
+            assert s.get("db_name", "").startswith("scms_db_school_"), s
+        else:
+            assert body["db_name"].startswith("scms_db_school_"), body
+
+
+class TestRiskStudents:
+    def test_risk_school_admin(self, school_session):
+        r = school_session.get(f"{API}/analytics/risk-students", params={"limit": 5}, timeout=20)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert isinstance(data, list)
+        assert len(data) <= 5
+        # validate shape if any
+        for item in data:
+            for k in ("student", "score", "cur_attendance_pct", "prev_attendance_pct",
+                      "att_drop", "cur_marks_pct", "prev_marks_pct", "mark_drop", "reasons"):
+                assert k in item, item
+            for sk in ("id", "student_uid", "name", "class_name", "section"):
+                assert sk in item["student"], item["student"]
+            assert isinstance(item["reasons"], list)
+        # sorted desc by score
+        scores = [i["score"] for i in data]
+        assert scores == sorted(scores, reverse=True), scores
+
+    def test_risk_teacher_forbidden(self, teacher_session):
+        r = teacher_session.get(f"{API}/analytics/risk-students", timeout=15)
+        assert r.status_code == 403
+
+    def test_risk_accounts_forbidden(self, accounts_session):
+        r = accounts_session.get(f"{API}/analytics/risk-students", timeout=15)
+        assert r.status_code == 403
+
+    def test_risk_parent_forbidden(self, parent_session):
+        r = parent_session.get(f"{API}/analytics/risk-students", timeout=15)
+        assert r.status_code == 403
+
+
+class TestActivities:
+    def test_list_seeded(self, school_session):
+        r = school_session.get(f"{API}/activities", timeout=15)
+        assert r.status_code == 200
+        data = r.json()
+        names = {a["name"] for a in data}
+        assert {"Cricket", "Football", "Chess Club", "Violin", "Painting"} <= names, names
+
+    def test_create_as_school_admin(self, school_session):
+        name = f"TEST Activity {uuid.uuid4().hex[:5]}"
+        r = school_session.post(f"{API}/activities", json={
+            "name": name, "category": "club", "coach": "T", "schedule": "Mon 5pm"
+        }, timeout=15)
+        assert r.status_code in (200, 201), r.text
+        body = r.json()
+        assert body["name"] == name
+        assert "id" in body
+        assert "_id" not in body
+        return body
+
+    def test_teacher_cannot_create(self, teacher_session):
+        r = teacher_session.post(f"{API}/activities", json={"name": "X", "category": "club"}, timeout=15)
+        assert r.status_code == 403
+
+    def test_parent_cannot_create(self, parent_session):
+        r = parent_session.post(f"{API}/activities", json={"name": "X", "category": "club"}, timeout=15)
+        assert r.status_code == 403
+
+    def test_enroll_roster_unenroll_and_dup_ignored(self, school_session):
+        # create activity
+        name = f"TEST Enroll {uuid.uuid4().hex[:5]}"
+        cr = school_session.post(f"{API}/activities", json={"name": name, "category": "sport"}, timeout=15)
+        assert cr.status_code in (200, 201)
+        aid = cr.json()["id"]
+        students = school_session.get(f"{API}/students", timeout=15).json()
+        sids = [s["id"] for s in students[:3]]
+        # enroll 3
+        r1 = school_session.post(f"{API}/activities/{aid}/enroll", json={"student_ids": sids}, timeout=15)
+        assert r1.status_code in (200, 201), r1.text
+        assert r1.json()["enrolled"] == 3
+        # duplicate enroll => 0 added
+        r2 = school_session.post(f"{API}/activities/{aid}/enroll", json={"student_ids": sids}, timeout=15)
+        assert r2.status_code in (200, 201)
+        assert r2.json()["enrolled"] == 0, r2.json()
+        # roster
+        rr = school_session.get(f"{API}/activities/{aid}/roster", timeout=15)
+        assert rr.status_code == 200
+        roster = rr.json()
+        assert isinstance(roster, list)
+        assert len(roster) == 3
+        # unenroll one
+        du = school_session.delete(f"{API}/activities/{aid}/enroll/{sids[0]}", timeout=15)
+        assert du.status_code in (200, 204)
+        rr2 = school_session.get(f"{API}/activities/{aid}/roster", timeout=15).json()
+        assert len(rr2) == 2
+
+    def test_stats_summary(self, school_session):
+        r = school_session.get(f"{API}/activities/stats/summary", timeout=20)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        for k in ("total_activities", "active_activities", "by_category", "per_activity"):
+            assert k in body, body
+        assert body["total_activities"] >= 5
+        # per_activity sorted by enrolled desc
+        enrolled = [p["enrolled"] for p in body["per_activity"]]
+        assert enrolled == sorted(enrolled, reverse=True), enrolled
+
+
+class TestNotInClassAttendance:
+    def test_bulk_accepts_not_in_class(self, school_session):
+        students = school_session.get(f"{API}/students", timeout=15).json()
+        from datetime import date, timedelta
+        # use a past date to avoid collisions; tomorrow not allowed maybe — use 30 days back
+        d = (date.today() - timedelta(days=30)).isoformat()
+        entries = [{"student_id": students[0]["id"], "status": "not_in_class"}]
+        payload = {
+            "class_id": students[0]["class_id"],
+            "section": students[0]["section"],
+            "date": d, "entries": entries,
+        }
+        r = school_session.post(f"{API}/attendance/bulk", json=payload, timeout=15)
+        assert r.status_code in (200, 201), r.text
+        # fetch and ensure record exists with that status
+        ar = school_session.get(f"{API}/attendance", params={"date": d}, timeout=15)
+        assert ar.status_code == 200
+        rows = ar.json()
+        match = [x for x in rows if x.get("student_id") == students[0]["id"] and x.get("status") == "not_in_class"]
+        assert len(match) >= 1, rows[:5]
+
+
+class TestSchedulerDisabled:
+    def test_health_still_ok(self):
+        r = requests.get(f"{API}/health", timeout=10)
+        assert r.status_code == 200
+        assert r.json().get("status") == "ok"
+
+    def test_scheduler_module_imports(self):
+        # If backend is up, scheduler module must have imported without crash.
+        # Confirm by hitting any auth route — no 500.
+        r = requests.get(f"{API}/", timeout=10)
+        assert r.status_code == 200, r.text

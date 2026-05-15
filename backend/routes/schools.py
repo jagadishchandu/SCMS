@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from core.models import SchoolCreate, SchoolUpdate
 from core.auth import require_roles, hash_password, get_current_user
-from core.db import get_db
+from core.db import get_db, init_school_db, school_db_name
 from core.utils import new_id, utc_now, clean_doc
 
 router = APIRouter(prefix="/schools", tags=["schools"])
@@ -39,7 +39,13 @@ async def create_school(payload: SchoolCreate, user: dict = Depends(require_role
         "is_active": True,
         "created_at": utc_now(),
     }
+    school_doc["db_name"] = school_db_name(school_doc)
     await db.schools.insert_one(school_doc)
+    # Provision dedicated database with full index schema for this school
+    try:
+        await init_school_db(school_doc)
+    except Exception as e:
+        print(f"[schools] init_school_db failed for {school_id}: {e}")
 
     admin_doc = {
         "id": new_id(),

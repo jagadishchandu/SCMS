@@ -34,10 +34,12 @@ import FeesPage from "./pages/school/FeesPage";
 import TimetablePage from "./pages/school/TimetablePage";
 import TeacherPerformancePage from "./pages/school/TeacherPerformancePage";
 import UploadsPage from "./pages/school/UploadsPage";
+import ActivitiesPage from "./pages/school/ActivitiesPage";
 
 // Teacher
 import TeacherDashboard from "./pages/teacher/TeacherDashboard";
 import MyTimetable from "./pages/teacher/MyTimetable";
+import TeacherAttendanceCards from "./pages/teacher/TeacherAttendanceCards";
 
 // Accounts
 import AccountsDashboard from "./pages/accounts/AccountsDashboard";
@@ -87,12 +89,14 @@ export default function App() {
       <Route path="/school/performance" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(TeacherPerformancePage)}</ProtectedRoute>} />
       <Route path="/school/notifications" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(NotificationsLog)}</ProtectedRoute>} />
       <Route path="/school/uploads" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(UploadsPage)}</ProtectedRoute>} />
+      <Route path="/school/activities" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(ActivitiesPage)}</ProtectedRoute>} />
       <Route path="/school/calendar" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(CalendarPage)}</ProtectedRoute>} />
       <Route path="/school/audit" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(AuditLogPage)}</ProtectedRoute>} />
 
       {/* Teacher */}
       <Route path="/teacher" element={<ProtectedRoute allow={["teacher"]}>{withLayout(TeacherDashboard)}</ProtectedRoute>} />
       <Route path="/teacher/attendance" element={<ProtectedRoute allow={["teacher"]}>{withLayout(AttendancePage)}</ProtectedRoute>} />
+      <Route path="/teacher/attendance-cards" element={<ProtectedRoute allow={["teacher", "school_admin"]}>{withLayout(TeacherAttendanceCards)}</ProtectedRoute>} />
       <Route path="/teacher/marks" element={<ProtectedRoute allow={["teacher"]}>{withLayout(ExamsPage)}</ProtectedRoute>} />
       <Route path="/teacher/students" element={<ProtectedRoute allow={["teacher"]}>{withLayout(StudentsPage)}</ProtectedRoute>} />
       <Route path="/teacher/timetable" element={<ProtectedRoute allow={["teacher"]}>{withLayout(MyTimetable)}</ProtectedRoute>} />
