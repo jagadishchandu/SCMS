@@ -286,15 +286,35 @@ See `/app/memory/test_credentials.md`.
 ### Test status (cumulative)
 - **Backend: 171/171** — added 9 new tests; updated 2 existing tests to accept the new `whatsapp_not_configured` label.
 
+## v1.10 — Test-message buttons for WhatsApp / Telegram / SMTP (2026-05-15)
+
+**P1 — Validate integration creds without a real production message**
+- New endpoints in `routes/integration_tests.py` (school_admin + platform_admin only):
+  - `POST /api/integrations/test/whatsapp { to:"+91..." }` — tries Meta → Twilio
+  - `POST /api/integrations/test/telegram { chat_id? }` — falls back to user's own linked chat
+  - `POST /api/integrations/test/email { to:"x@y.com" }` — SMTP send
+  - `GET /api/integrations/test/status` — returns which providers are configured without leaking secrets
+- All return a structured `{ ok, provider, message_id, error, configured }` payload so the UI can show *why* something failed (e.g. *"TWILIO_WHATSAPP_FROM not set"*, *"Phone format invalid (use +CCXXXXXXXXXX)"*, *"chat_id missing — link your account with /start <email>"*).
+
+**Frontend — `/school/settings` integration tests section**
+- New `IntegrationTests` component appended below the branding form
+- 3 cards (WhatsApp / Telegram / Email) — each shows live "configured / not configured" pills + an inline Send-test form + result line
+- All inputs have `data-testid`s for E2E testing (`test-whatsapp-input`, `test-whatsapp-btn`, etc.)
+- Telegram card surfaces "your account linked" badge when `user.telegram_chat_id` is set
+
+**New tests**: `backend/tests/test_integration_tests.py` — 9 tests (status shape, RBAC for teacher/parent/anonymous, invalid email rejection, clear-error messaging when providers unconfigured).
+
+### Test status (cumulative)
+- **Backend: 180/180** — added 9 new tests for the test-message endpoints.
+
 ## Prioritized Backlog (refreshed)
 ### P1
 - Stripe / Razorpay automated subscription payments
-- "Send test message" buttons on `/school/settings` to validate WhatsApp / Telegram / SMTP creds
 
 ### P2
-- Wire uploads to Azure Blob once `AZURE_STORAGE_CONNECTION_STRING` is filled
+- Wire uploads (photos / medical certs / PDF receipts) to Azure Blob once `AZURE_STORAGE_CONNECTION_STRING` is filled
 - Recovery nudges post-expiry (day 1 / 3 / 7) before full lockout
-- WhatsApp message **template** registration UI (Meta requires pre-approved templates for messages sent outside the 24-hour session window)
+- Meta WhatsApp template approval workflow (for messages outside 24-hour session)
 
 ### P3
 - React Native shell reusing the same API

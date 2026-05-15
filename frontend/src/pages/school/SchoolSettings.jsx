@@ -169,6 +169,145 @@ export default function SchoolSettings() {
           </Section>
         </div>
       </div>
+
+      <div className="mt-10">
+        <IntegrationTests />
+      </div>
     </div>
+  );
+}
+
+// ---------------- Integration tests ----------------
+
+function IntegrationTests() {
+  const [status, setStatus] = useState(null);
+  const [whatsappTo, setWhatsappTo] = useState("");
+  const [telegramId, setTelegramId] = useState("");
+  const [emailTo, setEmailTo] = useState("");
+  const [busy, setBusy] = useState({});
+  const [results, setResults] = useState({});
+
+  useEffect(() => {
+    api.get("/integrations/test/status").then((r) => setStatus(r.data)).catch(() => {});
+  }, []);
+
+  const run = async (key, url, body) => {
+    setBusy((b) => ({ ...b, [key]: true }));
+    setResults((r) => ({ ...r, [key]: null }));
+    try {
+      const { data } = await api.post(url, body);
+      setResults((r) => ({ ...r, [key]: data }));
+      if (data.ok) toast.success(`${key} sent (${data.provider})`);
+      else toast.error(data.error || `${key} failed`);
+    } catch (err) {
+      const msg = formatApiError(err);
+      setResults((r) => ({ ...r, [key]: { ok: false, error: msg } }));
+      toast.error(msg);
+    } finally {
+      setBusy((b) => ({ ...b, [key]: false }));
+      // refresh status (linked_to_me may flip after a successful telegram test)
+      api.get("/integrations/test/status").then((r) => setStatus(r.data)).catch(() => {});
+    }
+  };
+
+  const Pill = ({ on }) => (
+    <span className={on ? "badge-success" : "badge-neutral"} data-testid={`pill-${on ? "on" : "off"}`}>
+      {on ? "configured" : "not configured"}
+    </span>
+  );
+
+  const ResultLine = ({ data, testid }) => {
+    if (!data) return null;
+    return (
+      <div className={`mt-2 text-xs ${data.ok ? "text-status-success" : "text-status-danger"}`} data-testid={testid}>
+        {data.ok ? `✅ sent via ${data.provider} · id ${data.message_id || "—"}`
+                 : `❌ ${data.error || "failed"}`}
+      </div>
+    );
+  };
+
+  return (
+    <Section title="Test integrations">
+      <p className="text-sm text-ink-soft mb-4">
+        Send a real test message to validate each integration before relying on it for parent alerts.
+      </p>
+
+      {/* WhatsApp */}
+      <div className="border border-line rounded-lg p-4 mb-3" data-testid="integration-whatsapp">
+        <div className="flex items-center justify-between mb-3">
+          <div className="font-medium">WhatsApp</div>
+          <div className="flex gap-2 text-[11px]">
+            <span>Meta: <Pill on={!!status?.meta_whatsapp?.configured} /></span>
+            <span>Twilio: <Pill on={!!status?.twilio_whatsapp?.configured} /></span>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <input className="input flex-1 min-w-[200px]"
+            placeholder="Recipient in E.164 format e.g. +919999999999"
+            value={whatsappTo} onChange={(e) => setWhatsappTo(e.target.value)}
+            data-testid="test-whatsapp-input" />
+          <button className="btn-primary"
+            disabled={!whatsappTo || busy.whatsapp}
+            onClick={() => run("whatsapp", "/integrations/test/whatsapp", { to: whatsappTo })}
+            data-testid="test-whatsapp-btn">
+            {busy.whatsapp ? "Sending…" : "Send test"}
+          </button>
+        </div>
+        <ResultLine data={results.whatsapp} testid="test-whatsapp-result" />
+      </div>
+
+      {/* Telegram */}
+      <div className="border border-line rounded-lg p-4 mb-3" data-testid="integration-telegram">
+        <div className="flex items-center justify-between mb-3">
+          <div className="font-medium">Telegram</div>
+          <div className="flex gap-2 text-[11px]">
+            <span>Bot: <Pill on={!!status?.telegram?.configured} /></span>
+            {status?.telegram?.linked_to_me && <span className="badge-success">your account linked</span>}
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <input className="input flex-1 min-w-[200px]"
+            placeholder="chat_id (leave blank to use your own linked account)"
+            value={telegramId} onChange={(e) => setTelegramId(e.target.value)}
+            data-testid="test-telegram-input" />
+          <button className="btn-primary"
+            disabled={busy.telegram}
+            onClick={() => run("telegram", "/integrations/test/telegram",
+                               telegramId ? { chat_id: Number(telegramId) || telegramId } : {})}
+            data-testid="test-telegram-btn">
+            {busy.telegram ? "Sending…" : "Send test"}
+          </button>
+        </div>
+        <div className="text-[11px] text-ink-muted mt-1">
+          To link your own account, open the bot on Telegram and send{" "}
+          <code>/start {`<your-email>`}</code>.
+        </div>
+        <ResultLine data={results.telegram} testid="test-telegram-result" />
+      </div>
+
+      {/* Email */}
+      <div className="border border-line rounded-lg p-4" data-testid="integration-email">
+        <div className="flex items-center justify-between mb-3">
+          <div className="font-medium">Email (SMTP)</div>
+          <div className="flex gap-2 text-[11px]">
+            <span>SMTP: <Pill on={!!status?.smtp?.configured} /></span>
+            {status?.smtp?.from && <span className="text-ink-muted truncate">from {status.smtp.from}</span>}
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <input type="email" className="input flex-1 min-w-[200px]"
+            placeholder="recipient@example.com"
+            value={emailTo} onChange={(e) => setEmailTo(e.target.value)}
+            data-testid="test-email-input" />
+          <button className="btn-primary"
+            disabled={!emailTo || busy.email}
+            onClick={() => run("email", "/integrations/test/email", { to: emailTo })}
+            data-testid="test-email-btn">
+            {busy.email ? "Sending…" : "Send test"}
+          </button>
+        </div>
+        <ResultLine data={results.email} testid="test-email-result" />
+      </div>
+    </Section>
   );
 }
