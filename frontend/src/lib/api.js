@@ -1,6 +1,10 @@
 import axios from "axios";
 
-const baseURL = `${process.env.REACT_APP_BACKEND_URL}/api`;
+// `REACT_APP_BACKEND_URL` may be empty when the React build is served behind the same
+// nginx that proxies /api/* to the backend (the default for docker-compose). In that case
+// we use a relative baseURL so the browser hits the same origin as the page.
+const RAW = process.env.REACT_APP_BACKEND_URL || "";
+const baseURL = RAW ? `${RAW.replace(/\/$/, "")}/api` : "/api";
 
 export const api = axios.create({
   baseURL,

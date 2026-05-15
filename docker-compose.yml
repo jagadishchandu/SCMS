@@ -1,65 +1,124 @@
-version: "3.9"
+# Docker Compose for SCMS — School Child Monitoring System
+#
+# Quick start:
+#   1. cp .env.example .env  (then edit the secrets you care about)
+#   2. docker compose up --build
+#   3. Open http://localhost:3000
+#
+# Network layout (all containers join the default `scms_net` bridge):
+#   - mongo:27017      ← only reachable from inside the network (port not exposed by default)
+#   - backend:8001     ← FastAPI; reachable on the host at http://localhost:8001
+#   - frontend:3000    ← nginx serving the React build; proxies /api/* to backend:8001
+#
+# How requests flow (production / docker):
+#   Browser → http://localhost:3000 → nginx (frontend container)
+#     ├─ /              → static React bundle
+#     └─ /api/*         → proxy_pass http://backend:8001   (see frontend/nginx.conf)
+#
+# REACT_APP_BACKEND_URL build-arg:
+#   - Leave EMPTY for docker-compose deployments. The React build uses relative `/api`
+#     paths and nginx handles the proxy. This is the simplest and most secure setup.
+#   - Set to your public HTTPS URL (e.g. https://api.school.com) ONLY if you serve
+#     the frontend from a different origin than the backend. CORS_ORIGINS below must
+#     include the frontend origin in that case.
 
 services:
   mongo:
     image: mongo:7
+    container_name: scms_mongo
     restart: unless-stopped
-    ports:
-      - "27017:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     volumes:
       - mongo_data:/data/db
+    networks:
+      - scms_net
+    # Uncomment if you want to connect to Mongo from your host machine (e.g. Compass).
+    # ports:
+    #   - "27017:27017"
 
   backend:
     build:
       context: ./backend
+    container_name: scms_backend
     restart: unless-stopped
     depends_on:
-      - mongo
+      mongo:
+        condition: service_healthy
     environment:
+      # --- Database (uses docker service name `mongo`) ---
       MONGO_URL: "mongodb://mongo:27017"
-      DB_NAME: "scms_db"
-      JWT_SECRET: "${JWT_SECRET:-9f3b7e2a1c8d4e6f5a0b3c2d1e4f7a8b9c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f}"
-      # Platform Super Admin credentials — provisioned once at startup. Override in your
-      # .env or shell to set production values (e.g. `ADMIN_EMAIL=you@school.com docker compose up`).
+      DB_NAME: "${DB_NAME:-scms_db}"
+
+      # --- Auth ---
+      JWT_SECRET: "${JWT_SECRET:-CHANGE-ME-IN-PRODUCTION-9f3b7e2a1c8d4e6f5a0b3c2d1e4f7a8b9c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f}"
+      # The ONE Platform Super Admin (provisioned at startup)
       ADMIN_EMAIL: "${ADMIN_EMAIL:-jagadishchandu789@gmail.com}"
       ADMIN_PASSWORD: "${ADMIN_PASSWORD:-Manasa@123}"
-      FRONTEND_URL: "http://localhost:3000"
-      CORS_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000"
-      # Feature gates (default off; flip to "true" in your env to enable)
+
+      # --- CORS / Origins ---
+      # When the frontend is served from the SAME origin as the backend (via nginx proxy),
+      # CORS is technically unnecessary — but listing localhost:3000 keeps it working when
+      # you run yarn start locally against the dockerized backend.
+      FRONTEND_URL: "${FRONTEND_URL:-http://localhost:3000}"
+      CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000,http://frontend:3000}"
+
+      # --- Feature flags ---
       ENABLE_DIGEST_SCHEDULER: "${ENABLE_DIGEST_SCHEDULER:-false}"
       ENABLE_SUBSCRIPTION_GUARD: "${ENABLE_SUBSCRIPTION_GUARD:-true}"
       SUBSCRIPTION_GRACE_DAYS: "${SUBSCRIPTION_GRACE_DAYS:-3}"
-      # Twilio (optional — leave blank to keep notifications queued)
+
+      # --- Twilio (optional — blank = notifications stay queued) ---
       TWILIO_ACCOUNT_SID: "${TWILIO_ACCOUNT_SID:-}"
       TWILIO_AUTH_TOKEN: "${TWILIO_AUTH_TOKEN:-}"
       TWILIO_WHATSAPP_FROM: "${TWILIO_WHATSAPP_FROM:-}"
-      # Azure Blob storage (optional — leave blank to use in-DB base64 storage)
+
+      # --- Azure Blob storage (optional — blank = base64 in DB) ---
       AZURE_STORAGE_CONNECTION_STRING: "${AZURE_STORAGE_CONNECTION_STRING:-}"
       AZURE_STORAGE_CONTAINER: "${AZURE_STORAGE_CONTAINER:-}"
       AZURE_STORAGE_ACCOUNT_URL: "${AZURE_STORAGE_ACCOUNT_URL:-}"
-      # SMTP — provider-agnostic email channel for digests and other notifications.
-      # Leave SMTP_HOST blank to keep email notifications queued.
+
+      # --- SMTP (optional — blank = emails stay queued) ---
       SMTP_HOST: "${SMTP_HOST:-}"
       SMTP_PORT: "${SMTP_PORT:-587}"
       SMTP_USER: "${SMTP_USER:-}"
       SMTP_PASSWORD: "${SMTP_PASSWORD:-}"
       SMTP_FROM: "${SMTP_FROM:-}"
       SMTP_USE_SSL: "${SMTP_USE_SSL:-false}"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8001/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     ports:
       - "8001:8001"
+    networks:
+      - scms_net
 
   frontend:
     build:
       context: ./frontend
       args:
-        # The React build bakes this in at build time. Set it to your public API URL.
-        # For local docker-compose, the nginx config also proxies /api/* to the backend service.
+        # Leave EMPTY for docker — React uses relative /api and nginx proxies to backend:8001.
         REACT_APP_BACKEND_URL: "${REACT_APP_BACKEND_URL:-}"
+    container_name: scms_frontend
     restart: unless-stopped
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
       - "3000:3000"
+    networks:
+      - scms_net
+
+networks:
+  scms_net:
+    driver: bridge
 
 volumes:
   mongo_data:

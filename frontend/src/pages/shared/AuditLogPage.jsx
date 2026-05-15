@@ -40,8 +40,13 @@ export default function AuditLogPage() {
   const exportCsv = async () => {
     try {
       const params = Object.fromEntries(Object.entries(filters).filter(([_, v]) => v));
-      // Use raw fetch to download blob with cookies
-      const url = new URL(`${api.defaults.baseURL}/audit/export.csv`);
+      // baseURL is either an absolute origin (https://api.school.com/api) or just "/api"
+      // when the React build was made without REACT_APP_BACKEND_URL (docker-compose case).
+      // Build URL safely with window.location as fallback base.
+      const base = api.defaults.baseURL.startsWith("http")
+        ? api.defaults.baseURL
+        : `${window.location.origin}${api.defaults.baseURL}`;
+      const url = new URL(`${base}/audit/export.csv`);
       Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
       const res = await fetch(url.toString(), { credentials: "include" });
       if (!res.ok) throw new Error(`Export failed (${res.status})`);
