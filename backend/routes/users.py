@@ -120,3 +120,34 @@ async def set_my_language(payload: LanguagePayload, user: dict = Depends(get_cur
     db = get_db()
     await db.users.update_one({"id": user["id"]}, {"$set": {"language": payload.language}})
     return {"ok": True, "language": payload.language}
+
+
+class ChangePasswordPayload(_BaseModel):
+    current_password: str
+    new_password: str
+
+
+@router.post("/me/change-password")
+async def change_my_password(
+    payload: ChangePasswordPayload, user: dict = Depends(get_current_user)
+):
+    """Self-service password change for any authenticated user.
+    Requires the user's current password for verification.
+    """
+    from core.auth import verify_password as _verify, hash_password as _hash
+
+    if len(payload.new_password) < 6:
+        raise HTTPException(status_code=400, detail="New password must be at least 6 characters")
+    if payload.new_password == payload.current_password:
+        raise HTTPException(status_code=400, detail="New password must be different from current password")
+
+    db = get_db()
+    full = await db.users.find_one({"id": user["id"]})
+    if not full or not _verify(payload.current_password, full["password_hash"]):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+    await db.users.update_one(
+        {"id": user["id"]},
+        {"$set": {"password_hash": _hash(payload.new_password), "password_changed_at": utc_now()}},
+    )
+    return {"ok": True}

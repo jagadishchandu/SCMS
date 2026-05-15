@@ -308,6 +308,54 @@ See `/app/memory/test_credentials.md`.
 - **Backend: 180/180** — added 9 new tests for the test-message endpoints.
 
 ## v1.11 — Strict role-validation on Login + Platform Super Admin in dropdown (2026-05-15)
+- Platform Super Admin now appears in the login role dropdown (first option). Every role must pick the correct role — no exception for super admin.
+- On wrong-role attempt, the JWT cookie is cleared via `logout()` so the user can't bypass the check by manually visiting `/school` or `/platform`.
+- Placeholders on the login form are generic — no real credentials displayed.
+
+## v1.12 — Self-service password change + full onboarding e2e test (2026-05-15)
+
+**Self-service password change for every role**
+- New endpoint `POST /api/users/me/change-password { current_password, new_password }`
+  - Verifies the user's current password before applying the change.
+  - Enforces `new != current` and `len(new) >= 6`.
+  - Stores `password_changed_at` timestamp.
+- Available to **all authenticated users** (platform_admin / school_admin / teacher / accounts / parent).
+- New **Topbar key-icon button** (`data-testid="change-password-btn"`) opens a modal (`change-password-modal`).
+  - On success: toast → auto-logout → redirect to `/login` so the new password becomes the source of truth for the session.
+
+**Reported bug: "school admin can't log in after super admin creates the school"**
+- Verified end-to-end **not reproducible** — backend creates the admin row correctly and the login succeeds. The most likely cause is the role dropdown — the new role-validation logic (v1.11) will now show a clear error if the user picks the wrong role.
+
+**New end-to-end test suite — `backend/tests/test_e2e_school_flow.py`**
+14 fresh tests covering the full onboarding chain the user asked us to validate:
+1. Platform admin → creates school + school_admin via `POST /schools`
+2. New school admin can log in with the provided creds; invalid pw rejected
+3. School admin creates a class via `POST /academic/classes`
+4. School admin creates a teacher via `POST /users` (saved & visible in list)
+5. New teacher can log in
+6. School admin promotes the teacher to class teacher (`POST /academic/class-teacher`)
+7. Teacher creates a student via `POST /students` (saved & parent user auto-created)
+8. Parent can log in with default `Parent@123` password
+9. Parent sees ONLY their own child in `GET /students`
+10–14. Change-password works for every role + rejects wrong-current / short / same-as-current / anonymous.
+
+### Test status (cumulative)
+- **Backend: 194/194 pass** (was 180; +14 new e2e tests).
+- **Frontend smoke**: change-password modal verified live — original password rejected after change, new password works, then reverted back.
+
+## Prioritized Backlog (refreshed)
+### P1
+- Stripe / Razorpay automated subscription payments
+- Password Reset (forgot password) via SMTP — public endpoint for users who can't log in at all
+
+### P2
+- Wire uploads (photos / medical certs / PDF receipts) to Azure Blob once `AZURE_STORAGE_CONNECTION_STRING` is filled
+- Recovery nudges post-expiry (day 1 / 3 / 7) before full lockout (i18n templates ready; scheduler wiring pending)
+- Meta WhatsApp template approval workflow (for messages outside 24-hour session)
+
+### P3
+- React Native shell reusing the same API
+- Public school directory + admissions inquiry
 
 **User-driven change**
 - The Platform Super Admin role is now part of the login dropdown (`Platform Super Admin` is the first option). No more "hidden door" — every role logs in the same way, but the chosen role MUST match the account's actual role.
