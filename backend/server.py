@@ -262,14 +262,29 @@ async def seed_demo_data():
 
     for i, s in enumerate(students):
         paid = 16000 if i % 3 == 0 else (8000 if i % 3 == 1 else 0)
+        fee_id = new_id()
         await db.fees.insert_one({
-            "id": new_id(), "school_id": school_id, "structure_id": fs["id"],
+            "id": fee_id, "school_id": school_id, "structure_id": fs["id"],
             "student_id": s["id"], "class_id": s["class_id"],
             "name": fs["name"], "total": 16000, "paid": paid,
             "due": 16000 - paid, "due_date": fs["due_date"],
             "status": "paid" if paid == 16000 else ("partial" if paid > 0 else "pending"),
             "created_at": utc_now(),
         })
+        # Also seed a matching fee_payments row so PDF receipt + parent payment history is usable
+        if paid > 0:
+            await db.fee_payments.insert_one({
+                "id": new_id(),
+                "school_id": school_id,
+                "fee_id": fee_id,
+                "student_id": s["id"],
+                "amount": paid,
+                "mode": "online" if i % 2 == 0 else "bank_transfer",
+                "note": "Seed payment",
+                "receipt_no": f"RCPT-DEMO{i+1:03d}",
+                "recorded_by": acc["id"],
+                "created_at": utc_now(),
+            })
 
     # holidays
     for title, d in [("Republic Day", "2025-01-26"), ("Holi", "2025-03-14"), ("Independence Day", "2025-08-15")]:
@@ -281,12 +296,47 @@ async def seed_demo_data():
     print(f"[seed] Demo data complete. School: {school_id}")
 
 
+async def backfill_demo_payments():
+    """One-time backfill: existing DEMO school may have fees.paid > 0 but no fee_payments rows.
+    Insert matching fee_payments so parents see receipts immediately."""
+    db = get_db()
+    school = await db.schools.find_one({"code": "DEMO"})
+    if not school:
+        return
+    # find fees with paid > 0 that have NO matching fee_payments
+    fees = await db.fees.find({"school_id": school["id"], "paid": {"$gt": 0}}, {"_id": 0}).to_list(2000)
+    if not fees:
+        return
+    acc = await db.users.find_one({"school_id": school["id"], "role": "accounts"})
+    inserted = 0
+    for i, f in enumerate(fees):
+        # skip if a payment already exists for this fee
+        if await db.fee_payments.find_one({"fee_id": f["id"]}):
+            continue
+        await db.fee_payments.insert_one({
+            "id": new_id(),
+            "school_id": school["id"],
+            "fee_id": f["id"],
+            "student_id": f["student_id"],
+            "amount": f["paid"],
+            "mode": "online" if i % 2 == 0 else "bank_transfer",
+            "note": "Seed payment (backfill)",
+            "receipt_no": f"RCPT-DEMO{i+1:03d}",
+            "recorded_by": acc["id"] if acc else None,
+            "created_at": utc_now(),
+        })
+        inserted += 1
+    if inserted:
+        print(f"[seed] Backfilled {inserted} fee_payments for DEMO school.")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
         await ensure_indexes()
         await seed_platform_admin()
         await seed_demo_data()
+        await backfill_demo_payments()
     except Exception as e:
         print(f"[startup] error: {e}")
     yield
