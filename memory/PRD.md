@@ -129,3 +129,51 @@ See `/app/memory/test_credentials.md`.
 ### P3
 - React Native mobile shell reusing the same API
 - Public school directory + admissions inquiry page
+
+## v1.5 — Bug fixes + P1 features + P2 expiry guard (2026-05-15)
+
+**Bug fixes (from user report)**
+- Teachers can now create students for classes/sections they teach (`POST /students` opened to `teacher` with `_teacher_class_filter` gating; wrong-section returns 403).
+- Teachers can now Excel-bulk-upload students (`POST /uploads/students` opened to `teacher`; rows in classes they don't teach are reported in `errors[]` instead of blocking the request).
+- Teacher sidebar now has **Bulk Uploads** + **Sick Leaves** links; `/teacher/uploads`, `/teacher/sick-leaves`, `/parent/sick-leaves`, `/school/sick-leaves` routes added.
+
+**P1 — Audit log filters & search UI**
+- `GET /api/audit` accepts `actor_role`, `action`, `resource`, `school_id`, `date_from`, `date_to`, `q`, `limit`.
+- New `GET /api/audit/facets` returns distinct values for filter dropdowns.
+- New audit page UI: 7 filter inputs (search, role, action, resource, from, to, limit) + apply/clear buttons, actor name + email column.
+
+**P1 — Recurring sick-leave tracker with medical certificate upload**
+- `POST /api/sick-leaves` — multi-day leave; auto-marks attendance `sick` for weekdays in the span (school admin / teacher (own class) / parent (own child)).
+- `POST /api/sick-leaves/{id}/certificate` — base64 stored PDF/image up to 5 MB.
+- `GET /api/sick-leaves/recurring?threshold=3&days=90` — aggregation of students with ≥3 leaves in the window, shown as a highlight card on the page.
+- New unified `SickLeavesPage` for school admin / teacher / parent with KPIs (count, total days, with-certificate), recurring highlights, filter-by-UID, and inline cert upload.
+
+**P2 — Subscription expiry guard (opt-in)**
+- New middleware `core/subscription_guard.py` registered when `ENABLE_SUBSCRIPTION_GUARD=true`.
+- Blocks write methods (`POST/PATCH/PUT/DELETE`) for schools whose `subscription.valid_until` has passed.
+- Always-allowed prefixes: `/api/auth/`, `/api/subscriptions/` so users can log in and pay.
+- Platform admin and schools without an `active` subscription (first-run) pass through unchanged.
+- Response: `402 {"detail":"Subscription expired","code":"subscription_expired","valid_until":"...","renew_url":"/school/subscription"}`.
+
+**Misc**
+- Azure Blob env vars added as placeholders (`AZURE_STORAGE_CONNECTION_STRING`, `AZURE_STORAGE_CONTAINER`, `AZURE_STORAGE_ACCOUNT_URL`) — uploads will route to Azure once these are filled.
+- Docker compose forwards all new env vars.
+- README fully refreshed.
+
+### Test status (cumulative)
+- **Backend: 115/115 pytest pass** (iter6 added 22 new tests; iter5 analytics fix verified holding).
+- Frontend smoke verified across teacher / school / parent / platform routes.
+
+## Prioritized Backlog (refreshed)
+### P1
+- Stripe / Razorpay automated subscription payments (replace manual confirmation)
+- Email digest channel (parallel to WhatsApp)
+- Audit log CSV export from the filter UI
+
+### P2
+- Route uploads (photos, medical certs, PDF receipts) to Azure Blob once `AZURE_STORAGE_CONNECTION_STRING` is set
+- Multilingual WhatsApp templates (English / Hindi / regional Indian languages)
+
+### P3
+- React Native shell reusing the API
+- Public school directory + admissions inquiry

@@ -99,11 +99,9 @@ export default function AuditLogPage() {
           <button className="btn-primary" onClick={load} disabled={loading} data-testid="audit-apply">
             <FunnelSimple size={14} /> {loading ? "Loading…" : `Apply filters${activeFilters ? ` (${activeFilters})` : ""}`}
           </button>
-          {activeFilters > 0 && (
-            <button className="btn-secondary" onClick={clear} data-testid="audit-clear">
-              <X size={14} /> Clear
-            </button>
-          )}
+          <button className="btn-secondary" onClick={clear} disabled={activeFilters === 0} data-testid="audit-clear">
+            <X size={14} /> Clear
+          </button>
         </div>
       </Section>
 
