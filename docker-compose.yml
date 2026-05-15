@@ -44,6 +44,10 @@ services:
     build:
       context: .
       dockerfile: frontend/Dockerfile
+      args:
+        # The React build bakes this in at build time. Set it to your public API URL.
+        # For local docker-compose, the nginx config also proxies /api/* to the backend service.
+        REACT_APP_BACKEND_URL: "${REACT_APP_BACKEND_URL:-}"
     restart: unless-stopped
     depends_on:
       - backend
