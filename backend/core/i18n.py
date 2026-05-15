@@ -143,6 +143,19 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "bn": "{school_name}: আপনার SCMS সাবস্ক্রিপশন {valid_until} তারিখে শেষ হবে ({days_left} দিন বাকি)। {renew_url} এ নবায়ন করুন।",
         "gu": "{school_name}: તમારી SCMS સબ્સ્ક્રિપ્શન {valid_until} ના રોજ સમાપ્ત થાય છે ({days_left} દિવસ બાકી). {renew_url} પર નવીકરણ કરો.",
     },
+    # ---------- Post-expiry recovery nudges (day 1 / 3 / 7) ----------
+    # `{stage_label}` is supplied by the caller as a localized urgency phrase below;
+    # `{days_overdue}` is the integer number of days past valid_until.
+    "subscription_recovery": {
+        "en": "{stage_label} — {school_name}: your SCMS subscription expired {days_overdue} day(s) ago. {action_line} Renew at {renew_url}.",
+        "hi": "{stage_label} — {school_name}: आपकी SCMS सदस्यता को {days_overdue} दिन हो गए हैं। {action_line} {renew_url} पर रिन्यू करें।",
+        "ta": "{stage_label} — {school_name}: உங்கள் SCMS சந்தா {days_overdue} நாட்களாக காலாவதியாகியுள்ளது. {action_line} {renew_url} இல் புதுப்பிக்கவும்.",
+        "te": "{stage_label} — {school_name}: మీ SCMS సబ్‌స్క్రిప్షన్ {days_overdue} రోజుల క్రితం ముగిసింది. {action_line} {renew_url} వద్ద పునరుద్ధరించండి.",
+        "kn": "{stage_label} — {school_name}: ನಿಮ್ಮ SCMS ಚಂದಾದಾರಿಕೆ {days_overdue} ದಿನಗಳ ಹಿಂದೆ ಮುಗಿದಿದೆ. {action_line} {renew_url} ನಲ್ಲಿ ನವೀಕರಿಸಿ.",
+        "mr": "{stage_label} — {school_name}: तुमची SCMS सदस्यता {days_overdue} दिवसांपूर्वी संपली. {action_line} {renew_url} वर नूतनीकरण करा.",
+        "bn": "{stage_label} — {school_name}: আপনার SCMS সাবস্ক্রিপশন {days_overdue} দিন আগে শেষ হয়েছে। {action_line} {renew_url} এ নবায়ন করুন।",
+        "gu": "{stage_label} — {school_name}: તમારી SCMS સબ્સ્ક્રિપ્શન {days_overdue} દિવસ પહેલા સમાપ્ત થઈ. {action_line} {renew_url} પર નવીકરણ કરો.",
+    },
 }
 
 
@@ -164,3 +177,57 @@ def render(name: str, lang: str | None, **kwargs: Any) -> str:
 
 def supported_languages() -> list[dict]:
     return [{"code": c, "label": LANGUAGE_LABELS[c]} for c in SUPPORTED_LANGUAGES]
+
+
+# Stage 1 = day 1 (friendly), 2 = day 3 (action), 3 = day 7+ (final/locked).
+RECOVERY_STAGE_LABEL = {
+    1: {"en": "Friendly reminder", "hi": "मित्रवत अनुस्मारक", "ta": "நட்பான நினைவூட்டல்",
+        "te": "స్నేహపూర్వక గుర్తుచేత", "kn": "ಸ್ನೇಹಪರ ಜ್ಞಾಪನೆ", "mr": "मैत्रीपूर्ण आठवण",
+        "bn": "বন্ধুত্বপূর্ণ স্মরণ", "gu": "મિત્રતાભર્યું સ્મરણ"},
+    2: {"en": "Action needed", "hi": "कार्रवाई आवश्यक", "ta": "நடவடிக்கை தேவை",
+        "te": "చర్య అవసరం", "kn": "ಕ್ರಮ ಅಗತ್ಯವಿದೆ", "mr": "कार्यवाही आवश्यक",
+        "bn": "পদক্ষেপ প্রয়োজন", "gu": "પગલાં જરૂરી"},
+    3: {"en": "Final notice", "hi": "अंतिम सूचना", "ta": "இறுதி அறிவிப்பு",
+        "te": "చివరి నోటీసు", "kn": "ಅಂತಿಮ ಸೂಚನೆ", "mr": "अंतिम सूचना",
+        "bn": "চূড়ান্ত নোটিশ", "gu": "અંતિમ સૂચના"},
+}
+
+RECOVERY_ACTION_LINE = {
+    1: {"en": "Your grace period is still on — please renew to avoid any interruption.",
+        "hi": "आपकी छूट अवधि अभी सक्रिय है — किसी रुकावट से बचने के लिए कृपया रिन्यू करें।",
+        "ta": "உங்கள் சலுகை காலம் இன்னும் செயலில் உள்ளது — தடைகள் இல்லாமல் இருக்க புதுப்பிக்கவும்.",
+        "te": "మీ గ్రేస్ పీరియడ్ ఇంకా ఆన్ ఉంది — అంతరాయం లేకుండా ఉండడానికి పునరుద్ధరించండి.",
+        "kn": "ನಿಮ್ಮ ಕೃಪಾ ಅವಧಿ ಇನ್ನೂ ಚಾಲ್ತಿಯಲ್ಲಿದೆ — ಯಾವುದೇ ಅಡಚಣೆ ತಪ್ಪಿಸಲು ನವೀಕರಿಸಿ.",
+        "mr": "तुमचा सवलत कालावधी अजून सुरू आहे — व्यत्यय टाळण्यासाठी कृपया नूतनीकरण करा.",
+        "bn": "আপনার গ্রেস পিরিয়ড এখনও চালু আছে — কোনও বাধা এড়াতে দয়া করে নবায়ন করুন।",
+        "gu": "તમારી ગ્રેસ પીરિયડ હજુ ચાલુ છે — કોઈપણ વિક્ષેપ ટાળવા માટે કૃપા કરી નવીકરણ કરો."},
+    2: {"en": "Write actions will be blocked tomorrow if you don't renew.",
+        "hi": "यदि आप कल तक रिन्यू नहीं करते हैं, तो लिखने की कार्रवाइयां रोक दी जाएंगी।",
+        "ta": "நாளை வரை புதுப்பிக்கவில்லை என்றால் எழுத்து செயல்கள் தடுக்கப்படும்.",
+        "te": "మీరు పునరుద్ధరించకపోతే రేపటి నుంచి రాత చర్యలు బ్లాక్ చేయబడతాయి.",
+        "kn": "ನೀವು ನವೀಕರಿಸದಿದ್ದರೆ ನಾಳೆಯಿಂದ ಬರೆಯುವ ಕ್ರಿಯೆಗಳು ನಿರ್ಬಂಧಿಸಲಾಗುತ್ತದೆ.",
+        "mr": "तुम्ही उद्यापर्यंत नूतनीकरण न केल्यास लिहिण्याच्या क्रिया अवरोधित केल्या जातील.",
+        "bn": "আপনি যদি কাল পর্যন্ত নবায়ন না করেন, লেখার কার্যক্রম ব্লক হয়ে যাবে।",
+        "gu": "જો તમે કાલ સુધી નવીકરણ ન કરો તો લખવાની ક્રિયાઓ બ્લોક થઈ જશે."},
+    3: {"en": "Your school is now read-only. Teachers can't mark attendance or enter marks until you renew.",
+        "hi": "आपका स्कूल अब केवल-पठनीय है। रिन्यू करने तक शिक्षक उपस्थिति या अंक दर्ज नहीं कर सकते।",
+        "ta": "உங்கள் பள்ளி இப்போது படிக்க மட்டுமே. புதுப்பிக்கும் வரை ஆசிரியர்கள் வருகை அல்லது மதிப்பெண்களை பதிய முடியாது.",
+        "te": "మీ స్కూల్ ఇప్పుడు రీడ్-ఓన్లీ. మీరు పునరుద్ధరించే వరకు టీచర్లు హాజరు లేదా మార్కులు నమోదు చేయలేరు.",
+        "kn": "ನಿಮ್ಮ ಶಾಲೆ ಈಗ ಓದಲು ಮಾತ್ರ. ನೀವು ನವೀಕರಿಸುವವರೆಗೆ ಶಿಕ್ಷಕರು ಹಾಜರಾತಿ ಅಥವಾ ಅಂಕಗಳನ್ನು ನಮೂದಿಸಲಾಗದು.",
+        "mr": "तुमची शाळा आता फक्त-वाचनीय आहे. नूतनीकरण होईपर्यंत शिक्षक उपस्थिती किंवा गुण नोंदवू शकत नाहीत.",
+        "bn": "আপনার স্কুল এখন শুধুমাত্র পড়ার জন্য। নবায়ন না হওয়া পর্যন্ত শিক্ষকরা উপস্থিতি বা নম্বর প্রবেশ করতে পারবেন না।",
+        "gu": "તમારી શાળા હવે ફક્ત-વાંચન છે. નવીકરણ થાય ત્યાં સુધી શિક્ષકો હાજરી અથવા ગુણ દાખલ કરી શકતા નથી."},
+}
+
+
+def render_recovery(stage: int, lang: str | None, **kwargs: Any) -> str:
+    """Render the subscription_recovery template with the stage-specific label + action line.
+
+    `stage` is 1 (day-1, friendly), 2 (day-3, urgent), or 3 (day-7+, final/locked).
+    """
+    lang = (lang or "en").lower()
+    label = RECOVERY_STAGE_LABEL.get(stage, RECOVERY_STAGE_LABEL[1]).get(lang) \
+        or RECOVERY_STAGE_LABEL[stage]["en"]
+    action = RECOVERY_ACTION_LINE.get(stage, RECOVERY_ACTION_LINE[1]).get(lang) \
+        or RECOVERY_ACTION_LINE[stage]["en"]
+    return render("subscription_recovery", lang, stage_label=label, action_line=action, **kwargs)
