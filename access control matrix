@@ -1,0 +1,698 @@
+Below is a paste-ready access control matrix for your school platform.
+
+Access Control Matrix
+1. Permission Legend
+
+F = Full access (create, view, edit, delete, assign, approve)
+V = View only
+AO = Assigned only
+OO = Own only
+NO = No access
+L = Limited access
+A = Approve/authorize
+
+
+2. Roles
+
+Platform Super Admin
+School Super Admin
+Teacher
+Class Teacher
+Accounts / Fee Manager
+Parent
+Student (optional later)
+
+
+3. Access Control Matrix
+
+
+
+Module / Feature
+Platform Super Admin
+School Super Admin
+Teacher
+Class Teacher
+Accounts / Fee Manager
+Parent
+Student
+
+
+
+
+Platform settings
+F
+NO
+NO
+NO
+NO
+NO
+NO
+
+
+School creation
+F
+NO
+NO
+NO
+NO
+NO
+NO
+
+
+School profile/settings
+F
+F
+NO
+NO
+NO
+NO
+NO
+
+
+User creation
+F
+F
+NO
+NO
+NO
+NO
+NO
+
+
+User roles/permissions
+F
+F
+NO
+NO
+NO
+NO
+NO
+
+
+View user details
+F
+F
+NO
+NO
+NO
+NO
+NO
+
+
+View teacher details
+F
+F
+NO
+NO
+NO
+NO
+NO
+
+
+Create teacher accounts
+F
+F
+NO
+NO
+NO
+NO
+NO
+
+
+Teacher own profile
+F
+F
+OO
+OO
+NO
+NO
+NO
+
+
+Teacher attendance/status
+F
+F
+OO
+OO
+NO
+NO
+NO
+
+
+Teacher calendar/timetable
+F
+F
+OO
+OO
+NO
+NO
+NO
+
+
+Student creation
+F
+F
+NO
+NO
+NO
+NO
+NO
+
+
+Student profile
+F
+F
+AO
+AO
+L
+AO
+OO
+
+
+Student academic status
+F
+F
+AO
+AO
+NO
+AO
+OO
+
+
+Student attendance status
+F
+F
+AO
+AO
+NO
+AO
+OO
+
+
+Student leave/sick leave
+F
+F
+AO
+AO
+NO
+AO
+OO
+
+
+Student fee status
+F
+F
+NO
+NO
+F
+AO
+OO
+
+
+Parent details
+F
+F
+AO
+AO
+L
+OO
+NO
+
+
+Parent communication logs
+F
+F
+L
+L
+L
+OO
+NO
+
+
+Class/section setup
+F
+F
+NO
+NO
+NO
+NO
+NO
+
+
+Subject setup
+F
+F
+NO
+NO
+NO
+NO
+NO
+
+
+Student-class assignment
+F
+F
+NO
+NO
+NO
+NO
+NO
+
+
+Class teacher assignment
+F
+F
+NO
+NO
+NO
+NO
+NO
+
+
+Attendance entry
+F
+F
+AO
+AO
+NO
+NO
+NO
+
+
+Attendance edit/correction
+F
+F
+L
+L
+NO
+NO
+NO
+
+
+Attendance bulk Excel upload
+F
+F
+AO
+AO
+NO
+NO
+NO
+
+
+Marks entry
+F
+F
+AO
+AO
+NO
+NO
+NO
+
+
+Marks edit/update
+F
+F
+AO
+AO
+NO
+NO
+NO
+
+
+Marks bulk Excel upload
+F
+F
+AO
+AO
+NO
+NO
+NO
+
+
+Teacher remarks
+F
+F
+AO
+AO
+NO
+AO
+OO
+
+
+Holidays management
+F
+F
+V
+V
+NO
+V
+V
+
+
+Exam schedule create/publish
+F
+F
+L
+L
+NO
+V
+V
+
+
+Exam schedule view
+F
+F
+AO
+AO
+NO
+AO
+OO
+
+
+Exam syllabus upload
+F
+F
+AO
+AO
+NO
+V
+V
+
+
+Exam syllabus view
+F
+F
+AO
+AO
+NO
+AO
+OO
+
+
+Fee structure setup
+F
+F
+NO
+NO
+F
+NO
+NO
+
+
+Fee assignment to students
+F
+F
+NO
+NO
+F
+NO
+NO
+
+
+Fee payment entry
+F
+F
+NO
+NO
+F
+NO
+NO
+
+
+Fee receipt generation
+F
+F
+NO
+NO
+F
+AO
+AO
+
+
+Fee reports
+F
+F
+NO
+NO
+F
+AO
+NO
+
+
+WhatsApp template setup
+F
+F
+NO
+NO
+NO
+NO
+NO
+
+
+Send absence alerts
+F
+F
+A/L
+A/L
+NO
+Receive
+Receive
+
+
+Send holiday alerts
+F
+F
+NO
+NO
+NO
+Receive
+Receive
+
+
+Send exam alerts
+F
+F
+L
+L
+NO
+Receive
+Receive
+
+
+Send syllabus alerts
+F
+F
+L
+L
+NO
+Receive
+Receive
+
+
+Send fee alerts
+F
+F
+NO
+NO
+F
+Receive
+NO
+
+
+Student dashboard by unique ID
+F
+F
+AO
+AO
+L
+AO
+OO
+
+
+Teacher performance dashboard
+F
+F
+OO
+OO
+NO
+NO
+NO
+
+
+Full teacher performance reports
+F
+F
+NO
+NO
+NO
+NO
+NO
+
+
+School reports
+F
+F
+L
+L
+L
+NO
+NO
+
+
+Audit logs
+F
+F
+NO
+NO
+NO
+NO
+NO
+
+
+Upload logs / import errors
+F
+F
+AO
+AO
+AO
+NO
+NO
+
+
+
+
+4. Critical Access Rules
+These are the most important rules for your system:
+
+Only Platform Super Admin can create schools
+Only School Super Admin can view full teacher details and full user details inside the school
+Teachers cannot view other teachers’ profiles
+Teachers can only view student status for assigned students/classes
+Class Teachers can only view students assigned to their class
+Accounts users can access fee data only
+Parents can see only their own child’s records
+Students can see only their own records
+Only School Super Admin can manage roles, permissions, and staff assignments
+Only School Super Admin can view full teacher performance reports
+Teachers can view only their own timetable, own status, and own performance summary
+Sensitive modules like audit logs, user management, and permissions must never be visible to teachers
+
+
+5. Recommended Data Scope Rules
+Platform Super Admin
+
+all schools
+all system configuration
+optional read access to all tenant data
+
+School Super Admin
+
+all users, teachers, students, classes, fees, reports within that school
+
+Teacher
+
+only assigned classes
+only assigned students
+only own timetable/calendar
+only own performance summary
+
+Class Teacher
+
+all assigned class students
+attendance, marks, remarks, weak student alerts for assigned class
+
+Accounts / Fee Manager
+
+student fee records
+fee structure
+receipts
+due/overdue reports
+no teacher HR-style visibility
+
+Parent
+
+only own child
+attendance, marks, fees, exam schedule, syllabus, holidays, notices
+
+Student
+
+only own profile, attendance, marks, exams, syllabus, fee status if allowed
+
+
+6. Approval Matrix
+
+
+
+Action
+Approver
+
+
+
+
+Create school
+Platform Super Admin
+
+
+Create school users
+School Super Admin
+
+
+Create teacher accounts
+School Super Admin
+
+
+Assign class teacher
+School Super Admin
+
+
+Publish exam schedule
+School Super Admin
+
+
+Publish syllabus
+School Super Admin / authorized teacher
+
+
+Approve attendance correction
+School Super Admin
+
+
+Approve fee structure
+School Super Admin / Accounts Manager
+
+
+View full teacher performance
+School Super Admin
+
+
+Change permissions
+Platform Super Admin / School Super Admin
+
+
+
+
+7. Best Practice Recommendation
+I recommend implementing this with RBAC + data scope rules:
+
+RBAC controls what module a role can use
+Data scope rules control which records they can see
+
+Example:
+
+a teacher may have permission to view student attendance
+but only for students in their assigned class
+
+That is the cleanest and safest design.
+
+8. Final Recommended Role Rule
+If you want a simple rule to enforce everywhere, use this:
+
+School Super Admin = full school control
+Teacher/Class Teacher = student-status-only access for assigned students/classes
+Accounts = fee-only access
+Parent/Student = self-only access
+
+That matches exactly what you asked for.
+
+
+
