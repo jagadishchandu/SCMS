@@ -24,6 +24,7 @@ from core.auth import _secret, JWT_ALGORITHM
 ALLOWED_WRITE_PREFIXES = (
     "/api/auth/",
     "/api/subscriptions/",
+    "/api/webhooks/",
 )
 
 

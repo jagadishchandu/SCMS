@@ -119,11 +119,11 @@ async def run_monthly(
 
     - school_admin: scoped to own school_id automatically
     - platform_admin: must pass school_id; if omitted, runs for all schools
-    - channels: comma-separated list of channels to use, from {whatsapp, email}
+    - channels: comma-separated list, from {whatsapp, email, telegram}
     """
     db = get_db()
     label, start_iso, end_iso = _previous_month_range()
-    wanted_channels = [c.strip() for c in channels.split(",") if c.strip() in ("whatsapp", "email")]
+    wanted_channels = [c.strip() for c in channels.split(",") if c.strip() in ("whatsapp", "email", "telegram")]
     if not wanted_channels:
         wanted_channels = ["whatsapp"]
 
@@ -156,6 +156,7 @@ async def run_monthly(
             msg = _compose_message(school, s, label, digest, lang)
             phone = (s.get("parent", {}) or {}).get("whatsapp") or (s.get("parent", {}) or {}).get("phone")
             email = (s.get("parent", {}) or {}).get("email") or (parent_user or {}).get("email")
+            tg_chat_id = (parent_user or {}).get("telegram_chat_id")
             context = {"student_id": s["id"], "period": label, "language": lang,
                        "att_pct": digest["att_pct"], "marks_pct": digest["marks_pct"],
                        "fee_due": digest["fee_due"]}
@@ -165,6 +166,8 @@ async def run_monthly(
                     continue
                 if ch == "email" and not email:
                     continue
+                if ch == "telegram" and not tg_chat_id:
+                    continue
                 doc = await queue_notification(
                     sid, "parent", s.get("parent_user_id"),
                     phone if ch == "whatsapp" else None,
@@ -172,6 +175,7 @@ async def run_monthly(
                     context=context,
                     email=email if ch == "email" else None,
                     subject=f"Monthly update — {s['name']} ({label})",
+                    telegram_chat_id=tg_chat_id if ch == "telegram" else None,
                 )
                 if doc["status"] == "sent":
                     sent += 1

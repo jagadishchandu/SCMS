@@ -398,7 +398,7 @@ class TestTwilioQueued:
         assert len(wa) > 0, "Expected at least one whatsapp notification"
         # at least one queued / not configured
         assert any(n.get("status") == "queued" for n in wa), [n.get("status") for n in wa[:5]]
-        assert any((n.get("delivery_note") or "").lower().startswith("twilio") or "twilio_not_configured" in (n.get("delivery_note") or "") for n in wa), \
+        assert any((n.get("delivery_note") or "") in ("twilio_not_configured", "whatsapp_not_configured") for n in wa), \
             [n.get("delivery_note") for n in wa[:5]]
 
 
@@ -628,9 +628,9 @@ class TestDigests:
         assert isinstance(notifs, list)
         md = [n for n in notifs if n.get("template") == "monthly_digest" and n.get("channel") == "whatsapp"]
         assert len(md) > 0, f"No whatsapp monthly_digest notifications found; sample={notifs[:2]}"
-        # all should be queued + twilio_not_configured
+        # all should be queued + provider-not-configured note
         assert all(n.get("status") == "queued" for n in md), [n.get("status") for n in md[:5]]
-        assert all("twilio_not_configured" in (n.get("delivery_note") or "") for n in md), \
+        assert all((n.get("delivery_note") or "") in ("twilio_not_configured", "whatsapp_not_configured") for n in md), \
             [n.get("delivery_note") for n in md[:5]]
 
     def test_run_monthly_platform_admin_all_schools(self, platform_session):

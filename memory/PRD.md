@@ -264,14 +264,37 @@ See `/app/memory/test_credentials.md`.
 - **Backend: 162/162** (was 145; +17 new, fixed 2 pre-existing brittle tests).
 - **Frontend smoke**: banner renders correctly in amber for 5-days-left, red for expired (screenshot verified).
 
+## v1.9 — Free WhatsApp (Meta Cloud API) + Telegram channel (2026-05-15)
+
+**User-friendly alternative to paid Twilio**
+- New **Meta WhatsApp Business Cloud API** sender (`core/meta_whatsapp.py`) — FREE 1000 conversations/month. When `META_WHATSAPP_PHONE_ID` + `META_WHATSAPP_ACCESS_TOKEN` are set, it takes priority over Twilio. On failure it transparently falls back to Twilio if both are configured.
+- New **Telegram Bot API** sender (`core/telegram_sender.py`) — completely FREE, unlimited. Parents subscribe with `/start <STU-UID>` and the webhook stores their `chat_id`.
+- New webhook routes in `routes/webhooks.py`:
+  - `GET /api/webhooks/whatsapp` — Meta handshake (hub.verify_token check)
+  - `POST /api/webhooks/whatsapp` — status updates + inbound user messages stored in `whatsapp_status_updates` and `whatsapp_inbound` collections; matched notifications get `delivery_status` set
+  - `POST /api/webhooks/telegram` — captures `chat_id` when parent sends `/start <code>`; auto-links to user by phone/email/student_uid → parent_user_id
+  - `POST /api/webhooks/telegram/set-webhook` — convenience helper to register the bot's webhook with Telegram
+- `notify.queue_notification` extended:
+  - `telegram_chat_id` kwarg + `channel="telegram"` branch
+  - Records `provider` ("meta_whatsapp" / "twilio_whatsapp" / "smtp" / "telegram") on every notification doc
+  - When neither WhatsApp provider is configured, `delivery_note="whatsapp_not_configured"` (was `twilio_not_configured`)
+- `POST /api/digests/run-monthly?channels=...` now accepts `whatsapp`, `email`, **and `telegram`** (any combination).
+- Webhook prefix `/api/webhooks/*` added to `ALLOWED_WRITE_PREFIXES` so Meta and Telegram can always POST even when a school's subscription has lapsed.
+
+**New tests**: `backend/tests/test_free_providers.py` — 9 tests covering webhook verification, inbound message capture, `/start` linking, channel selection, and provider labels.
+
+### Test status (cumulative)
+- **Backend: 171/171** — added 9 new tests; updated 2 existing tests to accept the new `whatsapp_not_configured` label.
+
 ## Prioritized Backlog (refreshed)
 ### P1
-- Stripe / Razorpay automated subscription payments (replace manual confirmation)
+- Stripe / Razorpay automated subscription payments
+- "Send test message" buttons on `/school/settings` to validate WhatsApp / Telegram / SMTP creds
 
 ### P2
-- Wire uploads (photos, medical certs, PDF receipts) to Azure Blob once `AZURE_STORAGE_CONNECTION_STRING` is set
-- "Send test email" button on /school/settings to validate SMTP creds
+- Wire uploads to Azure Blob once `AZURE_STORAGE_CONNECTION_STRING` is filled
 - Recovery nudges post-expiry (day 1 / 3 / 7) before full lockout
+- WhatsApp message **template** registration UI (Meta requires pre-approved templates for messages sent outside the 24-hour session window)
 
 ### P3
 - React Native shell reusing the same API

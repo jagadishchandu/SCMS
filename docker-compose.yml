@@ -89,6 +89,18 @@ services:
       SMTP_PASSWORD: "${SMTP_PASSWORD:-}"
       SMTP_FROM: "${SMTP_FROM:-}"
       SMTP_USE_SSL: "${SMTP_USE_SSL:-false}"
+
+      # --- Meta WhatsApp Business Cloud API (FREE — 1000 conversations/month) ---
+      # When set, takes priority over Twilio. Get keys from
+      # https://developers.facebook.com → your app → WhatsApp → API Setup.
+      META_WHATSAPP_PHONE_ID: "${META_WHATSAPP_PHONE_ID:-}"
+      META_WHATSAPP_ACCESS_TOKEN: "${META_WHATSAPP_ACCESS_TOKEN:-}"
+      META_WHATSAPP_VERIFY_TOKEN: "${META_WHATSAPP_VERIFY_TOKEN:-}"
+      META_WHATSAPP_API_VERSION: "${META_WHATSAPP_API_VERSION:-v21.0}"
+
+      # --- Telegram Bot API (FREE — unlimited). Token from @BotFather on Telegram. ---
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_WEBHOOK_SECRET: "${TELEGRAM_WEBHOOK_SECRET:-}"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8001/api/health"]
       interval: 15s

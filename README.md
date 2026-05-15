@@ -34,7 +34,8 @@ A production-ready, multi-tenant SaaS for K-12 schools to run **students, attend
 | 💰 **Per-child subscription** | **₹30/child/month** or **₹300/child/year** (~16% off). School Admin submits payment → Platform Admin confirms | `routes/subscriptions.py` |
 | 🚧 **Subscription expiry guard** | Writes auto-block when `valid_until + grace_period` passes; reads, auth, and `/subscriptions/*` stay open | `core/subscription_guard.py` |
 | 🌐 **8 Indian languages** | English, हिन्दी, தமிழ், తెలుగు, ಕನ್ನಡ, मराठी, বাংলা, ગુજરાતી. School default + per-parent override | `core/i18n.py` |
-| 📲 **WhatsApp via Twilio** | Absence alerts, marks publish, monthly digest, payment confirm. Falls back to `queued` status if Twilio unset | `core/notify.py` |
+| 📲 **WhatsApp (FREE preferred)** | **Meta Cloud API** (FREE 1000/mo) → Twilio fallback → `queued` mock. Absence alerts, marks publish, monthly digest, payment confirm | `core/notify.py`, `core/meta_whatsapp.py` |
+| 📨 **Telegram bot (FREE)** | Free + unlimited. Parents subscribe via `/start <STU-UID>` | `core/telegram_sender.py`, `routes/webhooks.py` |
 | 📧 **Email digests via SMTP** | Provider-agnostic (Gmail / SES / SendGrid / Mailgun). Falls back to `queued` if SMTP unset | `core/email_sender.py` |
 | 🗓️ **Auto-cron jobs** | Monthly parent digest (1st @ 09:00 IST), Subscription renewal nudge (daily @ 08:00 IST) | `core/scheduler.py` |
 | 🏥 **Sick-leave tracker** | Multi-day spans, optional medical certificate (PDF/image), auto-marks attendance `sick`, recurring widget (≥3 in 90 days) | `routes/sick_leaves.py` |
@@ -268,17 +269,55 @@ All variables live in either `backend/.env` (local dev) or `docker-compose.yml`'
 | `ENABLE_SUBSCRIPTION_GUARD` | `true` | When `true`, the middleware blocks write requests (POST/PATCH/PUT/DELETE) for schools whose `valid_until + grace_period` has passed. Reads + auth + `/subscriptions/*` always pass. Set to `false` for a soft-launch where you don't yet want to enforce billing. |
 | `SUBSCRIPTION_GRACE_DAYS` | `3` | Days of grace after `valid_until` before writes are blocked. Banner shows red "in grace period" during this window. |
 
-### 🟦 Twilio WhatsApp (Optional)
+### 🟦 WhatsApp Provider (Optional — Meta is FREE, Twilio is fallback)
 
-Leave all blank to keep notifications in `queued` status (mock-log mode).
+WhatsApp delivery tries providers in this order: **Meta Cloud API → Twilio → queued (mock log)**.
+Leaving both blank keeps notifications in `queued` status so you can develop without sending real messages.
 
-| Variable | Where to get it | Purpose |
+#### Option 1 — Meta WhatsApp Business Cloud API (recommended, FREE 1000 conversations/month)
+
+Get keys from <https://developers.facebook.com/> → your app → WhatsApp → API Setup.
+
+| Variable | Example | Purpose |
 | --- | --- | --- |
-| `TWILIO_ACCOUNT_SID` | <https://console.twilio.com/> | Your Twilio account SID (starts with `AC...`). |
-| `TWILIO_AUTH_TOKEN` | Twilio console | Auth token paired with the SID. |
-| `TWILIO_WHATSAPP_FROM` | Twilio WhatsApp sandbox or approved sender | e.g. `whatsapp:+14155238886`. Must be in `whatsapp:+E.164` format. |
+| `META_WHATSAPP_PHONE_ID` | `123456789012345` | Numeric phone-number ID from Meta dashboard. |
+| `META_WHATSAPP_ACCESS_TOKEN` | `EAAxxxxxxxx...` | Long-lived system-user access token. |
+| `META_WHATSAPP_VERIFY_TOKEN` | `your-secret-string` | Arbitrary secret you make up; Meta uses it to verify the webhook at `/api/webhooks/whatsapp`. |
+| `META_WHATSAPP_API_VERSION` | `v21.0` | API version path (default `v21.0`). |
 
-When all three are set, `notify.queue_notification` will attempt real delivery and mark the row `sent` with the Twilio SID stored in `provider_sid`. On failure, the row gets `delivery_error` and `status=failed` — visible in `/api/notifications`.
+Webhook endpoint (configure in Meta dashboard → WhatsApp → Configuration):
+```
+GET / POST  https://your-domain.com/api/webhooks/whatsapp
+```
+
+#### Option 2 — Twilio (paid backup)
+
+Leave Meta blank if you only want Twilio.
+
+| Variable | Example | Purpose |
+| --- | --- | --- |
+| `TWILIO_ACCOUNT_SID` | `ACxxxxxxxx...` | <https://console.twilio.com/> |
+| `TWILIO_AUTH_TOKEN` | `xxxxxxxx...` | Twilio console |
+| `TWILIO_WHATSAPP_FROM` | `whatsapp:+14155238886` | Approved sender (sandbox or production) |
+
+### 📨 Telegram Bot (Optional — FREE, unlimited)
+
+Telegram bot is a **separate channel** (parents who prefer Telegram over WhatsApp). Parents subscribe by opening the bot and sending `/start <STU-UID-or-email>` once — the webhook stores their `chat_id` on their user record, and you can then push messages to them through the `telegram` channel.
+
+| Variable | Example | Purpose |
+| --- | --- | --- |
+| `TELEGRAM_BOT_TOKEN` | `5123456789:AAHxxxxxxxxxxxxxxxx` | Get from [@BotFather](https://t.me/BotFather) on Telegram |
+| `TELEGRAM_WEBHOOK_SECRET` | `your-secret-string` | Optional shared secret; recommended in production |
+
+One-time setup (after `TELEGRAM_BOT_TOKEN` is filled):
+```bash
+# Tell Telegram where to send updates (run once after deploy)
+curl -X POST "https://your-domain.com/api/webhooks/telegram/set-webhook?public_url=https://your-domain.com/api/webhooks/telegram"
+```
+
+Then ask parents to open `https://t.me/<your_bot_username>` and send `/start STU-00001`.
+
+To send through Telegram in code: `POST /api/digests/run-monthly?channels=telegram` (or include `telegram` in the comma-separated list).
 
 ### 📧 SMTP Email (Optional)
 
