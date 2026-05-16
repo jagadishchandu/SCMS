@@ -288,7 +288,12 @@ export default function ClassesPage() {
 
       {canDelete && (
         <div className="mt-6">
-          <ClassSubjectMatrix data={classCoverage} />
+          <ClassSubjectMatrix
+            data={classCoverage}
+            subjects={subjects}
+            teachers={teachers}
+            onAfterSave={load}
+          />
         </div>
       )}
 
@@ -500,9 +505,10 @@ function BulkAssignModal({ subject, teachers, onClose, onDone }) {
   );
 }
 
-function ClassSubjectMatrix({ data }) {
+function ClassSubjectMatrix({ data, subjects, teachers, onAfterSave }) {
   const [filterClass, setFilterClass] = useState("");
   const [hideEmpty, setHideEmpty] = useState(false);
+  const [suggestFor, setSuggestFor] = useState(null);
   if (!data) return null;
   const rows = (data.matrix || []).filter((r) => {
     if (filterClass && r.class_id !== filterClass) return false;
@@ -611,7 +617,21 @@ function ClassSubjectMatrix({ data }) {
                         </div>
                       )}
                     </td>
-                    <td className="td text-right font-display" data-testid={`class-cov-total-${key}`}>{r.total_periods}</td>
+                    <td className="td text-right font-display" data-testid={`class-cov-total-${key}`}>{r.total_periods}
+                      {!r.has_timetable && (
+                        <div className="mt-2">
+                          <button
+                            className="btn-secondary text-xs"
+                            onClick={() => setSuggestFor({
+                              class_id: r.class_id, class_name: r.class_name, section: r.section,
+                            })}
+                            data-testid={`suggest-tt-btn-${key}`}
+                          >
+                            ✨ Suggest timetable
+                          </button>
+                        </div>
+                      )}
+                    </td>
                   </tr>
                 );
               })}
@@ -624,7 +644,244 @@ function ClassSubjectMatrix({ data }) {
           Tip: {sectionsWithoutTimetable} section(s) have no timetable yet. Set them up from the Timetable page.
         </div>
       )}
+      {suggestFor && (
+        <SuggestTimetableModal
+          target={suggestFor}
+          subjects={subjects}
+          teachers={teachers}
+          onClose={() => setSuggestFor(null)}
+          onSaved={() => { setSuggestFor(null); onAfterSave && onAfterSave(); }}
+        />
+      )}
     </Section>
+  );
+}
+
+
+const DAY_LABELS = { mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat" };
+
+function SuggestTimetableModal({ target, subjects, teachers, onClose, onSaved }) {
+  const [cfg, setCfg] = useState({
+    days: ["mon", "tue", "wed", "thu", "fri"],
+    periods_per_day: 6,
+    start_time: "09:00",
+    period_minutes: 45,
+  });
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const subjectMap = Object.fromEntries((subjects || []).map((s) => [s.id, s]));
+  const teacherMap = Object.fromEntries((teachers || []).map((t) => [t.id, t]));
+  const teachersBySubject = {};
+  for (const t of teachers || []) {
+    for (const sid of t.subjects || []) {
+      (teachersBySubject[sid] = teachersBySubject[sid] || []).push(t);
+    }
+  }
+
+  const generate = async () => {
+    setLoading(true);
+    try {
+      const { data } = await api.post("/timetable/suggest", {
+        class_id: target.class_id,
+        section: target.section,
+        days: cfg.days,
+        periods_per_day: cfg.periods_per_day,
+        start_time: cfg.start_time,
+        period_minutes: cfg.period_minutes,
+      });
+      setResult(data);
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { generate(); /* eslint-disable-next-line */ }, []);
+
+  const toggleDay = (d) => {
+    setCfg((c) => ({
+      ...c,
+      days: c.days.includes(d) ? c.days.filter((x) => x !== d) : [...c.days, d],
+    }));
+  };
+
+  const updateSlotTeacher = (idx, teacher_id) => {
+    setResult((r) => {
+      const slots = [...r.slots];
+      slots[idx] = { ...slots[idx], teacher_id };
+      return { ...r, slots };
+    });
+  };
+
+  const save = async () => {
+    if (!result?.slots?.length) return;
+    const missingTeacher = result.slots.filter((s) => !s.teacher_id).length;
+    if (missingTeacher > 0) {
+      if (!window.confirm(`${missingTeacher} slot(s) have no teacher assigned. Save anyway? (You can fix them later on the Timetable page.)`)) return;
+    }
+    setSaving(true);
+    try {
+      // Filter out slots without teacher_id since backend TimetableSlot requires it
+      const payloadSlots = result.slots.filter((s) => s.teacher_id);
+      await api.post("/timetable/bulk", {
+        class_id: target.class_id,
+        section: target.section,
+        slots: payloadSlots,
+      });
+      toast.success(`Timetable saved (${payloadSlots.length} slots).`);
+      onSaved();
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setSaving(false); }
+  };
+
+  // Build a grid view: rows = days, cols = periods
+  const grid = result ? (() => {
+    const map = {};
+    result.slots.forEach((s, i) => {
+      const key = `${s.day}-${s.period}`;
+      map[key] = { ...s, _idx: i };
+    });
+    return map;
+  })() : null;
+
+  return (
+    <Modal open onClose={onClose} title={`Suggest timetable — ${target.class_name} · Section ${target.section}`} size="xl" testId="suggest-tt-modal">
+      <div className="space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 p-3 bg-bg-subtle rounded-md border border-line/60" data-testid="suggest-tt-config">
+          <div>
+            <label className="label">Periods / day</label>
+            <input
+              type="number" min={1} max={12}
+              className="input"
+              value={cfg.periods_per_day}
+              onChange={(e) => setCfg({ ...cfg, periods_per_day: Number(e.target.value) || 1 })}
+              data-testid="suggest-tt-periods"
+            />
+          </div>
+          <div>
+            <label className="label">Start time</label>
+            <input
+              type="time"
+              className="input"
+              value={cfg.start_time}
+              onChange={(e) => setCfg({ ...cfg, start_time: e.target.value })}
+              data-testid="suggest-tt-start"
+            />
+          </div>
+          <div>
+            <label className="label">Period (min)</label>
+            <input
+              type="number" min={15} max={120}
+              className="input"
+              value={cfg.period_minutes}
+              onChange={(e) => setCfg({ ...cfg, period_minutes: Number(e.target.value) || 45 })}
+              data-testid="suggest-tt-duration"
+            />
+          </div>
+          <div>
+            <label className="label">Working days</label>
+            <div className="flex flex-wrap gap-1.5" data-testid="suggest-tt-days">
+              {Object.entries(DAY_LABELS).map(([d, lbl]) => {
+                const on = cfg.days.includes(d);
+                return (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => toggleDay(d)}
+                    className={on ? "badge bg-primary text-white cursor-pointer" : "badge-neutral cursor-pointer hover:bg-line"}
+                    data-testid={`suggest-tt-day-${d}`}
+                    aria-pressed={on}
+                  >{lbl}</button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between">
+          <div className="text-xs text-ink-muted">
+            {result ? `${result.total_slots} slots across ${result.days.length} days × ${result.periods_per_day} periods` : "Generating…"}
+          </div>
+          <button
+            className="btn-secondary"
+            onClick={generate}
+            disabled={loading || cfg.days.length === 0}
+            data-testid="suggest-tt-regenerate"
+          >
+            {loading ? "Generating…" : "Regenerate"}
+          </button>
+        </div>
+
+        {result?.warnings?.length > 0 && (
+          <div className="border border-status-warning bg-status-warning-bg/40 rounded-md p-3" data-testid="suggest-tt-warnings">
+            <div className="text-xs font-semibold text-status-warning mb-1">⚠ {result.warnings.length} warning(s)</div>
+            <ul className="text-xs text-ink-soft list-disc pl-5 space-y-0.5">
+              {result.warnings.map((w, i) => <li key={i}>{w}</li>)}
+            </ul>
+          </div>
+        )}
+
+        {result && (
+          <div className="overflow-x-auto" data-testid="suggest-tt-grid">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th className="th">Day</th>
+                  {Array.from({ length: result.periods_per_day }, (_, i) => i + 1).map((p) => (
+                    <th key={p} className="th text-center">P{p}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {result.days.map((d) => (
+                  <tr key={d} className="table-row">
+                    <td className="td font-medium uppercase tracking-widest text-xs">{DAY_LABELS[d]}</td>
+                    {Array.from({ length: result.periods_per_day }, (_, i) => i + 1).map((p) => {
+                      const slot = grid[`${d}-${p}`];
+                      if (!slot) return <td key={p} className="td">—</td>;
+                      const subj = subjectMap[slot.subject_id];
+                      const candidates = teachersBySubject[slot.subject_id] || [];
+                      return (
+                        <td key={p} className="td align-top" data-testid={`suggest-cell-${d}-${p}`}>
+                          <div className="text-xs font-medium mb-1">{subj?.name || slot.subject_id}</div>
+                          <select
+                            className="input text-xs py-1"
+                            value={slot.teacher_id || ""}
+                            onChange={(e) => updateSlotTeacher(slot._idx, e.target.value)}
+                            data-testid={`suggest-teacher-${d}-${p}`}
+                          >
+                            <option value="">— No teacher —</option>
+                            {candidates.map((t) => (
+                              <option key={t.id} value={t.id}>{t.name}</option>
+                            ))}
+                            {slot.teacher_id && !candidates.find((c) => c.id === slot.teacher_id) && (
+                              <option value={slot.teacher_id}>{teacherMap[slot.teacher_id]?.name || slot.teacher_id}</option>
+                            )}
+                          </select>
+                          <div className="text-[10px] text-ink-muted mt-0.5">{slot.start_time}–{slot.end_time}</div>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2 pt-2 border-t border-line">
+          <button className="btn-secondary" onClick={onClose} disabled={saving}>Cancel</button>
+          <button
+            className="btn-primary"
+            onClick={save}
+            disabled={saving || !result || !result.slots?.length}
+            data-testid="suggest-tt-save"
+          >
+            {saving ? "Saving…" : "Save timetable"}
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
