@@ -5,6 +5,7 @@ import { Modal } from "../../components/Modal";
 import { Plus, MagnifyingGlass, Key, Copy, PencilSimple, ArrowsLeftRight, Trash, FilePdf, PaperPlaneTilt, DownloadSimple } from "@phosphor-icons/react";
 import toast from "react-hot-toast";
 import { useNavigate } from "react-router-dom";
+import PhoneInput from "../../components/PhoneInput";
 
 const API_BASE = (process.env.REACT_APP_BACKEND_URL || "") + "/api";
 
@@ -234,7 +235,7 @@ function EditStudentModal({ target, classes, onClose, onSaved }) {
           </select>
         </div>
         <div><label className="label">Date of birth</label><input className="input" type="date" value={form.dob} onChange={(e) => setForm({ ...form, dob: e.target.value })} /></div>
-        <div><label className="label">Emergency contact</label><input className="input" value={form.emergency_contact} onChange={(e) => setForm({ ...form, emergency_contact: e.target.value })} /></div>
+        <div><label className="label">Emergency contact</label><PhoneInput value={form.emergency_contact} onChange={(v) => setForm({ ...form, emergency_contact: v })} testId="edit-emergency" /></div>
         <div className="md:col-span-2"><label className="label">Medical notes</label><textarea className="input" rows={2} value={form.medical_notes} onChange={(e) => setForm({ ...form, medical_notes: e.target.value })} /></div>
         <div>
           <label className="label">Status</label>
@@ -487,8 +488,8 @@ function CreateStudentModal({ classes, open, onClose, onCreated }) {
             <option>father</option><option>mother</option><option>guardian</option>
           </select>
         </div>
-        <div><label className="label">Phone</label><input className="input" required value={form.parent.phone} onChange={(e) => setForm({ ...form, parent: { ...form.parent, phone: e.target.value } })} data-testid="new-parent-phone" /></div>
-        <div><label className="label">WhatsApp</label><input className="input" value={form.parent.whatsapp} onChange={(e) => setForm({ ...form, parent: { ...form.parent, whatsapp: e.target.value } })} /></div>
+        <div><label className="label">Phone</label><PhoneInput required value={form.parent.phone} onChange={(v) => setForm({ ...form, parent: { ...form.parent, phone: v } })} testId="new-parent-phone" /></div>
+        <div><label className="label">WhatsApp</label><PhoneInput value={form.parent.whatsapp} onChange={(v) => setForm({ ...form, parent: { ...form.parent, whatsapp: v } })} testId="new-parent-whatsapp" /></div>
         <div className="md:col-span-2"><label className="label">Email (optional — leave blank to auto-generate a login email)</label><input className="input" type="email" value={form.parent.email} onChange={(e) => setForm({ ...form, parent: { ...form.parent, email: e.target.value } })} data-testid="new-parent-email" /></div>
         <div className="md:col-span-2 flex justify-end gap-2 pt-2">
           <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>

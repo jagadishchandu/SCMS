@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useAuth } from "../contexts/AuthContext";
-import { useNavigate, Navigate, Link } from "react-router-dom";
+import { useNavigate, Navigate, Link, useSearchParams } from "react-router-dom";
 import { ROLE_HOME, ROLE_LABELS } from "../lib/utils";
 import toast from "react-hot-toast";
 import { GraduationCap, ArrowRight, IdentificationCard } from "@phosphor-icons/react";
@@ -28,10 +28,20 @@ const ROLES = [
 export default function Login() {
   const { user, login, logout } = useAuth();
   const navigate = useNavigate();
+  const [search] = useSearchParams();
   const [role, setRole] = useState("school_admin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // Pre-fill from URL params — used by the QR code on the parent credential slip
+  // (e.g. /login?role=parent&email=parent.stu-00010@xyz.school).
+  useEffect(() => {
+    const qrRole = search.get("role");
+    const qrEmail = search.get("email");
+    if (qrRole && ROLES.find((r) => r.value === qrRole)) setRole(qrRole);
+    if (qrEmail) setEmail(qrEmail);
+  }, [search]);
 
   useEffect(() => {
     if (user && user.role) navigate(ROLE_HOME[user.role] || "/", { replace: true });

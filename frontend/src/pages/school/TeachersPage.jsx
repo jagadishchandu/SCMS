@@ -4,6 +4,7 @@ import { PageHeader, Section, Empty } from "../../components/Primitives";
 import { Modal } from "../../components/Modal";
 import { Plus, UserCircle, PencilSimple, Trash, ToggleRight, ToggleLeft } from "@phosphor-icons/react";
 import toast from "react-hot-toast";
+import PhoneInput from "../../components/PhoneInput";
 
 export default function TeachersPage() {
   const [users, setUsers] = useState([]);
@@ -183,7 +184,7 @@ function CreateUserModal({ role, open, subjects, onClose, onCreated }) {
         <div className="md:col-span-2"><label className="label">Full name</label><input className="input" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} data-testid="new-user-name" /></div>
         <div><label className="label">Email</label><input className="input" type="email" required value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} data-testid="new-user-email" /></div>
         <div><label className="label">Temporary password</label><input className="input" required minLength={6} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} data-testid="new-user-password" /></div>
-        <div><label className="label">Phone</label><input className="input" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} data-testid="new-user-phone" /></div>
+        <div><label className="label">Phone</label><PhoneInput value={form.phone} onChange={(v) => setForm({ ...form, phone: v })} testId="new-user-phone" /></div>
         <div><label className="label">Employee ID</label><input className="input" value={form.employee_id} onChange={(e) => setForm({ ...form, employee_id: e.target.value })} data-testid="new-user-employee-id" /></div>
         <div className="md:col-span-2"><label className="label">Qualifications</label><input className="input" value={form.qualifications} onChange={(e) => setForm({ ...form, qualifications: e.target.value })} data-testid="new-user-qualifications" /></div>
 
@@ -277,7 +278,7 @@ function EditUserModal({ target, subjects, onClose, onSaved }) {
     <Modal open onClose={onClose} title={`Edit ${target.role} — ${target.name}`} size="md" testId="edit-user-modal">
       <form onSubmit={submit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="md:col-span-2"><label className="label">Full name</label><input className="input" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} data-testid="edit-user-name" /></div>
-        <div><label className="label">Phone</label><input className="input" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} data-testid="edit-user-phone" /></div>
+        <div><label className="label">Phone</label><PhoneInput value={form.phone} onChange={(v) => setForm({ ...form, phone: v })} testId="edit-user-phone" /></div>
         <div><label className="label">Employee ID</label><input className="input" value={form.employee_id} onChange={(e) => setForm({ ...form, employee_id: e.target.value })} /></div>
         <div className="md:col-span-2"><label className="label">Qualifications</label><input className="input" value={form.qualifications} onChange={(e) => setForm({ ...form, qualifications: e.target.value })} /></div>
         {isTeacher && (
