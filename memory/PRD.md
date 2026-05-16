@@ -1,5 +1,15 @@
 # SCMS — School Child Monitoring System (PRD)
 
+## Implemented v1.32.1 (2026-05-16) — Mandatory channels: regression tests
+- New `backend/tests/test_v32_mandatory_channels.py` — **23/23 pass**, 0 regressions across the existing 33 auth/password-reset/e2e/subscription-guard tests.
+- Coverage:
+  - Default fallback (`['telegram']`) on schools without explicit value
+  - `/auth/me` exposes `school_mandatory_channels`, `email_linked`, `phone_linked`, `telegram_linked`
+  - GET RBAC: platform admin OK, own school admin OK, foreign admin 403, anon 401, unknown 404; in-school teachers/parents may read (also surfaced in `/auth/me`)
+  - PATCH RBAC: platform admin only — school_admin 403, teacher 403, parent 403, anon 401, unknown school 404
+  - PATCH validation: empty list 400, unknown channel 400, partial-unknown 400 (rejects whole request)
+  - PATCH behaviour: de-dupes preserving order, persists, round-trips via GET, reflected in `/auth/me` + `/auth/login` responses
+
 ## Implemented v1.32 (2026-05-16) — Per-school mandatory channels + Self-service Profile page
 - **Per-school mandatory channels** — Platform Super Admin can pick any combination of `email`, `whatsapp`, `telegram` per school (at least one required). Stored on `schools.mandatory_channels`; default `['telegram']` (back-compat).
   - `GET /api/schools/{id}/mandatory-channels` (platform admin + own school admin) → `{channels, allowed}`
