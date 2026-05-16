@@ -67,8 +67,15 @@ export default function ExpensesPage() {
       />
 
       {isReviewer && summary && (
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-8">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
           <KPI label="Total spent" value={fmtMoney(summary.total_spent)} accent="info" testId="kpi-total-spent" />
+          <KPI
+            label="Monthly salaries"
+            value={fmtMoney(summary.salaries?.monthly_total || 0)}
+            accent="primary"
+            hint={`${summary.salaries?.headcount || 0} on payroll`}
+            testId="kpi-monthly-salaries"
+          />
           <KPI label="Pending reimbursements" value={summary.pending_teacher_reimbursements?.count || 0}
                 accent={summary.pending_teacher_reimbursements?.count ? "warning" : "success"}
                 hint={fmtMoney(summary.pending_teacher_reimbursements?.total || 0)} testId="kpi-pending-reimb" />
@@ -76,6 +83,17 @@ export default function ExpensesPage() {
                 accent="primary" hint={fmtMoney(summary.by_status?.approved?.total || 0)} testId="kpi-approved" />
           <KPI label="Paid" value={summary.by_status?.paid?.count || 0}
                 accent="success" hint={fmtMoney(summary.by_status?.paid?.total || 0)} testId="kpi-paid" />
+        </div>
+      )}
+
+      {isReviewer && summary?.salaries?.by_role && Object.keys(summary.salaries.by_role).length > 0 && (
+        <div className="mb-6 p-3 rounded-md border border-line/60 bg-bg-subtle text-xs flex flex-wrap items-center gap-3" data-testid="salary-role-breakdown">
+          <span className="overline">Salary breakdown</span>
+          {Object.entries(summary.salaries.by_role).map(([role, v]) => (
+            <span key={role} className="badge bg-primary-light text-primary capitalize" data-testid={`salary-role-${role}`}>
+              {role.replace("_", " ")}: {v.count} · {fmtMoney(v.total)}
+            </span>
+          ))}
         </div>
       )}
 

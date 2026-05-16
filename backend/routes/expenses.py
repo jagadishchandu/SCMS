@@ -162,9 +162,39 @@ async def expense_summary(month: Optional[str] = None, user: dict = Depends(requ
     by_category = await tdb.expenses.aggregate(by_category_pipe).to_list(50)
     pending = await tdb.expenses.aggregate(pending_reimburse_pipe).to_list(1)
     total_approved = sum(b["total"] for b in by_status if b["_id"] in ("approved", "paid"))
+
+    # ---- Monthly salary outflow (teachers + accounts from master users,
+    #      other staff from per-school staff collection). Surfaced here so
+    #      the school admin's expenses dashboard reflects ALL recurring
+    #      spend, not just one-off reimbursements.
+    from core.db import get_db
+    mdb = get_db()
+    user_pipe = [
+        {"$match": {"school_id": user["school_id"], "is_active": True,
+                     "monthly_salary": {"$gt": 0}, "role": {"$in": ["teacher", "accounts"]}}},
+        {"$group": {"_id": "$role", "total": {"$sum": "$monthly_salary"}, "count": {"$sum": 1}}},
+    ]
+    staff_pipe = [
+        {"$match": {"school_id": user["school_id"], "is_active": True,
+                     "monthly_salary": {"$gt": 0}}},
+        {"$group": {"_id": "$role", "total": {"$sum": "$monthly_salary"}, "count": {"$sum": 1}}},
+    ]
+    user_rows = await mdb.users.aggregate(user_pipe).to_list(10)
+    staff_rows = await tdb.staff.aggregate(staff_pipe).to_list(20)
+    by_role: dict[str, dict] = {}
+    for r in user_rows + staff_rows:
+        by_role[r["_id"]] = {"total": r["total"], "count": r["count"]}
+    salaries_total = sum(v["total"] for v in by_role.values())
+    salaries_headcount = sum(v["count"] for v in by_role.values())
+
     return {
         "by_status": {b["_id"]: {"count": b["count"], "total": b["total"]} for b in by_status},
         "by_category": [{"category": b["_id"], "count": b["count"], "total": b["total"]} for b in by_category],
         "pending_teacher_reimbursements": pending[0] if pending else {"count": 0, "total": 0},
         "total_spent": total_approved,
+        "salaries": {
+            "monthly_total": salaries_total,
+            "headcount": salaries_headcount,
+            "by_role": by_role,
+        },
     }

@@ -1,5 +1,25 @@
 # SCMS — School Child Monitoring System (PRD)
 
+## Implemented v1.32.5 (2026-05-16) — Student search typeahead + filters · Salaries on payroll & expenses
+
+### 🐛 P1 bug fix — Student search bar now shows children details
+- `/student-search` was a single dumb UID input; users complained they couldn't see children details. Replaced with a debounced typeahead (250ms) that queries `/api/students?q=…` and renders each match as a rich row: avatar/photo, name, UID, class+section+roll, parent name+phone, activity badges (🏆 …), and a Telegram-linked indicator. Arrow-key navigation + Enter to open. Parents still get the simple UID box.
+
+### 🎛️ Filter facets on student search (chip groups)
+- 6 chip-group filters above the typeahead: Class, Section, Gender, Status (active/inactive/all), Activity, Telegram (any/linked/unlinked). Server-side facets sent through `/students?class_id&section`, client-side facets layered on top. Active-filter counter + one-click clear.
+
+### 💰 Optional salary on every staff add/edit
+- `CreateUserModal` + `EditUserModal` now expose a "Monthly salary · optional" number field — POSTs as `monthly_salary` on `/api/users` (already supported).
+- New 3rd tab **"Other Staff"** in `/school/teachers` wired to `/api/staff` — full CRUD for cleaner/driver/coach/security/nurse/other with name, role, phone, email, joining date, **monthly salary**, notes. `is_active` toggle + show-inactive checkbox (greyed rows visible by default).
+- Salary column visible to `school_admin` + `accounts` only.
+
+### 📊 All salaries roll up to the School Expenses dashboard
+- `GET /api/expenses/summary` enriched with `salaries: {monthly_total, headcount, by_role}` — aggregates active teachers + accounts from master `users.monthly_salary` plus `staff.monthly_salary` from per-school DB. Single roundtrip.
+- New "Monthly salaries" KPI tile on the expenses dashboard with headcount hint + per-role breakdown chip strip (e.g. "Teacher: 1 · ₹42,000  ·  Cleaner: 1 · ₹18,000").
+
+### Verified live
+- Created cleaner @ ₹18,000 + added teacher salary ₹42,000 → expenses summary returns `monthly_total: 60000, headcount: 2`. Typeahead lookup for "aar" returns Aarav Sharma with full details + activity strip + linked-indicator. Other Staff tab + Add/Edit modals render salary inputs cleanly.
+
 ## Implemented v1.32.4 (2026-05-16) — Activity participation badges on Students list
 - **`GET /api/students`** now returns an `activities: [{id, name, category}]` array per student via a single bulk lookup (`activity_enrollments` $in students → `activities` $in activity_ids). Inactive activities are excluded. Zero impact on existing fields.
 - **`StudentsPage.jsx`** — small 🏆 strip under each name showing the first 3 activity names with a `+N` overflow indicator (full list in a hover tooltip). Test IDs: `activities-strip-{uid}` + `activity-badge-{uid}-{aid}`.

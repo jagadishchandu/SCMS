@@ -1,21 +1,35 @@
 import React, { useEffect, useState } from "react";
 import { api, formatApiError } from "../../lib/api";
+import { useAuth } from "../../contexts/AuthContext";
 import { PageHeader, Section, Empty } from "../../components/Primitives";
 import { Modal } from "../../components/Modal";
 import { Plus, UserCircle, PencilSimple, Trash, ToggleRight, ToggleLeft, PaperPlaneTilt } from "@phosphor-icons/react";
 import toast from "react-hot-toast";
 import PhoneInput from "../../components/PhoneInput";
 
+const fmtMoney = (v) => v != null && v !== "" ? new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(Number(v)) : "—";
+
 export default function TeachersPage() {
+  const { user } = useAuth();
+  const canSeeSalary = user?.role === "school_admin" || user?.role === "accounts";
   const [users, setUsers] = useState([]);
+  const [staff, setStaff] = useState([]);
   const [open, setOpen] = useState(false);
   const [editUser, setEditUser] = useState(null);
-  const [role, setRole] = useState("teacher");
+  const [editStaff, setEditStaff] = useState(null);
+  const [role, setRole] = useState("teacher"); // 'teacher' | 'accounts' | 'other_staff'
   const [subjects, setSubjects] = useState([]);
 
+  const isOtherStaffTab = role === "other_staff";
+
   const load = async () => {
-    const { data } = await api.get("/users", { params: { role } });
-    setUsers(data);
+    if (isOtherStaffTab) {
+      const { data } = await api.get("/staff");
+      setStaff(data);
+    } else {
+      const { data } = await api.get("/users", { params: { role } });
+      setUsers(data);
+    }
   };
   const loadSubjects = async () => {
     try {
@@ -74,14 +88,32 @@ export default function TeachersPage() {
       />
 
       <div className="flex gap-2 mb-4" role="tablist">
-        {["teacher", "accounts"].map((r) => (
-          <button key={r} onClick={() => setRole(r)} className={`btn-secondary ${role === r ? "border-primary text-primary" : ""}`} data-testid={`tab-${r}`}>
-            {r === "accounts" ? "Accounts" : "Teachers"}
+        {[
+          { id: "teacher", label: "Teachers" },
+          { id: "accounts", label: "Accounts" },
+          { id: "other_staff", label: "Other Staff" },
+        ].map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setRole(t.id)}
+            className={`btn-secondary ${role === t.id ? "border-primary text-primary" : ""}`}
+            data-testid={`tab-${t.id}`}
+          >
+            {t.label}
           </button>
         ))}
       </div>
 
-      <Section title={`${users.length} ${role.replace("_", " ")}${users.length === 1 ? "" : "s"}`}>
+      {isOtherStaffTab ? (
+        <StaffSection
+          staff={staff}
+          canSeeSalary={canSeeSalary}
+          onAdd={() => setOpen(true)}
+          onEdit={setEditStaff}
+          onChanged={load}
+        />
+      ) : (
+        <Section title={`${users.length} ${role.replace("_", " ")}${users.length === 1 ? "" : "s"}`}>
         {users.length === 0 ? <Empty title={`No ${role}s yet`} /> :
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {users.map((u) => (
@@ -111,6 +143,11 @@ export default function TeachersPage() {
                     <div className="text-status-warning"><span className="overline mr-1">Subjects</span>None assigned</div>
                   ))}
                 </div>
+                {canSeeSalary && u.monthly_salary != null && u.monthly_salary !== "" ? (
+                  <div className="text-xs text-ink-soft" data-testid={`user-salary-${u.id}`}>
+                    <span className="overline mr-1">Salary</span>{fmtMoney(u.monthly_salary)} / mo
+                  </div>
+                ) : null}
                 <div className="flex gap-1.5 mt-3 pt-3 border-t border-line flex-wrap">
                   <button
                     className="btn-secondary text-xs flex-1"
@@ -140,12 +177,18 @@ export default function TeachersPage() {
               </div>
             ))}
           </div>}
-      </Section>
+        </Section>
+      )}
 
       <CreateUserModal
         role={role}
-        open={open}
+        open={open && !isOtherStaffTab}
         subjects={subjects}
+        onClose={() => setOpen(false)}
+        onCreated={() => { setOpen(false); load(); }}
+      />
+      <CreateStaffModal
+        open={open && isOtherStaffTab}
         onClose={() => setOpen(false)}
         onCreated={() => { setOpen(false); load(); }}
       />
@@ -157,12 +200,19 @@ export default function TeachersPage() {
           onSaved={() => { setEditUser(null); load(); }}
         />
       )}
+      {editStaff && (
+        <EditStaffModal
+          target={editStaff}
+          onClose={() => setEditStaff(null)}
+          onSaved={() => { setEditStaff(null); load(); }}
+        />
+      )}
     </div>
   );
 }
 
 function CreateUserModal({ role, open, subjects, onClose, onCreated }) {
-  const emptyForm = { name: "", email: "", password: "", phone: "", employee_id: "", qualifications: "", subjects: [] };
+  const emptyForm = { name: "", email: "", password: "", phone: "", employee_id: "", qualifications: "", subjects: [], monthly_salary: "" };
   const [form, setForm] = useState(emptyForm);
   const [busy, setBusy] = useState(false);
 
@@ -188,6 +238,8 @@ function CreateUserModal({ role, open, subjects, onClose, onCreated }) {
     try {
       const payload = { ...form, role };
       if (role !== "teacher") delete payload.subjects;
+      // monthly_salary is optional. Convert blank → null so backend stores null.
+      payload.monthly_salary = form.monthly_salary === "" ? null : Number(form.monthly_salary);
       await api.post("/users", payload);
       toast.success("Staff added");
       onCreated();
@@ -204,6 +256,16 @@ function CreateUserModal({ role, open, subjects, onClose, onCreated }) {
         <div><label className="label">Temporary password</label><input className="input" required minLength={6} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} data-testid="new-user-password" /></div>
         <div><label className="label">Phone</label><PhoneInput value={form.phone} onChange={(v) => setForm({ ...form, phone: v })} testId="new-user-phone" /></div>
         <div><label className="label">Employee ID</label><input className="input" value={form.employee_id} onChange={(e) => setForm({ ...form, employee_id: e.target.value })} data-testid="new-user-employee-id" /></div>
+        <div>
+          <label className="label">Monthly salary <span className="text-ink-muted font-normal">· optional</span></label>
+          <input
+            className="input" type="number" min="0" step="100" placeholder="e.g. 35000"
+            value={form.monthly_salary}
+            onChange={(e) => setForm({ ...form, monthly_salary: e.target.value })}
+            data-testid="new-user-salary"
+          />
+          <div className="text-xs text-ink-muted mt-0.5">Counts towards the school's monthly payroll outflow shown on the Expenses dashboard.</div>
+        </div>
         <div className="md:col-span-2"><label className="label">Qualifications</label><input className="input" value={form.qualifications} onChange={(e) => setForm({ ...form, qualifications: e.target.value })} data-testid="new-user-qualifications" /></div>
 
         {role === "teacher" && (
@@ -257,6 +319,7 @@ function EditUserModal({ target, subjects, onClose, onSaved }) {
     employee_id: target.employee_id || "",
     qualifications: target.qualifications || "",
     subjects: target.subjects || [],
+    monthly_salary: target.monthly_salary == null ? "" : target.monthly_salary,
     is_active: target.is_active !== false,
   });
   const [busy, setBusy] = useState(false);
@@ -283,6 +346,7 @@ function EditUserModal({ target, subjects, onClose, onSaved }) {
         employee_id: form.employee_id,
         qualifications: form.qualifications,
         is_active: form.is_active,
+        monthly_salary: form.monthly_salary === "" ? null : Number(form.monthly_salary),
       };
       if (isTeacher) payload.subjects = form.subjects;
       await api.patch(`/users/${target.id}`, payload);
@@ -298,6 +362,15 @@ function EditUserModal({ target, subjects, onClose, onSaved }) {
         <div className="md:col-span-2"><label className="label">Full name</label><input className="input" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} data-testid="edit-user-name" /></div>
         <div><label className="label">Phone</label><PhoneInput value={form.phone} onChange={(v) => setForm({ ...form, phone: v })} testId="edit-user-phone" /></div>
         <div><label className="label">Employee ID</label><input className="input" value={form.employee_id} onChange={(e) => setForm({ ...form, employee_id: e.target.value })} /></div>
+        <div>
+          <label className="label">Monthly salary <span className="text-ink-muted font-normal">· optional</span></label>
+          <input
+            className="input" type="number" min="0" step="100" placeholder="e.g. 35000"
+            value={form.monthly_salary}
+            onChange={(e) => setForm({ ...form, monthly_salary: e.target.value })}
+            data-testid="edit-user-salary"
+          />
+        </div>
         <div className="md:col-span-2"><label className="label">Qualifications</label><input className="input" value={form.qualifications} onChange={(e) => setForm({ ...form, qualifications: e.target.value })} /></div>
         {isTeacher && (
           <div className="md:col-span-2" data-testid="edit-user-subjects-wrap">
@@ -333,6 +406,238 @@ function EditUserModal({ target, subjects, onClose, onSaved }) {
         <div className="md:col-span-2 flex justify-end gap-2">
           <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
           <button type="submit" className="btn-primary" disabled={busy} data-testid="edit-user-submit">{busy ? "Saving…" : "Save changes"}</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+
+// ----------------- Other Staff (cleaner/driver/coach/etc.) -----------------
+
+const STAFF_ROLES = ["other", "cleaner", "driver", "coach", "security", "nurse"];
+
+function StaffSection({ staff, canSeeSalary, onAdd, onEdit, onChanged }) {
+  const [showInactive, setShowInactive] = useState(true);
+
+  const setActive = async (s, is_active) => {
+    try {
+      if (!is_active) {
+        await api.delete(`/staff/${s.id}`);
+      } else {
+        await api.patch(`/staff/${s.id}`, { is_active: true });
+      }
+      toast.success(is_active ? "Reactivated" : "Marked inactive");
+      onChanged();
+    } catch (err) { toast.error(formatApiError(err)); }
+  };
+
+  const visible = showInactive ? staff : staff.filter((s) => s.is_active);
+  const activeCount = staff.filter((s) => s.is_active).length;
+  const inactiveCount = staff.length - activeCount;
+
+  return (
+    <Section
+      title={`${visible.length} non-teaching staff${activeCount !== staff.length ? `  ·  ${activeCount} active / ${inactiveCount} inactive` : ""}`}
+    >
+      <div className="flex items-center gap-2 mb-3">
+        <label className="text-xs text-ink-muted flex items-center gap-1.5">
+          <input
+            type="checkbox" checked={showInactive}
+            onChange={(e) => setShowInactive(e.target.checked)}
+            data-testid="show-inactive-staff"
+          /> Show inactive
+        </label>
+      </div>
+      {visible.length === 0 ? (
+        <Empty
+          title="No non-teaching staff yet"
+          message="Add cleaners, drivers, coaches, security, nurses or other support staff and track their monthly salaries here."
+        />
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {visible.map((s) => (
+            <div key={s.id} className="border border-line rounded-lg p-5" data-testid={`staff-card-${s.id}`}>
+              <div className="flex items-start gap-3 mb-3">
+                <div className="w-10 h-10 rounded-full bg-secondary/40 text-ink grid place-items-center"><UserCircle size={22} /></div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium">{s.name}</div>
+                  <div className="text-xs text-ink-muted capitalize">{s.role}</div>
+                </div>
+                {s.is_active ? <span className="badge-success">Active</span> : <span className="badge-neutral">Inactive</span>}
+              </div>
+              <div className="text-xs text-ink-soft space-y-1">
+                {s.phone ? <div><span className="overline mr-1">Phone</span>{s.phone}</div> : null}
+                {s.email ? <div><span className="overline mr-1">Email</span>{s.email}</div> : null}
+                {s.joining_date ? <div><span className="overline mr-1">Joined</span>{s.joining_date}</div> : null}
+                {s.notes ? <div className="text-ink-muted italic">{s.notes}</div> : null}
+                {canSeeSalary && s.monthly_salary != null && s.monthly_salary !== "" ? (
+                  <div data-testid={`staff-salary-${s.id}`}>
+                    <span className="overline mr-1">Salary</span>{fmtMoney(s.monthly_salary)} / mo
+                  </div>
+                ) : null}
+              </div>
+              <div className="flex gap-1.5 mt-3 pt-3 border-t border-line flex-wrap">
+                <button className="btn-secondary text-xs flex-1" onClick={() => onEdit(s)} data-testid={`edit-staff-btn-${s.id}`}>
+                  <PencilSimple size={12}/> Edit
+                </button>
+                <button
+                  className="btn-secondary text-xs flex-1"
+                  onClick={() => setActive(s, !s.is_active)}
+                  data-testid={`toggle-staff-btn-${s.id}`}
+                >
+                  {s.is_active ? <><ToggleRight size={12}/> Deactivate</> : <><ToggleLeft size={12}/> Reactivate</>}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Section>
+  );
+}
+
+function CreateStaffModal({ open, onClose, onCreated }) {
+  const empty = { name: "", role: "other", phone: "", email: "", monthly_salary: "", joining_date: "", notes: "" };
+  const [form, setForm] = useState(empty);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => { if (open) setForm(empty); /* eslint-disable-next-line */ }, [open]);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const payload = {
+        ...form,
+        monthly_salary: form.monthly_salary === "" ? null : Number(form.monthly_salary),
+      };
+      await api.post("/staff", payload);
+      toast.success("Staff member added");
+      onCreated();
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title="Add non-teaching staff" size="md" testId="create-staff-modal">
+      <form onSubmit={submit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="md:col-span-2"><label className="label">Full name</label>
+          <input className="input" required value={form.name}
+                 onChange={(e) => setForm({ ...form, name: e.target.value })}
+                 data-testid="new-staff-name" />
+        </div>
+        <div><label className="label">Role</label>
+          <select className="input" value={form.role}
+                  onChange={(e) => setForm({ ...form, role: e.target.value })}
+                  data-testid="new-staff-role">
+            {STAFF_ROLES.map((r) => <option key={r} value={r} className="capitalize">{r}</option>)}
+          </select>
+        </div>
+        <div><label className="label">Joining date</label>
+          <input className="input" type="date" value={form.joining_date}
+                 onChange={(e) => setForm({ ...form, joining_date: e.target.value })} />
+        </div>
+        <div><label className="label">Phone</label>
+          <PhoneInput value={form.phone} onChange={(v) => setForm({ ...form, phone: v })} testId="new-staff-phone" />
+        </div>
+        <div><label className="label">Email <span className="text-ink-muted font-normal">· optional</span></label>
+          <input className="input" type="email" value={form.email}
+                 onChange={(e) => setForm({ ...form, email: e.target.value })} />
+        </div>
+        <div className="md:col-span-2">
+          <label className="label">Monthly salary <span className="text-ink-muted font-normal">· optional</span></label>
+          <input
+            className="input" type="number" min="0" step="100" placeholder="e.g. 18000"
+            value={form.monthly_salary}
+            onChange={(e) => setForm({ ...form, monthly_salary: e.target.value })}
+            data-testid="new-staff-salary"
+          />
+          <div className="text-xs text-ink-muted mt-0.5">Counts towards the school's monthly payroll outflow shown on the Expenses dashboard.</div>
+        </div>
+        <div className="md:col-span-2"><label className="label">Notes</label>
+          <textarea className="input" rows={2} value={form.notes}
+                    onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+        </div>
+        <div className="md:col-span-2 flex justify-end gap-2">
+          <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn-primary" disabled={busy} data-testid="submit-staff-btn">{busy ? "Adding…" : "Add"}</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function EditStaffModal({ target, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    name: target.name || "",
+    role: target.role || "other",
+    phone: target.phone || "",
+    email: target.email || "",
+    monthly_salary: target.monthly_salary == null ? "" : target.monthly_salary,
+    joining_date: target.joining_date || "",
+    notes: target.notes || "",
+    is_active: target.is_active !== false,
+  });
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const payload = {
+        ...form,
+        monthly_salary: form.monthly_salary === "" ? null : Number(form.monthly_salary),
+      };
+      await api.patch(`/staff/${target.id}`, payload);
+      toast.success("Saved");
+      onSaved();
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Modal open onClose={onClose} title={`Edit staff — ${target.name}`} size="md" testId="edit-staff-modal">
+      <form onSubmit={submit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="md:col-span-2"><label className="label">Full name</label>
+          <input className="input" required value={form.name}
+                 onChange={(e) => setForm({ ...form, name: e.target.value })} />
+        </div>
+        <div><label className="label">Role</label>
+          <select className="input" value={form.role}
+                  onChange={(e) => setForm({ ...form, role: e.target.value })}>
+            {STAFF_ROLES.map((r) => <option key={r} value={r} className="capitalize">{r}</option>)}
+          </select>
+        </div>
+        <div><label className="label">Joining date</label>
+          <input className="input" type="date" value={form.joining_date}
+                 onChange={(e) => setForm({ ...form, joining_date: e.target.value })} />
+        </div>
+        <div><label className="label">Phone</label>
+          <PhoneInput value={form.phone} onChange={(v) => setForm({ ...form, phone: v })} />
+        </div>
+        <div><label className="label">Email</label>
+          <input className="input" type="email" value={form.email}
+                 onChange={(e) => setForm({ ...form, email: e.target.value })} />
+        </div>
+        <div className="md:col-span-2"><label className="label">Monthly salary <span className="text-ink-muted font-normal">· optional</span></label>
+          <input className="input" type="number" min="0" step="100"
+                 value={form.monthly_salary}
+                 onChange={(e) => setForm({ ...form, monthly_salary: e.target.value })}
+                 data-testid="edit-staff-salary" />
+        </div>
+        <div className="md:col-span-2"><label className="label">Notes</label>
+          <textarea className="input" rows={2} value={form.notes}
+                    onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+        </div>
+        <label className="md:col-span-2 flex items-center gap-2 text-sm cursor-pointer">
+          <input type="checkbox" checked={form.is_active}
+                 onChange={(e) => setForm({ ...form, is_active: e.target.checked })} />
+          Account is active
+        </label>
+        <div className="md:col-span-2 flex justify-end gap-2">
+          <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn-primary" disabled={busy}>{busy ? "Saving…" : "Save changes"}</button>
         </div>
       </form>
     </Modal>
