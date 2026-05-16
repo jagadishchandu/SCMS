@@ -106,74 +106,176 @@ function CreateExamModal({ classes, subjects, open, onClose, onCreated }) {
 }
 
 function MarksEntryModal({ exam, subjects, onClose }) {
-  const [subjectId, setSubjectId] = useState(subjects[0]?.id || "");
   const [students, setStudents] = useState([]);
+  // entries[student_id][subject_id] = string (raw input)
   const [entries, setEntries] = useState({});
-  const [max, setMax] = useState(100);
+  // subjectMax[subject_id] = number
+  const [subjectMax, setSubjectMax] = useState(() => Object.fromEntries((subjects || []).map((s) => [s.id, 100])));
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!exam.class_id) return;
-    api.get("/students", { params: { class_id: exam.class_id, ...(exam.section ? { section: exam.section } : {}) } })
-      .then((r) => setStudents(r.data));
-  }, [exam]);
+    let cancelled = false;
+    setLoading(true);
+    Promise.all([
+      api.get("/students", { params: { class_id: exam.class_id, ...(exam.section ? { section: exam.section } : {}) } }).then((r) => r.data),
+      api.get("/marks", { params: { exam_id: exam.id } }).then((r) => r.data),
+    ]).then(([studentRows, marks]) => {
+      if (cancelled) return;
+      setStudents(studentRows);
+      // Build entries + per-subject max from existing marks
+      const ent = {};
+      const maxes = { ...Object.fromEntries((subjects || []).map((s) => [s.id, 100])) };
+      marks.forEach((m) => {
+        ent[m.student_id] = ent[m.student_id] || {};
+        ent[m.student_id][m.subject_id] = String(m.marks_obtained);
+        if (m.max_marks) maxes[m.subject_id] = m.max_marks;
+      });
+      setEntries(ent);
+      setSubjectMax(maxes);
+    }).finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exam.id, exam.class_id, exam.section]);
 
-  useEffect(() => {
-    if (!subjectId) return;
-    api.get("/marks", { params: { exam_id: exam.id } }).then((r) => {
-      const cur = r.data.filter((m) => m.subject_id === subjectId);
-      setEntries(Object.fromEntries(cur.map((m) => [m.student_id, m.marks_obtained])));
-      if (cur.length) setMax(cur[0].max_marks);
-    });
-  }, [subjectId, exam.id]);
+  const setMark = (studentId, subjectId, value) => {
+    setEntries((prev) => ({
+      ...prev,
+      [studentId]: { ...(prev[studentId] || {}), [subjectId]: value },
+    }));
+  };
+
+  const setMax = (subjectId, value) => {
+    const num = value === "" ? "" : Math.max(1, Number(value));
+    setSubjectMax((prev) => ({ ...prev, [subjectId]: num }));
+  };
 
   const save = async () => {
+    // Validate: every non-empty mark must be <= its subject's max
+    for (const s of subjects) {
+      const mx = Number(subjectMax[s.id]);
+      if (!mx || mx <= 0) { toast.error(`Set a valid 'Out of' for ${s.name}`); return; }
+      for (const stu of students) {
+        const v = entries[stu.id]?.[s.id];
+        if (v === undefined || v === null || v === "") continue;
+        const num = Number(v);
+        if (Number.isNaN(num) || num < 0 || num > mx) {
+          toast.error(`${stu.name} · ${s.name}: marks must be between 0 and ${mx}`);
+          return;
+        }
+      }
+    }
     setBusy(true);
+    let totalSaved = 0;
     try {
-      const payload = {
-        exam_id: exam.id, subject_id: subjectId,
-        entries: Object.entries(entries).filter(([, v]) => v !== "" && v != null)
-          .map(([student_id, v]) => ({ student_id, marks_obtained: Number(v), max_marks: Number(max) })),
-      };
-      const { data } = await api.post("/marks/bulk", payload);
-      toast.success(`Saved ${data.saved} marks`);
+      // One request per subject (reuses existing /marks/bulk endpoint)
+      for (const s of subjects) {
+        const subjectEntries = students
+          .map((stu) => ({ stu, v: entries[stu.id]?.[s.id] }))
+          .filter(({ v }) => v !== undefined && v !== null && v !== "")
+          .map(({ stu, v }) => ({
+            student_id: stu.id,
+            marks_obtained: Number(v),
+            max_marks: Number(subjectMax[s.id]),
+          }));
+        if (subjectEntries.length === 0) continue;
+        const { data } = await api.post("/marks/bulk", {
+          exam_id: exam.id,
+          subject_id: s.id,
+          entries: subjectEntries,
+        });
+        totalSaved += data?.saved || 0;
+      }
+      toast.success(`Saved ${totalSaved} mark${totalSaved === 1 ? "" : "s"} across ${subjects.length} subject${subjects.length === 1 ? "" : "s"}`);
       onClose();
     } catch (err) { toast.error(formatApiError(err)); }
     finally { setBusy(false); }
   };
 
+  if (subjects.length === 0) {
+    return (
+      <Modal open={!!exam} onClose={onClose} title={`Marks — ${exam.name}`} size="xl" testId="marks-entry-modal">
+        <Empty title="No subjects defined" message="Add subjects from the Academic → Classes page before entering marks." />
+      </Modal>
+    );
+  }
+
   return (
-    <Modal open={!!exam} onClose={onClose} title={`Marks — ${exam.name}`} size="lg" testId="marks-entry-modal">
-      <div className="flex flex-wrap gap-3 mb-4">
-        <select className="input w-56" value={subjectId} onChange={(e) => setSubjectId(e.target.value)} data-testid="marks-subject">
-          {subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-        </select>
-        <div className="flex items-center gap-2">
-          <span className="text-xs uppercase tracking-widest font-semibold text-ink-soft">Max marks</span>
-          <input className="input w-24" type="number" value={max} onChange={(e) => setMax(e.target.value)} />
-        </div>
+    <Modal open={!!exam} onClose={onClose} title={`Marks — ${exam.name}`} size="xl" testId="marks-entry-modal">
+      <div className="text-xs text-ink-muted mb-3">
+        Enter marks for every subject in one grid. The <strong>Out of</strong> input in each column header is editable — each subject can have its own maximum. Leave a cell blank to skip a student for that subject.
       </div>
-      <table className="table">
-        <thead><tr><th className="th">Roll</th><th className="th">UID</th><th className="th">Student</th><th className="th">Marks</th></tr></thead>
-        <tbody>
-          {students.map((s) => (
-            <tr key={s.id} className="table-row">
-              <td className="td">{s.roll_number}</td>
-              <td className="td font-mono text-xs">{s.student_uid}</td>
-              <td className="td">{s.name}</td>
-              <td className="td">
-                <input className="input w-24" type="number" min="0" max={max}
-                  value={entries[s.id] ?? ""} onChange={(e) => setEntries({ ...entries, [s.id]: e.target.value })}
-                  data-testid={`marks-input-${s.student_uid}`}
-                />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      {loading ? (
+        <div className="text-ink-muted text-sm py-6 text-center">Loading marks…</div>
+      ) : (
+        <div className="border border-line rounded-md overflow-x-auto max-h-[60vh] overflow-y-auto" data-testid="marks-grid-wrap">
+          <table className="table min-w-max">
+            <thead className="sticky top-0 bg-bg-surface z-10">
+              <tr>
+                <th className="th sticky left-0 bg-bg-surface z-20" style={{ minWidth: 60 }}>Roll</th>
+                <th className="th sticky left-[60px] bg-bg-surface z-20" style={{ minWidth: 90 }}>UID</th>
+                <th className="th sticky left-[150px] bg-bg-surface z-20" style={{ minWidth: 160 }}>Student</th>
+                {subjects.map((s) => (
+                  <th key={s.id} className="th align-bottom" style={{ minWidth: 130 }} data-testid={`marks-col-${s.id}`}>
+                    <div className="font-semibold text-ink mb-1">{s.name}</div>
+                    <div className="flex items-center gap-1.5 normal-case tracking-normal font-normal">
+                      <span className="text-[10px] text-ink-muted uppercase tracking-wider">Out of</span>
+                      <input
+                        className="input h-7 w-16 text-xs px-2"
+                        type="number"
+                        min="1"
+                        value={subjectMax[s.id] ?? ""}
+                        onChange={(e) => setMax(s.id, e.target.value)}
+                        data-testid={`marks-max-${s.id}`}
+                      />
+                    </div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {students.map((stu) => (
+                <tr key={stu.id} className="table-row" data-testid={`marks-row-${stu.student_uid}`}>
+                  <td className="td sticky left-0 bg-bg-surface">{stu.roll_number}</td>
+                  <td className="td sticky left-[60px] bg-bg-surface font-mono text-xs">{stu.student_uid}</td>
+                  <td className="td sticky left-[150px] bg-bg-surface">{stu.name}</td>
+                  {subjects.map((s) => {
+                    const mx = Number(subjectMax[s.id]) || 100;
+                    const val = entries[stu.id]?.[s.id] ?? "";
+                    const over = val !== "" && Number(val) > mx;
+                    return (
+                      <td className="td" key={s.id}>
+                        <input
+                          className={`input w-24 ${over ? "border-status-danger text-status-danger" : ""}`}
+                          type="number"
+                          min="0"
+                          max={mx}
+                          step="0.5"
+                          placeholder={`/${mx}`}
+                          value={val}
+                          onChange={(e) => setMark(stu.id, s.id, e.target.value)}
+                          data-testid={`marks-input-${stu.student_uid}-${s.id}`}
+                        />
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+              {students.length === 0 && (
+                <tr>
+                  <td className="td text-ink-muted" colSpan={3 + subjects.length}>
+                    No students in this class/section.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
       <div className="flex justify-end gap-2 mt-4">
         <button className="btn-secondary" onClick={onClose}>Cancel</button>
-        <button className="btn-primary" onClick={save} disabled={busy} data-testid="save-marks-btn">{busy ? "Saving…" : "Save marks"}</button>
+        <button className="btn-primary" onClick={save} disabled={busy || loading} data-testid="save-marks-btn">{busy ? "Saving…" : "Save all marks"}</button>
       </div>
     </Modal>
   );
