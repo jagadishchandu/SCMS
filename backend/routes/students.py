@@ -89,7 +89,21 @@ async def list_students(
             {"name": {"$regex": q, "$options": "i"}},
             {"student_uid": {"$regex": q, "$options": "i"}},
         ]
-    return await tdb.students.find(flt, {"_id": 0}).to_list(5000)
+    students = await tdb.students.find(flt, {"_id": 0}).to_list(5000)
+
+    # Enrich each row with parent_telegram_linked so admins can see who's
+    # reachable via Telegram at-a-glance. One bulk-lookup against master users.
+    parent_ids = [s.get("parent_user_id") for s in students if s.get("parent_user_id")]
+    if parent_ids:
+        db = get_db()
+        linked = await db.users.find(
+            {"id": {"$in": parent_ids}, "telegram_chat_id": {"$exists": True, "$ne": None}},
+            {"_id": 0, "id": 1},
+        ).to_list(len(parent_ids))
+        linked_ids = {u["id"] for u in linked}
+        for s in students:
+            s["parent_telegram_linked"] = bool(s.get("parent_user_id") in linked_ids)
+    return students
 
 
 @router.post("")
@@ -198,7 +212,7 @@ async def get_parent_login(student_id: str, user: dict = Depends(require_roles("
     db = get_db()
     parent = await db.users.find_one(
         {"id": s.get("parent_user_id")},
-        {"_id": 0, "id": 1, "email": 1, "last_login_at": 1, "password_changed_at": 1, "password_reset_to_default_at": 1},
+        {"_id": 0, "id": 1, "email": 1, "last_login_at": 1, "password_changed_at": 1, "password_reset_to_default_at": 1, "telegram_chat_id": 1, "telegram_linked_at": 1},
     ) or {}
     return {
         "student_id": student_id,
@@ -210,6 +224,8 @@ async def get_parent_login(student_id: str, user: dict = Depends(require_roles("
         "last_login_at": parent.get("last_login_at"),
         "password_changed_at": parent.get("password_changed_at"),
         "password_reset_to_default_at": parent.get("password_reset_to_default_at"),
+        "telegram_linked": bool(parent.get("telegram_chat_id")),
+        "telegram_linked_at": parent.get("telegram_linked_at"),
     }
 
 

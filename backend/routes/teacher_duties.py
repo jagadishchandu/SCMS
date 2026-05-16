@@ -128,10 +128,11 @@ async def create_duty(payload: TeacherDutyCreate,
             when = payload.start_at.strftime("%d %b %Y · %I:%M %p") if hasattr(payload.start_at, "strftime") else str(payload.start_at)
             await queue_notification(
                 user["school_id"], "teacher", t["id"],
-                t.get("telegram_chat_id") or t.get("phone"),
+                t.get("phone"),
                 "telegram", "teacher_duty",
                 f"New duty assigned: {payload.title} on {when}" + (f" at {payload.location}" if payload.location else ""),
                 context={"duty_type": payload.type},
+                telegram_chat_id=t.get("telegram_chat_id"),
             )
     await log_action(
         user["id"], user["role"], user["school_id"], "create_teacher_duty",

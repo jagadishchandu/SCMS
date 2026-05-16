@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { api, formatApiError } from "../../lib/api";
 import { PageHeader, Section, Empty } from "../../components/Primitives";
 import { Modal } from "../../components/Modal";
-import { Plus, UserCircle, PencilSimple, Trash, ToggleRight, ToggleLeft } from "@phosphor-icons/react";
+import { Plus, UserCircle, PencilSimple, Trash, ToggleRight, ToggleLeft, PaperPlaneTilt } from "@phosphor-icons/react";
 import toast from "react-hot-toast";
 import PhoneInput from "../../components/PhoneInput";
 
@@ -47,6 +47,18 @@ export default function TeachersPage() {
       await api.delete(`/users/${u.id}`);
       toast.success("Marked inactive");
       load();
+    } catch (err) { toast.error(formatApiError(err)); }
+  };
+
+  const sendCreds = async (u) => {
+    if (!window.confirm(`Send login credentials to ${u.name} over Telegram?\nThis will reset their password to Staff@123.`)) return;
+    try {
+      const { data } = await api.post(`/users/${u.id}/send-credentials`, { channel: "telegram", reset_first: true });
+      if (data.delivery_status === "sent") {
+        toast.success(`✅ Sent to ${u.name} on Telegram`);
+      } else {
+        toast(`Queued — ${data.delivery_note || "Telegram not yet linked"}. They'll receive when they link.`, { icon: "ℹ️" });
+      }
     } catch (err) { toast.error(formatApiError(err)); }
   };
 
@@ -99,12 +111,18 @@ export default function TeachersPage() {
                     <div className="text-status-warning"><span className="overline mr-1">Subjects</span>None assigned</div>
                   ))}
                 </div>
-                <div className="flex gap-1.5 mt-3 pt-3 border-t border-line">
+                <div className="flex gap-1.5 mt-3 pt-3 border-t border-line flex-wrap">
                   <button
                     className="btn-secondary text-xs flex-1"
                     onClick={() => setEditUser(u)}
                     data-testid={`edit-user-btn-${u.id}`}
                   ><PencilSimple size={12}/> Edit</button>
+                  <button
+                    className="btn-secondary text-xs flex-1"
+                    onClick={() => sendCreds(u)}
+                    title="Send login over Telegram"
+                    data-testid={`send-staff-creds-btn-${u.id}`}
+                  ><PaperPlaneTilt size={12}/> Send creds</button>
                   <button
                     className="btn-secondary text-xs flex-1"
                     onClick={() => toggleActive(u)}

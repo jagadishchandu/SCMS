@@ -1,5 +1,14 @@
 # SCMS — School Child Monitoring System (PRD)
 
+## Implemented v1.31 (2026-05-16) — Telegram-linked status badges in Students page
+- **`GET /api/students`** now enriches every row with `parent_telegram_linked: bool` via a single bulk-lookup against master `users` (one query for all `parent_user_id`s, no N+1).
+- **`GET /api/students/{id}/parent-login`** now returns `telegram_linked: bool` and `telegram_linked_at: ISO datetime` so the modal can show *when* the parent linked Telegram.
+- **Frontend (`StudentsPage.jsx`)**:
+  - New "Telegram" column with pill badges: green ▶ *Linked* / amber ▶ *Not linked* per student row. Tooltip explains delivery implications.
+  - New summary banner above the table: *"X / Y parents reachable on Telegram (Z%) — N not linked — cannot receive notifications"*.
+  - Parent-credentials modal now shows a clear, full-width Telegram status block (green when linked with link date, amber with a remediation tip when not).
+- Verified live against DEMO school: 1/69 parents linked (STU-00069), badges + summary + modal all render correctly.
+
 ## Original Problem Statement
 Multi-school management platform with strict role-based visibility (Platform Admin, School Admin, Teacher, Class Teacher, Accounts, Parent). Core modules: students/parents, attendance with auto WhatsApp alerts, marks/exams, syllabus, holidays, fees + receipts, teacher timetable, teacher performance (40/30/15/15), student analytics with charts, Excel imports, Docker-ready.
 

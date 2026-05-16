@@ -3,6 +3,7 @@ import Sidebar from "../components/Sidebar";
 import Topbar from "../components/Topbar";
 import MobileBottomNav from "../components/MobileBottomNav";
 import SubscriptionBanner from "../components/SubscriptionBanner";
+import TelegramLinkBanner from "../components/TelegramLinkBanner";
 import { useAuth } from "../contexts/AuthContext";
 import { api } from "../lib/api";
 import { useLocation } from "react-router-dom";
@@ -31,6 +32,7 @@ export default function AppLayout({ children }) {
       <div className="flex flex-col min-w-0">
         <Topbar schoolName={schoolName} onToggleMobile={() => setMobileOpen(true)} />
         <SubscriptionBanner user={user} />
+        <TelegramLinkBanner />
         <main className={`flex-1 px-4 lg:px-8 py-6 lg:py-10 fade-up ${isParent ? "mobile-bottom-safe" : ""}`}>{children}</main>
       </div>
       <MobileBottomNav />

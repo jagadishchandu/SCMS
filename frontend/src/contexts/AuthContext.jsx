@@ -25,6 +25,9 @@ export function AuthProvider({ children }) {
     try {
       const { data } = await api.post("/auth/login", { email, password });
       setUser(data);
+      // Fetch the full /auth/me snapshot in the background — it includes
+      // helpers like telegram_link_url that the basic login response doesn't.
+      api.get("/auth/me").then((r) => setUser(r.data)).catch(() => {});
       return data;
     } catch (e) {
       const msg = formatApiError(e);

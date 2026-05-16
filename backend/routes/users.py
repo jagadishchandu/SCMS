@@ -140,6 +140,85 @@ async def deactivate_user(user_id: str, user: dict = Depends(require_roles("scho
     return {"ok": True}
 
 
+@router.post("/{user_id}/send-credentials")
+async def send_user_credentials(
+    user_id: str,
+    payload: dict | None = None,
+    user: dict = Depends(require_roles("school_admin")),
+):
+    """Send (and optionally reset) the login credentials for any staff user
+    (teacher / accounts) directly to their Telegram (or whatsapp/sms).
+
+    Body: {"channel": "telegram" | "whatsapp" | "sms", "reset_first": bool, "default_password": "..."}
+    - reset_first=true resets the user's password to `default_password` (or
+      `Staff@123`) and includes it in the message.
+    - reset_first=false sends a generic 'use your existing password' notice.
+
+    Used by the new "Send creds" action on the Teachers/Staff page so school
+    admins can hand staff their login over Telegram instead of email/in-person.
+    """
+    body = payload or {}
+    channel = (body.get("channel") or "telegram").lower()
+    reset_first = bool(body.get("reset_first", True))
+    default_pwd = str(body.get("default_password") or "Staff@123")
+    if channel not in ("telegram", "whatsapp", "sms"):
+        raise HTTPException(status_code=400, detail="channel must be one of: telegram, whatsapp, sms")
+    if len(default_pwd) < 6:
+        raise HTTPException(status_code=400, detail="default_password must be at least 6 characters")
+
+    db = get_db()
+    target = await db.users.find_one({"id": user_id}, {"_id": 0})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if target.get("school_id") != user["school_id"]:
+        raise HTTPException(status_code=403, detail="Cross-school operation forbidden")
+    if target.get("role") not in ("teacher", "accounts"):
+        raise HTTPException(status_code=400, detail="This endpoint is for staff (teacher/accounts) only")
+
+    pwd_line: str
+    if reset_first:
+        from core.auth import hash_password
+        await db.users.update_one(
+            {"id": user_id},
+            {"$set": {"password_hash": hash_password(default_pwd), "password_reset_to_default_at": utc_now()}},
+        )
+        pwd_line = f"Password: {default_pwd} (just reset — please change after login)"
+    else:
+        pwd_line = "Password: use your existing password, or tap 'Forgot password' on the login page"
+
+    role_label = "Teacher" if target["role"] == "teacher" else "Accounts"
+    msg = (
+        f"👋 Welcome to the {role_label.lower()} portal!\n"
+        f"Login email: {target.get('email')}\n"
+        f"{pwd_line}\n\n"
+        f"📲 This is the school's official communication channel — please keep notifications enabled. "
+        f"You'll receive timetable updates, calendar events, holidays and duty assignments here."
+    )
+
+    from core.notify import queue_notification
+    note = await queue_notification(
+        school_id=user["school_id"],
+        recipient_type=target["role"],
+        recipient_id=user_id,
+        phone=target.get("phone"),
+        channel=channel,
+        template="staff_credentials",
+        message=msg,
+        context={"reset_first": reset_first, "role": target["role"]},
+        telegram_chat_id=target.get("telegram_chat_id"),
+    )
+    return {
+        "ok": True,
+        "channel": channel,
+        "reset_first": reset_first,
+        "delivery_status": note.get("status"),
+        "delivery_note": note.get("delivery_note"),
+        "email": target.get("email"),
+        "default_password": default_pwd if reset_first else None,
+    }
+
+
+
 from pydantic import BaseModel as _BaseModel
 from core.i18n import SUPPORTED_LANGUAGES
 

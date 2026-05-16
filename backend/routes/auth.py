@@ -10,7 +10,7 @@ from core.auth import (
     set_auth_cookies, clear_auth_cookies, get_current_user,
     hash_password,
 )
-from core.db import get_db
+from core.db import get_db, tenant_db
 from core.utils import clean_doc, utc_now, new_id
 from core import telegram_sender as tg
 
@@ -93,6 +93,7 @@ async def logout(response: Response, user: dict = Depends(get_current_user)):
 
 @router.get("/me")
 async def me(user: dict = Depends(get_current_user)):
+    import os
     db = get_db()
     out = dict(user)
     # Attach a compact subscription snapshot so the UI can render an expiry banner.
@@ -106,6 +107,36 @@ async def me(user: dict = Depends(get_current_user)):
         out["school_name"] = school.get("name")
         out["school_language"] = school.get("language") or "en"
         out["school_branding"] = school.get("branding") or {}
+    # Telegram link helpers — render the deep-link to /start the bot with the
+    # user's role-specific identifier (student UID for parents, email otherwise).
+    # The UI uses this for the "Link Telegram" mandatory banner.
+    bot_username = os.environ.get("TELEGRAM_BOT_USERNAME", "").strip()
+    if not bot_username and os.environ.get("TELEGRAM_BOT_TOKEN"):
+        # Try to resolve once and cache via env update — best effort
+        try:
+            import httpx
+            tok = os.environ["TELEGRAM_BOT_TOKEN"]
+            r = httpx.get(f"https://api.telegram.org/bot{tok}/getMe", timeout=5)
+            if r.status_code == 200:
+                bot_username = (r.json().get("result") or {}).get("username") or ""
+                if bot_username:
+                    os.environ["TELEGRAM_BOT_USERNAME"] = bot_username
+        except Exception:
+            pass
+    out["telegram_linked"] = bool(out.get("telegram_chat_id"))
+    out["telegram_bot_username"] = bot_username
+    if bot_username and not out["telegram_linked"]:
+        # Identifier the webhook uses to bind chat_id — for parents we prefer
+        # their child's student UID; for staff we use their email.
+        ident = None
+        if user.get("role") == "parent":
+            tdb = await tenant_db(user["school_id"]) if user.get("school_id") else None
+            if tdb is not None:
+                child = await tdb.students.find_one({"parent_user_id": user["id"]}, {"_id": 0, "student_uid": 1})
+                if child:
+                    ident = child.get("student_uid")
+        ident = ident or user.get("email")
+        out["telegram_link_url"] = f"https://t.me/{bot_username}?start={ident}" if ident else f"https://t.me/{bot_username}"
     return clean_doc(out)
 
 

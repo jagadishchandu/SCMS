@@ -66,13 +66,45 @@ async def publish_exam(exam_id: str, user: dict = Depends(require_roles("school_
     if not exam:
         raise HTTPException(status_code=404, detail="Not found")
     await tdb.exams.update_one({"id": exam_id}, {"$set": {"is_published": True, "published_at": utc_now()}})
+
+    # Build rich human-readable schedule + syllabus pointers
+    subjects = await tdb.subjects.find(
+        {"school_id": user["school_id"]}, {"_id": 0, "id": 1, "name": 1, "code": 1},
+    ).to_list(500)
+    sub_map = {s["id"]: s for s in subjects}
+    syllabus_docs = await tdb.syllabus.find(
+        {"school_id": user["school_id"], "exam_id": exam_id},
+        {"_id": 0, "subject_id": 1, "title": 1},
+    ).to_list(500)
+    syl_map: dict = {}
+    for s in syllabus_docs:
+        syl_map.setdefault(s["subject_id"], []).append(s["title"])
+
+    lines = [f"📘 Exam schedule published — {exam['name']} ({exam.get('term') or 'Term'})"]
+    lines.append(f"🗓 {exam['start_date']} → {exam['end_date']}")
+    for item in (exam.get("schedule") or []):
+        sid = item.get("subject_id")
+        sn = sub_map.get(sid, {}).get("name") or sid
+        when = f"{item.get('date')} {item.get('time') or ''}".strip()
+        room = item.get("room")
+        line = f"  • {sn}: {when}"
+        if room:
+            line += f" (Room {room})"
+        if syl_map.get(sid):
+            line += " — syllabus: " + ", ".join(syl_map[sid][:2])
+        lines.append(line)
+    lines.append("Open the app for full details.")
+    rich_msg = "\n".join(lines)
+
     students = await tdb.students.find({"school_id": user["school_id"], "class_id": exam["class_id"]}, {"_id": 0}).to_list(2000)
     for s in students:
+        if exam.get("section") and s.get("section") != exam["section"]:
+            continue
         await queue_notification(
             user["school_id"], "parent", s.get("parent_user_id"),
             s.get("parent", {}).get("whatsapp") or s.get("parent", {}).get("phone"),
             "whatsapp", "exam_schedule_published",
-            f"Exam schedule for {exam['name']} ({exam['term']}) is now published. Starting {exam['start_date']}.",
+            rich_msg,
             context={"exam_id": exam["id"], "student_id": s["id"]},
         )
     return {"ok": True, "notified_students": len(students)}
@@ -109,14 +141,27 @@ async def create_syllabus(payload: SyllabusCreate, user: dict = Depends(require_
     }
     await tdb.syllabus.insert_one(doc)
     doc.pop("_id", None)
+    # Resolve subject + exam for a richer message
+    subj = await tdb.subjects.find_one({"id": payload.subject_id}, {"_id": 0, "name": 1}) or {}
+    exam = None
+    if payload.exam_id:
+        exam = await tdb.exams.find_one({"id": payload.exam_id}, {"_id": 0, "name": 1, "start_date": 1, "end_date": 1})
+    msg_subject = subj.get("name") or payload.subject_id
+    msg_exam = (exam or {}).get("name")
     students = await tdb.students.find({"school_id": user["school_id"], "class_id": payload.class_id}, {"_id": 0}).to_list(2000)
     for s in students:
+        line = f"📚 Syllabus update — {payload.title}\nSubject: {msg_subject}"
+        if msg_exam:
+            line += f"\nExam: {msg_exam} ({(exam or {}).get('start_date')} → {(exam or {}).get('end_date')})"
+        if payload.content:
+            preview = payload.content[:240] + ("…" if len(payload.content) > 240 else "")
+            line += f"\n\n{preview}"
         await queue_notification(
             user["school_id"], "parent", s.get("parent_user_id"),
             s.get("parent", {}).get("whatsapp") or s.get("parent", {}).get("phone"),
             "whatsapp", "syllabus_published",
-            f"Syllabus '{payload.title}' has been published for {s['name']}'s class.",
-            context={"syllabus_id": doc["id"], "student_id": s["id"]},
+            line,
+            context={"syllabus_id": doc["id"], "student_id": s["id"], "subject_id": payload.subject_id},
         )
     return doc
 

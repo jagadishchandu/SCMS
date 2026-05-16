@@ -37,14 +37,34 @@ async def create_holiday(payload: HolidayCreate, user: dict = Depends(require_ro
     }
     await tdb.holidays.insert_one(doc)
     doc.pop("_id", None)
+    period_str = payload.date + (f" → {payload.end_date}" if payload.end_date and payload.end_date != payload.date else "")
+    desc_str = ("\n" + payload.description) if payload.description else ""
+    msg = f"🎉 Holiday announced: {payload.title}\n{period_str}{desc_str}"
+    # Notify parents
     students = await tdb.students.find({"school_id": user["school_id"]}, {"_id": 0}).to_list(5000)
     for s in students:
         await queue_notification(
             user["school_id"], "parent", s.get("parent_user_id"),
             s.get("parent", {}).get("whatsapp") or s.get("parent", {}).get("phone"),
             "whatsapp", "holiday_announced",
-            f"Holiday: {payload.title} on {payload.date}. " + (payload.description or ""),
+            msg,
             context={"holiday_id": doc["id"]},
+        )
+    # Notify teachers (and accounts) so their calendars stay in sync
+    from core.db import get_db as _root_db
+    rdb = _root_db()
+    staff = await rdb.users.find(
+        {"school_id": user["school_id"], "role": {"$in": ["teacher", "accounts"]}, "is_active": True},
+        {"_id": 0, "id": 1, "phone": 1, "telegram_chat_id": 1, "role": 1},
+    ).to_list(2000)
+    for t in staff:
+        await queue_notification(
+            user["school_id"], t["role"], t["id"],
+            t.get("phone"),
+            "telegram", "holiday_announced",
+            msg,
+            context={"holiday_id": doc["id"]},
+            telegram_chat_id=t.get("telegram_chat_id"),
         )
     return doc
 
