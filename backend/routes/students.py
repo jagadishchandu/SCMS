@@ -297,7 +297,8 @@ async def credential_slip_pdf(student_id: str, request: Request, user: dict = De
         public_url = f"{fwd_proto}://{fwd_host}"
     login_url = f"{public_url.rstrip('/')}/login?role=parent"
     if parent_email:
-        login_url += f"&email={parent_email}"
+        from urllib.parse import quote
+        login_url += f"&email={quote(parent_email)}"
     qr_img = qrcode.make(login_url)
     qr_buf = io.BytesIO()
     qr_img.save(qr_buf, format="PNG")
