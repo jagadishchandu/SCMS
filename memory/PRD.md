@@ -1,5 +1,23 @@
 # SCMS — School Child Monitoring System (PRD)
 
+## Implemented v1.35 (2026-05-16) — Marks totals row + per-row save · Platform bulk-delete students
+
+### 📊 Marks grid — Total column + Out-of footer + per-row save
+- **Per-student grand-total column** (`marks-col-total`) on the right of `MarksEntryModal`. Live-updates as the teacher types: shows `obtained / out-of` and the overall percentage. Tone: green ≥75%, neutral 40-74%, red <40%. Empty rows render `—`. Denominator excludes subjects with no value, so partial entries surface a meaningful percentage (e.g. 85/200 for 2-of-5 subjects filled).
+- **Totals footer row** (`marks-totals-row`) — sticky to the bottom. Per-subject footer cell (`marks-total-out-<subject_id>`) echoes the editable Out-of total; grand-total footer cell (`marks-grand-total-out`) shows the sum across all subjects. Both update live as the teacher edits any Out-of header input.
+- **Per-row Save** — every student row now has a `save-marks-row-<UID>` button that POSTs ONLY that student's marks (one `/marks/bulk` call per non-empty subject). Used when a teacher needs to update a single child without touching the rest of the class. Toast: *"Saved N marks for <name>"*; *"No marks filled for <name>"* when nothing to send.
+- The existing `Save all marks` bulk button is preserved.
+
+### 🗑 Platform Super Admin can bulk-delete students from a school
+- **`POST /api/schools/{school_id}/students/bulk-delete`** (new, `platform_admin` only). Payload: `{student_ids: [..], confirm_code}`. The confirm code MUST match the school's `code` exactly — fat-finger guard. RBAC: school_admin → 403, teacher → 403, anon → 401. Empty list → 400, unknown school → 404.
+- **Cascade**: removes rows from `attendance`, `marks`, `fees`, `fee_payments`, `activity_enrollments`, `sick_leaves` for the deleted student ids, plus the master-DB legacy `students` mirror. Parent users with zero remaining active children in the school are deactivated (`is_active=False`, `deactivated_reason='all_children_deleted'`).
+- **Audit log** entry: `action=bulk_delete_students`, `resource=school`, meta carries `deleted_count`, `requested_count`, `cascade` dict, `deactivated_parents`, first 50 UIDs.
+- **Frontend** — Platform overview drawer's Students table gains a select-all checkbox (`drawer-students-select-all`) + per-row checkboxes (`drawer-student-select-<id>`). A `Delete selected (N)` button (`drawer-bulk-delete-btn`) opens `bulk-delete-students-modal` which previews up to 5 students and requires typing the school code (`bulk-delete-confirm-input`) before the destructive button activates. On success the drawer + school KPI grid auto-refresh.
+
+### Verified (iter23)
+- Backend: **8/8 pytest** in `test_iter23_bulk_delete_students.py` (anon 401, school_admin 403, teacher 403, unknown school 404, wrong code 400, empty list 400, happy path + cascade + audit). Throwaway-school fixture pattern; DEMO data untouched.
+- Frontend: live-verified teacher (Priya) edits a single student row — totals column updates live, footer Out-of updates live when changing column max, per-row Save persists only that student. Drawer selectors all wired with onChanged refresh.
+
 ## Implemented v1.34 (2026-05-16) — Multi-subject marks grid (one screen, per-subject Out-of)
 
 ### 📝 Single-screen marks entry across all subjects
