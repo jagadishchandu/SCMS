@@ -1,5 +1,10 @@
 # SCMS — School Child Monitoring System (PRD)
 
+## Implemented v1.32.4 (2026-05-16) — Activity participation badges on Students list
+- **`GET /api/students`** now returns an `activities: [{id, name, category}]` array per student via a single bulk lookup (`activity_enrollments` $in students → `activities` $in activity_ids). Inactive activities are excluded. Zero impact on existing fields.
+- **`StudentsPage.jsx`** — small 🏆 strip under each name showing the first 3 activity names with a `+N` overflow indicator (full list in a hover tooltip). Test IDs: `activities-strip-{uid}` + `activity-badge-{uid}-{aid}`.
+- Verified live: 9/104 students show activity badges (14 individual chips visible) consistent with API enrichment.
+
 ## Implemented v1.32.3 (2026-05-16) — Teacher visibility fix + Extra-curricular activities in student creation
 - **P1 bug fix — teachers can now see students they create**:
   - Root cause: `list_students` returned `[]` when a teacher had no formal `class_teacher_map` or timetable assignment.

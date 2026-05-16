@@ -136,6 +136,36 @@ async def list_students(
         linked_ids = {u["id"] for u in linked}
         for s in students:
             s["parent_telegram_linked"] = bool(s.get("parent_user_id") in linked_ids)
+
+    # Enrich each row with the activities the student is enrolled in
+    # (one $in lookup + one $in lookup on activities). Output is a list
+    # of `{id, name, category}` so the Students list can render a small
+    # "🏆 Painting · Football" strip under each name.
+    student_ids = [s["id"] for s in students]
+    if student_ids:
+        enrolls = await tdb.activity_enrollments.find(
+            {"school_id": user["school_id"], "student_id": {"$in": student_ids}},
+            {"_id": 0, "student_id": 1, "activity_id": 1},
+        ).to_list(20000)
+        if enrolls:
+            aids = list({e["activity_id"] for e in enrolls})
+            acts = await tdb.activities.find(
+                {"school_id": user["school_id"], "id": {"$in": aids}},
+                {"_id": 0, "id": 1, "name": 1, "category": 1, "is_active": 1},
+            ).to_list(len(aids))
+            act_by_id = {a["id"]: a for a in acts if a.get("is_active", True)}
+            by_student: dict[str, list[dict]] = {}
+            for e in enrolls:
+                a = act_by_id.get(e["activity_id"])
+                if a:
+                    by_student.setdefault(e["student_id"], []).append(
+                        {"id": a["id"], "name": a["name"], "category": a.get("category", "other")}
+                    )
+            for s in students:
+                s["activities"] = sorted(by_student.get(s["id"], []), key=lambda x: x["name"])
+        else:
+            for s in students:
+                s["activities"] = []
     return students
 
 

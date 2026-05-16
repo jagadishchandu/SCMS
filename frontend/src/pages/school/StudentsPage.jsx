@@ -149,7 +149,28 @@ export default function StudentsPage() {
                 {students.map((s) => (
                   <tr key={s.id} className="table-row" data-testid={`student-row-${s.student_uid}`}>
                     <td className="td font-mono text-xs cursor-pointer" onClick={() => navigate(`/student/${s.student_uid}`)}>{s.student_uid}</td>
-                    <td className="td font-medium cursor-pointer" onClick={() => navigate(`/student/${s.student_uid}`)}>{s.name}</td>
+                    <td className="td font-medium cursor-pointer" onClick={() => navigate(`/student/${s.student_uid}`)}>
+                      <div>{s.name}</div>
+                      {Array.isArray(s.activities) && s.activities.length > 0 && (
+                        <div
+                          className="text-[10px] text-ink-muted mt-0.5 flex flex-wrap gap-1 items-center"
+                          data-testid={`activities-strip-${s.student_uid}`}
+                          title={`Enrolled in: ${s.activities.map((a) => a.name).join(", ")}`}
+                        >
+                          <span className="text-amber-600">🏆</span>
+                          {s.activities.slice(0, 3).map((a, i) => (
+                            <span
+                              key={a.id}
+                              className="px-1.5 py-0.5 rounded bg-bg-subtle border border-line/60"
+                              data-testid={`activity-badge-${s.student_uid}-${a.id}`}
+                            >{a.name}</span>
+                          ))}
+                          {s.activities.length > 3 && (
+                            <span className="text-ink-muted">+{s.activities.length - 3}</span>
+                          )}
+                        </div>
+                      )}
+                    </td>
                     <td className="td">{classes.find((c) => c.id === s.class_id)?.name || s.class_id}</td>
                     <td className="td">{s.section}</td>
                     <td className="td">{s.roll_number || "—"}</td>
