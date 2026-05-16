@@ -598,4 +598,40 @@ Whenever a user is created (school admin via school creation, teachers/parents/a
 ### Test status
 - **22/22 new pytest pass** (7 v181 + 15 v18 regression). Frontend Playwright by testing agent: 100% — Compliance page with all KPIs + filters + 325 rows verified; school admin edited count 500 → 777 with status preserved.
 
+## v1.19 — Fee Items Catalog + Per-student Fee Tracker + Teacher Schedule (2026-05-16)
+
+**Fee Items Catalog** (`/school/fee-items`, `/accounts/fee-items`)
+- New tenant collection `fee_items`. School admin + accounts can define reusable fee items (Tuition · Books · Transport · Lab · Activities · Uniform · Exam · Library · Sports · Hostel · Meals · Other) with default_amount and frequency (one_time / monthly / quarterly / yearly).
+- CRUD: `GET/POST/PATCH/DELETE /api/fee-items`. School_admin + accounts can create/edit; only school_admin can delete (soft-deactivate).
+- UI groups items by category with KPI counts and active/inactive toggle.
+
+**Per-student Fee Tracker** (`/school/fee-tracker`, `/accounts/fee-tracker`)
+- `GET /api/fees/per-student-summary?status=&class_id=&q=` returns one row per active student with `total_fee`, `paid_amount`, `balance_due`, `percent_paid` (0–100, auto-calc), and status (`paid`/`partial`/`not_paid`/`no_fees`).
+- 4 KPI tiles (Total Fee · Collected · Balance Due · Students) + 5 filter pills + class filter + name/UID search.
+- Per-row visual progress bar with color-coded green/amber/red based on `% Paid`.
+- Mongo aggregation pipeline used to avoid N+1 queries; tested up to 156 students.
+
+**Teacher Schedule / Duty Roster** (`/school/teacher-duties` and `/teacher/duties`)
+- New tenant collection `teacher_duties`. School admin assigns calendar events (meetings, duties, parent-teacher, training, exam supervision, events) to one OR many teachers in a single submit — backend writes one row per teacher.
+- Teacher view (`/teacher/duties`) reuses the same component in `readOnly` mode — no add/edit/delete buttons; auto-scoped to own rows.
+- Optional Telegram/WhatsApp alert on assignment.
+
+### Test status
+- **21/21 new pytest pass** (`test_v19_fees_duties.py`). Frontend Playwright by testing agent: **100%** — all 3 roles (school_admin / teacher / accounts) verified end-to-end, sidebar gating correct, CRUD flows working, KPI math consistent.
+
+
+
+**School admin can edit requested children count at any time**
+- `POST /api/subscriptions/approval-request` is now idempotent across statuses:
+  - If `approval.status == "approved"` → simply updates `requested_children_count` + `last_edited_at`, keeps status approved (no re-approval needed). Response includes `edited: True`.
+  - If status in {`not_started`, `pending`, `rejected`} → submits/resubmits as a fresh pending request.
+- Frontend `SchoolSubscription.jsx` — new `ApprovedEditPanel` (data-testid='approved-edit-panel') shown when approved. Displays approved capacity, actual active students, and over/within-capacity indicator. "Edit count" toggle reveals input + save.
+
+**Platform Super Admin Compliance view (read-only, separate page)**
+- New endpoint `GET /api/subscriptions/compliance?filter=...` (platform_admin only) returning per-school: requested vs approved vs actual active students, variance, and a `compliance` label (`compliant` / `over_capacity` / `pending_review` / `rejected` / `no_request`).
+- New page `/platform/compliance` (`CompliancePage.jsx`) — sidebar entry under "Subscriptions". 5 KPI tiles + 6 filter pills + read-only table with status badge, variance, last edited timestamp. **Zero action buttons** — strictly view-only.
+
+### Test status
+- **22/22 new pytest pass** (7 v181 + 15 v18 regression). Frontend Playwright by testing agent: 100% — Compliance page with all KPIs + filters + 325 rows verified; school admin edited count 500 → 777 with status preserved.
+
 
