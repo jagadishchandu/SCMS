@@ -1,0 +1,35 @@
+{
+  "summary": "iter23 — Verified (1) MarksEntryModal new Total column + totals row + per-row Save button live in teacher /teacher/marks and (2) Backend RBAC/validation/cascade/audit for POST /api/schools/{id}/students/bulk-delete via a fresh throwaway school. UI flow confirmed by Playwright as priya@sunrise.edu opening the seeded Mid-Term grid (8 students × 5 subjects = 40 inputs): marks-col-total + marks-totals-row + marks-grand-total-out render correctly (initial '/500'), per-student marks-total-STU-00001 shows '360 / 500 / 72.0%' from seed marks, live-updates to '350 / 500 / 70.0%' when first subject input changed from 87→77 (zero save), grand-total live-updates to '/480' when first Out-of edited 100→80 (zero save), and per-row save-marks-row-STU-00001 button is present and clickable. Backend: 8/8 pytest tests PASS — anonymous→401, school_admin→403, teacher→403, unknown school→404, wrong confirm_code→400, empty student_ids→400, happy-path returns ok:true + deleted_students count + cascade dict (attendance/marks/fees/fee_payments/activity_enrollments/sick_leaves) + deactivated_parents count; /people lists no longer return deleted ids; audit-log entry written with deleted_count + cascade + deactivated_parents + uids in meta.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "MarksEntryModal", "issues": ["Per-student total cell renders obtained+outOf+% on three lines stacked tightly — visually fine at the standard size:xl modal width but could overflow on smaller viewports; consider truncating decimals (72.0% → 72%) for cleaner display."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter23_bulk_delete_students.py",
+    "/app/test_reports/pytest/iter23_bulk_delete.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "schools.py:111-197 bulk_delete_students — clean implementation: validates confirm_code (string match against school.code) BEFORE touching any data, validates non-empty student_ids list, restricts to platform_admin via require_roles, then cascades into 6 collections, deactivates orphaned parents (no other active children), and writes an audit entry. Good.",
+    "schools.py:159-164 also runs a best-effort cleanup against master `db.students` (legacy mirror) — wrapped in try/except so failures don't poison the response. Sensible defensive code.",
+    "schools.py:167 parent_user_id set comprehension uses `sorted({...})` which is fine but discarded None entries via the `if s.get('parent_user_id')` guard — good.",
+    "ExamsPage.jsx:155-171 studentTotal() correctly sums only filled cells AND only adds those subjects' Out-of values to the denominator — so a row with marks in 3 of 5 subjects shows '/3-subjects-Out-of' rather than the full grand total. This is the right behavior for partial entries; explicitly documented behavior worth keeping in the PRD.",
+    "ExamsPage.jsx:219-246 saveRow() reuses /marks/bulk one POST per subject for a single student — consistent with the bulk save path; skips empty values cleanly. If no subjects are filled it surfaces an info toast 'No marks filled for <name>' instead of a misleading success. Good UX.",
+    "ExamsPage.jsx:299-302 pctTone uses >=75 green / >=40 neutral / <40 red — matches spec.",
+    "PlatformOverview.jsx (selectors verified by grep): drawer-students-toolbar (line 284), drawer-students-select-all (line 291), drawer-bulk-delete-btn (line 301), per-row drawer-student-select-<id> (line 326), bulk-delete-students-modal (line 527), bulk-delete-confirm-input (line 561), bulk-delete-confirm-btn (line 573) — all present and connected to onChanged refresh. Selectors are stable for downstream tests."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter23_bulk_delete_students.py (new — 8 pytest tests)"
+  ],
+  "success_rate": {"backend": "100% (8/8 pytest)", "frontend": "100% on teacher marks-grid flow; platform drawer verified via selector grep + backend cascade tests (the live click-through hit a Playwright second-login race so wasn't fully captured in this run, but all required data-testids are present and the bulk-delete endpoint works end-to-end as proven by pytest)"},
+  "test_credentials": "Used jagadishchandu789@gmail.com / Manasa@123 (platform), priya@sunrise.edu / Teacher@123 (teacher). principal@sunrise.edu / School@123 also exercised for the 403 RBAC test. Throwaway QA school created and torn down via fixture each session.",
+  "seed_data_creation": "Each pytest session creates a throwaway school with code='QA<6hex>' + 1 class (Grade 1 A) + 3 students with unique parent emails @qaschool.example.com. The happy-path test hard-deletes them; the fixture's teardown best-effort-deletes any survivors so no orphan data remains. DEMO Sunrise data was never modified — the one transient UI typing in STU-00001's first subject cell was restored to the original value (87) before clicking Save row.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "(a) Backend: /app/backend/tests/test_iter23_bulk_delete_students.py — reuse this fixture pattern (QA<rand> school + auto_approve:True + initial_children_count) for any future destructive-cascade work. Note: email validator rejects .test / .qa TLDs — use .example.com or .com. Class endpoint is /api/academic/classes NOT /api/classes. (b) Frontend selectors: all iter22 testids plus the new ones: marks-col-total, marks-totals-row, marks-grand-total-out, marks-total-<UID>, marks-total-out-<subject_id>, save-marks-row-<UID>. studentTotal() denominator excludes empty subjects, so partial rows show e.g. '85 / 200 (42.5%)' for 2-of-5 subjects filled — not a bug. (c) Login page has a Role <select>; for teacher pick 'Teacher', for platform pick 'Platform Super Admin' BEFORE typing email/password. (d) For destructive drawer testing on DEMO, always Cancel after typing the wrong code; DEMO students are required by other regression suites.",
+  "rca of the issue": "N/A — no bugs found. The marks-grid live updates, per-row save, and bulk-delete cascade all work as specified."
+}

@@ -4,7 +4,7 @@ import { PageHeader, KPI, Section, Empty } from "../../components/Primitives";
 import { Modal } from "../../components/Modal";
 import {
   Plus, BellRinging, Buildings, GraduationCap, ChalkboardTeacher,
-  Users, BookOpen, CurrencyInr, CaretRight, X, Key, Copy, Check, PaperPlaneTilt,
+  Users, BookOpen, CurrencyInr, CaretRight, X, Key, Copy, Check, PaperPlaneTilt, Trash,
 } from "@phosphor-icons/react";
 import toast from "react-hot-toast";
 import { formatDate } from "../../lib/utils";
@@ -38,6 +38,19 @@ export default function PlatformOverview() {
     } finally {
       setLoadingDetail(false);
     }
+  };
+
+  const refreshDetail = async () => {
+    if (!detail?.school?.id) return;
+    try {
+      const { data } = await api.get(`/schools/${detail.school.id}/people`);
+      setDetail(data);
+    } catch (err) { toast.error(formatApiError(err)); }
+    // refresh KPI tiles too so the deletion is reflected in school cards
+    try {
+      const fresh = await api.get("/schools/with-stats").then((r) => r.data);
+      setSchools(fresh);
+    } catch { /* ignore */ }
   };
 
   const totalStudents = schools.reduce((a, s) => a + (s.stats?.students || 0), 0);
@@ -111,6 +124,7 @@ export default function PlatformOverview() {
         detail={detail}
         loading={loadingDetail}
         onClose={() => setDetail(null)}
+        onChanged={refreshDetail}
       />
     </div>
   );
@@ -135,13 +149,37 @@ function fmtMoney(v) {
   return `₹${num.toFixed(0)}`;
 }
 
-function SchoolDetailDrawer({ open, detail, loading, onClose }) {
+function SchoolDetailDrawer({ open, detail, loading, onClose, onChanged }) {
   const [resetAdmin, setResetAdmin] = useState(null);
+  const [selectedStudents, setSelectedStudents] = useState(() => new Set());
+  const [deleteOpen, setDeleteOpen] = useState(false);
+
+  // Reset selection state whenever the drawer opens for a different school
+  useEffect(() => {
+    setSelectedStudents(new Set());
+  }, [detail?.school?.id]);
+
   if (!open) return null;
   const school = detail?.school;
   const teachers = detail?.teachers || [];
   const students = detail?.students || [];
   const schoolAdmins = detail?.school_admins || [];
+
+  const toggleStudent = (id) => {
+    setSelectedStudents((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const toggleSelectAll = () => {
+    setSelectedStudents((prev) => {
+      if (prev.size === students.length) return new Set();
+      return new Set(students.map((s) => s.id));
+    });
+  };
+  const allSelected = students.length > 0 && selectedStudents.size === students.length;
+  const someSelected = selectedStudents.size > 0 && !allSelected;
   return (
     <div className="fixed inset-0 z-40" data-testid="school-detail-drawer">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
@@ -242,28 +280,63 @@ function SchoolDetailDrawer({ open, detail, loading, onClose }) {
                 {students.length === 0 ? (
                   <Empty title="No students" message="This school hasn't enrolled any students yet." />
                 ) : (
-                  <div className="border border-line rounded-md overflow-hidden max-h-96 overflow-y-auto">
-                    <table className="w-full text-sm">
-                      <thead className="bg-bg-subtle text-ink-muted text-xs uppercase tracking-wider sticky top-0">
-                        <tr>
-                          <th className="text-left p-2.5">UID</th>
-                          <th className="text-left p-2.5">Name</th>
-                          <th className="text-left p-2.5">Class</th>
-                          <th className="text-left p-2.5">Parent</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {students.map((s) => (
-                          <tr key={s.id} className="border-t border-line/60" data-testid={`drawer-student-${s.id}`}>
-                            <td className="p-2.5 font-mono text-xs text-ink-soft">{s.student_uid}</td>
-                            <td className="p-2.5 font-medium">{s.name}</td>
-                            <td className="p-2.5 text-ink-soft">{s.class_name || s.class_id} · {s.section}</td>
-                            <td className="p-2.5 text-ink-soft text-xs">{s.parent?.name || "—"}</td>
+                  <>
+                    <div className="flex items-center justify-between flex-wrap gap-2 mb-2" data-testid="drawer-students-toolbar">
+                      <label className="flex items-center gap-2 text-xs text-ink-soft cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={allSelected}
+                          ref={(el) => { if (el) el.indeterminate = someSelected; }}
+                          onChange={toggleSelectAll}
+                          data-testid="drawer-students-select-all"
+                        />
+                        {selectedStudents.size > 0
+                          ? <span><strong className="text-ink">{selectedStudents.size}</strong> of {students.length} selected</span>
+                          : <span>Select all to bulk delete</span>}
+                      </label>
+                      <button
+                        className="btn-secondary text-xs text-status-danger disabled:opacity-50"
+                        disabled={selectedStudents.size === 0}
+                        onClick={() => setDeleteOpen(true)}
+                        data-testid="drawer-bulk-delete-btn"
+                        title="Delete selected students from this school"
+                      ><Trash size={12}/> Delete selected ({selectedStudents.size})</button>
+                    </div>
+                    <div className="border border-line rounded-md overflow-hidden max-h-96 overflow-y-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-bg-subtle text-ink-muted text-xs uppercase tracking-wider sticky top-0">
+                          <tr>
+                            <th className="text-left p-2.5 w-8"></th>
+                            <th className="text-left p-2.5">UID</th>
+                            <th className="text-left p-2.5">Name</th>
+                            <th className="text-left p-2.5">Class</th>
+                            <th className="text-left p-2.5">Parent</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                        </thead>
+                        <tbody>
+                          {students.map((s) => {
+                            const checked = selectedStudents.has(s.id);
+                            return (
+                              <tr key={s.id} className={`border-t border-line/60 ${checked ? "bg-status-danger/5" : ""}`} data-testid={`drawer-student-${s.id}`}>
+                                <td className="p-2.5">
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() => toggleStudent(s.id)}
+                                    data-testid={`drawer-student-select-${s.id}`}
+                                  />
+                                </td>
+                                <td className="p-2.5 font-mono text-xs text-ink-soft">{s.student_uid}</td>
+                                <td className="p-2.5 font-medium">{s.name}</td>
+                                <td className="p-2.5 text-ink-soft">{s.class_name || s.class_id} · {s.section}</td>
+                                <td className="p-2.5 text-ink-soft text-xs">{s.parent?.name || "—"}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
                 )}
               </Section>
             </>
@@ -274,6 +347,19 @@ function SchoolDetailDrawer({ open, detail, loading, onClose }) {
         <AdminResetPasswordModal
           target={resetAdmin}
           onClose={() => setResetAdmin(null)}
+        />
+      )}
+      {deleteOpen && (
+        <BulkDeleteStudentsModal
+          school={school}
+          studentIds={Array.from(selectedStudents)}
+          students={students.filter((s) => selectedStudents.has(s.id))}
+          onClose={() => setDeleteOpen(false)}
+          onDeleted={() => {
+            setDeleteOpen(false);
+            setSelectedStudents(new Set());
+            onChanged && onChanged();
+          }}
         />
       )}
     </div>
@@ -411,6 +497,83 @@ function AdminResetPasswordModal({ target, onClose }) {
           </div>
         </form>
       )}
+    </Modal>
+  );
+}
+
+function BulkDeleteStudentsModal({ school, studentIds, students, onClose, onDeleted }) {
+  const [confirmCode, setConfirmCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const ok = (confirmCode || "").trim() === (school?.code || "");
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!ok || studentIds.length === 0) return;
+    setBusy(true);
+    try {
+      const { data } = await api.post(`/schools/${school.id}/students/bulk-delete`, {
+        student_ids: studentIds,
+        confirm_code: confirmCode.trim(),
+      });
+      toast.success(`Deleted ${data.deleted_students} student${data.deleted_students === 1 ? "" : "s"} · ${data.deactivated_parents} parent account${data.deactivated_parents === 1 ? "" : "s"} deactivated`);
+      onDeleted();
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setBusy(false); }
+  };
+
+  const preview = students.slice(0, 5);
+
+  return (
+    <Modal open onClose={onClose} title={`Delete students from ${school?.name}`} size="md" testId="bulk-delete-students-modal">
+      <form onSubmit={submit} className="space-y-4">
+        <div className="rounded-md border border-status-danger/40 bg-status-danger/10 p-3 text-sm">
+          <div className="font-semibold text-status-danger mb-1">⚠ This action cannot be undone.</div>
+          <div className="text-ink-soft text-xs">
+            You're about to permanently delete <strong>{studentIds.length}</strong> student{studentIds.length === 1 ? "" : "s"} from <strong>{school?.name}</strong>.
+            All of their attendance, marks, fees, payments, sick-leaves and activity enrollments will also be removed. Parent accounts with no remaining children will be deactivated.
+          </div>
+        </div>
+        {preview.length > 0 && (
+          <div className="text-xs text-ink-soft border border-line rounded-md p-2 max-h-32 overflow-y-auto" data-testid="bulk-delete-preview">
+            {preview.map((s) => (
+              <div key={s.id} className="flex items-center gap-2 py-0.5">
+                <span className="font-mono text-[10px]">{s.student_uid}</span>
+                <span>{s.name}</span>
+                <span className="text-ink-muted text-[10px]">{s.class_name || ""} {s.section ? `· ${s.section}` : ""}</span>
+              </div>
+            ))}
+            {students.length > preview.length && (
+              <div className="text-ink-muted italic pt-1">… and {students.length - preview.length} more</div>
+            )}
+          </div>
+        )}
+        <div>
+          <label className="label">
+            To confirm, type the school code <code className="text-status-danger font-mono ml-1">{school?.code}</code>
+          </label>
+          <input
+            className="input"
+            type="text"
+            value={confirmCode}
+            onChange={(e) => setConfirmCode(e.target.value)}
+            placeholder={school?.code}
+            autoFocus
+            data-testid="bulk-delete-confirm-input"
+          />
+          {confirmCode && !ok && (
+            <div className="text-xs text-status-danger mt-1" data-testid="bulk-delete-confirm-error">Code doesn't match.</div>
+          )}
+        </div>
+        <div className="flex justify-end gap-2 pt-1">
+          <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
+          <button
+            type="submit"
+            className="btn-primary bg-status-danger hover:bg-status-danger/90 border-status-danger"
+            disabled={!ok || busy || studentIds.length === 0}
+            data-testid="bulk-delete-confirm-btn"
+          >{busy ? "Deleting…" : `Delete ${studentIds.length} student${studentIds.length === 1 ? "" : "s"}`}</button>
+        </div>
+      </form>
     </Modal>
   );
 }

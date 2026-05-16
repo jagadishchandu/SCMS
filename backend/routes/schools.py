@@ -1,9 +1,11 @@
 """Schools routes - platform admin only for create/list-all."""
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from core.models import SchoolCreate, SchoolUpdate, SchoolBranding
 from core.auth import require_roles, hash_password, get_current_user
 from core.db import get_db, init_school_db, school_db_name, get_school_db, school_db_status
 from core.utils import new_id, utc_now, clean_doc
+from core.audit import log_action
 
 router = APIRouter(prefix="/schools", tags=["schools"])
 
@@ -79,7 +81,7 @@ async def school_people_overview(school_id: str, user: dict = Depends(get_curren
     ).sort("created_at", 1).to_list(50)
     students = await tdb.students.find(
         {"status": "active"},
-        {"_id": 0, "id": 1, "student_uid": 1, "name": 1, "class_id": 1, "section": 1, "gender": 1, "parent": 1},
+        {"_id": 0, "id": 1, "student_uid": 1, "name": 1, "class_id": 1, "section": 1, "gender": 1, "parent": 1, "parent_user_id": 1},
     ).sort("student_uid", 1).to_list(5000)
     classes = await tdb.classes.find({}, {"_id": 0}).to_list(500)
     class_map = {c["id"]: c["name"] for c in classes}
@@ -98,6 +100,100 @@ async def school_people_overview(school_id: str, user: dict = Depends(get_curren
             "students": len(students),
             "classes": len(classes),
         },
+    }
+
+
+class BulkDeleteStudentsPayload(BaseModel):
+    student_ids: list[str]
+    confirm_code: str
+
+
+@router.post("/{school_id}/students/bulk-delete")
+async def bulk_delete_students(
+    school_id: str,
+    payload: BulkDeleteStudentsPayload,
+    user: dict = Depends(require_roles("platform_admin")),
+):
+    """Platform Super Admin only — hard-delete the selected students from a school.
+
+    Cascades into every per-tenant collection that references the student
+    (`attendance`, `marks`, `fees`, `fee_payments`, `activity_enrollments`,
+    `sick_leaves`) and deactivates parent users that have no remaining children
+    in this school (so they cannot still log in to see an empty portal).
+
+    The caller MUST send `confirm_code` matching the school's `code` exactly;
+    this guards against fat-fingered drawer clicks.
+    """
+    from core.db import tenant_db
+    db = get_db()
+    school = await db.schools.find_one({"id": school_id}, {"_id": 0})
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+    if (payload.confirm_code or "").strip() != school.get("code"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"confirm_code must match the school's code ('{school.get('code')}') to authorise deletion.",
+        )
+    if not payload.student_ids:
+        raise HTTPException(status_code=400, detail="student_ids must contain at least one id")
+
+    tdb = await tenant_db(school_id)
+    # Resolve every selected student (validate they belong to this school)
+    students = await tdb.students.find(
+        {"id": {"$in": payload.student_ids}},
+        {"_id": 0, "id": 1, "student_uid": 1, "name": 1, "parent_user_id": 1},
+    ).to_list(10000)
+    found_ids = [s["id"] for s in students]
+    if not found_ids:
+        raise HTTPException(status_code=404, detail="No matching students found in this school")
+
+    # Cascade delete from every collection that references these students
+    cascade_collections = (
+        "attendance", "marks", "fees", "fee_payments",
+        "activity_enrollments", "sick_leaves",
+    )
+    cascade_counts: dict[str, int] = {}
+    for coll in cascade_collections:
+        res = await tdb[coll].delete_many({"student_id": {"$in": found_ids}})
+        cascade_counts[coll] = res.deleted_count
+    students_res = await tdb.students.delete_many({"id": {"$in": found_ids}})
+    # Also try to remove students from any timetable/attendance lookups in master (legacy)
+    try:
+        await db.students.delete_many({"id": {"$in": found_ids}, "school_id": school_id})
+    except Exception:
+        pass
+
+    # Deactivate parent users that have no remaining active children in this school
+    parent_ids = sorted({s.get("parent_user_id") for s in students if s.get("parent_user_id")})
+    deactivated_parents = 0
+    for pid in parent_ids:
+        remaining = await tdb.students.count_documents({"parent_user_id": pid, "status": "active"})
+        if remaining == 0:
+            r = await db.users.update_one(
+                {"id": pid, "role": "parent", "school_id": school_id},
+                {"$set": {"is_active": False, "deactivated_at": utc_now(), "deactivated_reason": "all_children_deleted"}},
+            )
+            if r.modified_count:
+                deactivated_parents += 1
+
+    await log_action(
+        user["id"], user["role"], school_id,
+        "bulk_delete_students", "school", school_id,
+        {
+            "deleted_count": students_res.deleted_count,
+            "requested_count": len(payload.student_ids),
+            "cascade": cascade_counts,
+            "deactivated_parents": deactivated_parents,
+            "uids": [s.get("student_uid") for s in students][:50],
+        },
+    )
+
+    return {
+        "ok": True,
+        "deleted_students": students_res.deleted_count,
+        "requested": len(payload.student_ids),
+        "cascade": cascade_counts,
+        "deactivated_parents": deactivated_parents,
     }
 
 

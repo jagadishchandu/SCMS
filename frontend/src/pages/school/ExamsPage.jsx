@@ -112,6 +112,7 @@ function MarksEntryModal({ exam, subjects, onClose }) {
   // subjectMax[subject_id] = number
   const [subjectMax, setSubjectMax] = useState(() => Object.fromEntries((subjects || []).map((s) => [s.id, 100])));
   const [busy, setBusy] = useState(false);
+  const [rowBusy, setRowBusy] = useState(null); // student_id currently saving
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -151,21 +152,43 @@ function MarksEntryModal({ exam, subjects, onClose }) {
     setSubjectMax((prev) => ({ ...prev, [subjectId]: num }));
   };
 
-  const save = async () => {
-    // Validate: every non-empty mark must be <= its subject's max
+  // Totals — used by the grand-total column + footer
+  const totalOutOf = subjects.reduce((a, s) => a + (Number(subjectMax[s.id]) || 0), 0);
+  const studentTotal = (stuId) => {
+    let obtained = 0;
+    let outOf = 0;
+    let any = false;
+    for (const s of subjects) {
+      const v = entries[stuId]?.[s.id];
+      if (v === undefined || v === null || v === "") continue;
+      const num = Number(v);
+      if (Number.isNaN(num)) continue;
+      obtained += num;
+      outOf += Number(subjectMax[s.id]) || 0;
+      any = true;
+    }
+    return { obtained, outOf, any, pct: outOf ? (obtained / outOf) * 100 : 0 };
+  };
+
+  const validateRange = (studentSubset = students) => {
     for (const s of subjects) {
       const mx = Number(subjectMax[s.id]);
-      if (!mx || mx <= 0) { toast.error(`Set a valid 'Out of' for ${s.name}`); return; }
-      for (const stu of students) {
+      if (!mx || mx <= 0) { toast.error(`Set a valid 'Out of' for ${s.name}`); return false; }
+      for (const stu of studentSubset) {
         const v = entries[stu.id]?.[s.id];
         if (v === undefined || v === null || v === "") continue;
         const num = Number(v);
         if (Number.isNaN(num) || num < 0 || num > mx) {
           toast.error(`${stu.name} · ${s.name}: marks must be between 0 and ${mx}`);
-          return;
+          return false;
         }
       }
     }
+    return true;
+  };
+
+  const save = async () => {
+    if (!validateRange()) return;
     setBusy(true);
     let totalSaved = 0;
     try {
@@ -193,6 +216,35 @@ function MarksEntryModal({ exam, subjects, onClose }) {
     finally { setBusy(false); }
   };
 
+  const saveRow = async (stu) => {
+    if (!validateRange([stu])) return;
+    setRowBusy(stu.id);
+    let totalSaved = 0;
+    try {
+      // Save this one student's marks across every subject (one POST per subject with a single entry).
+      for (const s of subjects) {
+        const v = entries[stu.id]?.[s.id];
+        if (v === undefined || v === null || v === "") continue;
+        const { data } = await api.post("/marks/bulk", {
+          exam_id: exam.id,
+          subject_id: s.id,
+          entries: [{
+            student_id: stu.id,
+            marks_obtained: Number(v),
+            max_marks: Number(subjectMax[s.id]),
+          }],
+        });
+        totalSaved += data?.saved || 0;
+      }
+      if (totalSaved === 0) {
+        toast(`No marks filled for ${stu.name}`, { icon: "ℹ️" });
+      } else {
+        toast.success(`Saved ${totalSaved} mark${totalSaved === 1 ? "" : "s"} for ${stu.name}`);
+      }
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setRowBusy(null); }
+  };
+
   if (subjects.length === 0) {
     return (
       <Modal open={!!exam} onClose={onClose} title={`Marks — ${exam.name}`} size="xl" testId="marks-entry-modal">
@@ -204,7 +256,7 @@ function MarksEntryModal({ exam, subjects, onClose }) {
   return (
     <Modal open={!!exam} onClose={onClose} title={`Marks — ${exam.name}`} size="xl" testId="marks-entry-modal">
       <div className="text-xs text-ink-muted mb-3">
-        Enter marks for every subject in one grid. The <strong>Out of</strong> input in each column header is editable — each subject can have its own maximum. Leave a cell blank to skip a student for that subject.
+        Enter marks for every subject in one grid. The <strong>Out of</strong> input in each column header is editable — each subject can have its own maximum. Use the per-row <strong>Save</strong> button to save one student at a time, or <strong>Save all marks</strong> at the bottom to save everyone.
       </div>
       {loading ? (
         <div className="text-ink-muted text-sm py-6 text-center">Loading marks…</div>
@@ -232,44 +284,93 @@ function MarksEntryModal({ exam, subjects, onClose }) {
                     </div>
                   </th>
                 ))}
+                <th className="th align-bottom text-right" style={{ minWidth: 120 }} data-testid="marks-col-total">
+                  <div className="font-semibold text-ink mb-1">Total</div>
+                  <div className="text-[10px] text-ink-muted uppercase tracking-wider">/ {totalOutOf || 0}</div>
+                </th>
+                <th className="th align-bottom text-right" style={{ minWidth: 80 }}>
+                  <span className="text-[10px] text-ink-muted uppercase tracking-wider font-normal">Actions</span>
+                </th>
               </tr>
             </thead>
             <tbody>
-              {students.map((stu) => (
-                <tr key={stu.id} className="table-row" data-testid={`marks-row-${stu.student_uid}`}>
-                  <td className="td sticky left-0 bg-bg-surface">{stu.roll_number}</td>
-                  <td className="td sticky left-[60px] bg-bg-surface font-mono text-xs">{stu.student_uid}</td>
-                  <td className="td sticky left-[150px] bg-bg-surface">{stu.name}</td>
-                  {subjects.map((s) => {
-                    const mx = Number(subjectMax[s.id]) || 100;
-                    const val = entries[stu.id]?.[s.id] ?? "";
-                    const over = val !== "" && Number(val) > mx;
-                    return (
-                      <td className="td" key={s.id}>
-                        <input
-                          className={`input w-24 ${over ? "border-status-danger text-status-danger" : ""}`}
-                          type="number"
-                          min="0"
-                          max={mx}
-                          step="0.5"
-                          placeholder={`/${mx}`}
-                          value={val}
-                          onChange={(e) => setMark(stu.id, s.id, e.target.value)}
-                          data-testid={`marks-input-${stu.student_uid}-${s.id}`}
-                        />
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
+              {students.map((stu) => {
+                const t = studentTotal(stu.id);
+                const pctTone = !t.any ? "text-ink-muted"
+                  : t.pct >= 75 ? "text-status-success"
+                  : t.pct >= 40 ? "text-ink-soft"
+                  : "text-status-danger";
+                return (
+                  <tr key={stu.id} className="table-row" data-testid={`marks-row-${stu.student_uid}`}>
+                    <td className="td sticky left-0 bg-bg-surface">{stu.roll_number}</td>
+                    <td className="td sticky left-[60px] bg-bg-surface font-mono text-xs">{stu.student_uid}</td>
+                    <td className="td sticky left-[150px] bg-bg-surface">{stu.name}</td>
+                    {subjects.map((s) => {
+                      const mx = Number(subjectMax[s.id]) || 100;
+                      const val = entries[stu.id]?.[s.id] ?? "";
+                      const over = val !== "" && Number(val) > mx;
+                      return (
+                        <td className="td" key={s.id}>
+                          <input
+                            className={`input w-24 ${over ? "border-status-danger text-status-danger" : ""}`}
+                            type="number"
+                            min="0"
+                            max={mx}
+                            step="0.5"
+                            placeholder={`/${mx}`}
+                            value={val}
+                            onChange={(e) => setMark(stu.id, s.id, e.target.value)}
+                            data-testid={`marks-input-${stu.student_uid}-${s.id}`}
+                          />
+                        </td>
+                      );
+                    })}
+                    <td className="td text-right" data-testid={`marks-total-${stu.student_uid}`}>
+                      {t.any ? (
+                        <div className="leading-tight">
+                          <div className="font-semibold">{t.obtained} <span className="text-ink-muted text-xs font-normal">/ {t.outOf}</span></div>
+                          <div className={`text-xs ${pctTone}`}>{t.pct.toFixed(1)}%</div>
+                        </div>
+                      ) : <span className="text-ink-muted text-xs">—</span>}
+                    </td>
+                    <td className="td text-right">
+                      <button
+                        className="btn-secondary text-xs"
+                        onClick={() => saveRow(stu)}
+                        disabled={rowBusy === stu.id || busy}
+                        data-testid={`save-marks-row-${stu.student_uid}`}
+                        title="Save this student's marks across all subjects"
+                      >{rowBusy === stu.id ? "Saving…" : "Save row"}</button>
+                    </td>
+                  </tr>
+                );
+              })}
               {students.length === 0 && (
                 <tr>
-                  <td className="td text-ink-muted" colSpan={3 + subjects.length}>
+                  <td className="td text-ink-muted" colSpan={3 + subjects.length + 2}>
                     No students in this class/section.
                   </td>
                 </tr>
               )}
             </tbody>
+            {students.length > 0 && (
+              <tfoot className="sticky bottom-0 bg-bg-subtle border-t-2 border-line">
+                <tr data-testid="marks-totals-row">
+                  <td className="td sticky left-0 bg-bg-subtle" colSpan={3}>
+                    <span className="font-semibold uppercase tracking-wider text-xs">Total marks (out of)</span>
+                  </td>
+                  {subjects.map((s) => (
+                    <td className="td font-semibold" key={s.id} data-testid={`marks-total-out-${s.id}`}>
+                      / {Number(subjectMax[s.id]) || 0}
+                    </td>
+                  ))}
+                  <td className="td text-right font-semibold" data-testid="marks-grand-total-out">
+                    / {totalOutOf}
+                  </td>
+                  <td className="td" />
+                </tr>
+              </tfoot>
+            )}
           </table>
         </div>
       )}
