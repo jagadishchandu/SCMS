@@ -2,8 +2,9 @@ import React, { useEffect, useState } from "react";
 import { api, formatApiError } from "../../lib/api";
 import { useAuth } from "../../contexts/AuthContext";
 import { PageHeader, Section, Empty } from "../../components/Primitives";
+import { Modal } from "../../components/Modal";
 import toast from "react-hot-toast";
-import { Plus, Trash, X } from "@phosphor-icons/react";
+import { Plus, Trash, X, Users, Warning } from "@phosphor-icons/react";
 
 export default function ClassesPage() {
   const { user } = useAuth();
@@ -12,6 +13,8 @@ export default function ClassesPage() {
   const [subjects, setSubjects] = useState([]);
   const [teachers, setTeachers] = useState([]);
   const [maps, setMaps] = useState([]);
+  const [coverage, setCoverage] = useState(null);
+  const [bulkSubject, setBulkSubject] = useState(null);
   const [newClass, setNewClass] = useState({ name: "", sections: "A,B" });
   const [newSub, setNewSub] = useState({ name: "", code: "" });
   const [assign, setAssign] = useState({ teacher_id: "", class_id: "", section: "" });
@@ -26,11 +29,15 @@ export default function ClassesPage() {
       ]);
       setClasses(c); setSubjects(s); setMaps(m);
     } catch (err) { /* swallow */ }
-    // teachers list only loaded for school_admin (teacher role can't list other teachers)
+    // teachers list + coverage matrix are school_admin-only (require listing all teachers)
     if (user?.role === "school_admin") {
       try {
         const t = await api.get("/users", { params: { role: "teacher" } }).then((r) => r.data);
         setTeachers(t);
+      } catch (err) { /* swallow */ }
+      try {
+        const cov = await api.get("/academic/subjects/coverage").then((r) => r.data);
+        setCoverage(cov);
       } catch (err) { /* swallow */ }
     }
   };
@@ -256,6 +263,228 @@ export default function ClassesPage() {
             </ul>}
         </Section>
       )}
+
+      {canDelete && (
+        <div className="mt-6">
+          <CoverageMatrix
+            coverage={coverage}
+            onBulkAssign={(subj) => setBulkSubject(subj)}
+            onQuickRemove={async (subj, teacher) => {
+              if (!window.confirm(`Remove "${subj.subject_name}" from ${teacher.name}?`)) return;
+              try {
+                await api.post(`/academic/subjects/${subj.subject_id}/unassign-teacher/${teacher.id}`);
+                toast.success(`Removed ${subj.subject_name} from ${teacher.name}`);
+                load();
+              } catch (err) { toast.error(formatApiError(err)); }
+            }}
+          />
+        </div>
+      )}
+
+      {bulkSubject && (
+        <BulkAssignModal
+          subject={bulkSubject}
+          teachers={teachers}
+          onClose={() => setBulkSubject(null)}
+          onDone={() => { setBulkSubject(null); load(); }}
+        />
+      )}
     </div>
+  );
+}
+
+function CoverageMatrix({ coverage, onBulkAssign, onQuickRemove }) {
+  if (!coverage) return null;
+  const rows = coverage.subjects || [];
+  return (
+    <Section
+      title="Subject ⇄ teacher coverage"
+      subtitle={`${rows.length} subjects · ${coverage.total_teachers} active teachers · ${coverage.orphan_count} orphan subject(s) with no teacher assigned.`}
+    >
+      {rows.length === 0 ? <Empty title="No subjects defined yet" /> : (
+        <div className="overflow-x-auto" data-testid="coverage-matrix">
+          <table className="table">
+            <thead>
+              <tr>
+                <th className="th">Subject</th>
+                <th className="th">Code</th>
+                <th className="th">Teachers</th>
+                <th className="th text-right">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                const isOrphan = r.teacher_count === 0;
+                return (
+                  <tr key={r.subject_id} className="table-row" data-testid={`coverage-row-${r.subject_id}`}>
+                    <td className="td">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">{r.subject_name}</span>
+                        {isOrphan && (
+                          <span className="badge-warning inline-flex items-center gap-1" data-testid={`orphan-${r.subject_id}`}>
+                            <Warning size={12} weight="fill" /> Orphan
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="td text-xs text-ink-muted">{r.code || "—"}</td>
+                    <td className="td">
+                      {isOrphan ? (
+                        <span className="text-xs text-status-warning">No teacher assigned</span>
+                      ) : (
+                        <div className="flex flex-wrap gap-1.5" data-testid={`coverage-teachers-${r.subject_id}`}>
+                          {r.teachers.map((t) => (
+                            <span key={t.id} className="badge-neutral inline-flex items-center gap-1" data-testid={`coverage-teacher-${r.subject_id}-${t.id}`}>
+                              {t.name}
+                              <button
+                                type="button"
+                                className="text-status-danger hover:bg-status-danger/10 rounded-full -mr-1"
+                                onClick={() => onQuickRemove(r, t)}
+                                title={`Unassign ${t.name}`}
+                                data-testid={`coverage-remove-${r.subject_id}-${t.id}`}
+                              >
+                                <X size={10} weight="bold" />
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </td>
+                    <td className="td text-right">
+                      <button
+                        className="btn-secondary"
+                        onClick={() => onBulkAssign(r)}
+                        data-testid={`bulk-assign-btn-${r.subject_id}`}
+                      >
+                        <Users size={14}/> Bulk-assign teachers
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Section>
+  );
+}
+
+function BulkAssignModal({ subject, teachers, onClose, onDone }) {
+  const initiallySelected = teachers
+    .filter((t) => (t.subjects || []).includes(subject.subject_id))
+    .map((t) => t.id);
+  const [selected, setSelected] = useState(initiallySelected);
+  const [replace, setReplace] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [q, setQ] = useState("");
+
+  const toggle = (id) => setSelected((s) => s.includes(id) ? s.filter((x) => x !== id) : [...s, id]);
+  const selectAll = () => setSelected(filteredTeachers.map((t) => t.id));
+  const clearAll = () => setSelected([]);
+
+  const filteredTeachers = teachers.filter((t) => {
+    if (!q.trim()) return true;
+    const needle = q.toLowerCase();
+    return t.name.toLowerCase().includes(needle) || (t.email || "").toLowerCase().includes(needle);
+  });
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const { data } = await api.post(`/academic/subjects/${subject.subject_id}/bulk-assign-teachers`, {
+        teacher_ids: selected,
+        replace,
+      });
+      const parts = [];
+      if (data.added) parts.push(`${data.added} added`);
+      if (data.removed) parts.push(`${data.removed} removed`);
+      if (parts.length === 0) parts.push("no changes");
+      toast.success(`${subject.subject_name}: ${parts.join(", ")}`);
+      onDone();
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Modal open onClose={onClose} title={`Bulk-assign teachers to ${subject.subject_name}`} size="lg" testId="bulk-assign-modal">
+      <form onSubmit={submit} className="space-y-4">
+        <div className="flex flex-wrap items-center gap-2 justify-between">
+          <input
+            className="input flex-1 min-w-[200px]"
+            placeholder="Search teachers by name or email…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            data-testid="bulk-assign-search"
+          />
+          <div className="flex gap-2">
+            <button type="button" className="btn-secondary" onClick={selectAll} data-testid="bulk-assign-select-all">Select all</button>
+            <button type="button" className="btn-secondary" onClick={clearAll} data-testid="bulk-assign-clear-all">Clear</button>
+          </div>
+        </div>
+
+        {teachers.length === 0 ? (
+          <div className="text-sm text-ink-muted border border-dashed border-line rounded-md p-3" data-testid="bulk-assign-empty">
+            No teachers in the school yet. Add teachers from the Staff page first.
+          </div>
+        ) : (
+          <div className="max-h-72 overflow-y-auto border border-line rounded-md divide-y divide-line" data-testid="bulk-assign-list">
+            {filteredTeachers.map((t) => {
+              const isSelected = selected.includes(t.id);
+              const wasAssigned = initiallySelected.includes(t.id);
+              return (
+                <label
+                  key={t.id}
+                  className="flex items-center gap-3 px-3 py-2 hover:bg-bg-subtle cursor-pointer"
+                  data-testid={`bulk-assign-row-${t.id}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => toggle(t.id)}
+                    data-testid={`bulk-assign-check-${t.id}`}
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-sm">{t.name}</div>
+                    <div className="text-xs text-ink-muted truncate">{t.email}</div>
+                  </div>
+                  {wasAssigned && <span className="badge-neutral">Currently assigned</span>}
+                </label>
+              );
+            })}
+            {filteredTeachers.length === 0 && (
+              <div className="px-3 py-4 text-center text-sm text-ink-muted">No teachers match your search.</div>
+            )}
+          </div>
+        )}
+
+        <label className="flex items-start gap-2 text-sm cursor-pointer" data-testid="bulk-assign-replace-wrap">
+          <input
+            type="checkbox"
+            checked={replace}
+            onChange={(e) => setReplace(e.target.checked)}
+            data-testid="bulk-assign-replace"
+            className="mt-0.5"
+          />
+          <span>
+            <strong>Authoritative mode</strong> — also un-assign this subject from every teacher NOT in the selected list.
+            <span className="block text-xs text-ink-muted">Use this when you want the selected teachers to be the only ones teaching {subject.subject_name}.</span>
+          </span>
+        </label>
+
+        <div className="flex items-center justify-between text-xs text-ink-muted" data-testid="bulk-assign-summary">
+          <span>Selected: <strong>{selected.length}</strong> of {teachers.length}</span>
+          <span>Previously assigned: <strong>{initiallySelected.length}</strong></span>
+        </div>
+
+        <div className="flex justify-end gap-2">
+          <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn-primary" disabled={busy} data-testid="bulk-assign-submit">
+            {busy ? "Saving…" : "Apply assignment"}
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
