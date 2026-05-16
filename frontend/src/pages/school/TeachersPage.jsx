@@ -440,9 +440,11 @@ function EditUserModal({ target, subjects, onClose, onSaved, onReset }) {
 function ResetPasswordModal({ target, onClose }) {
   const [newPw, setNewPw] = useState("");
   const [confirmPw, setConfirmPw] = useState("");
+  const [sendTelegram, setSendTelegram] = useState(Boolean(target?.telegram_chat_id));
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState(null); // { email, name, role, new_password }
+  const [result, setResult] = useState(null); // { email, name, role, new_password, telegram? }
   const [copied, setCopied] = useState(false);
+  const telegramLinked = Boolean(target?.telegram_chat_id);
 
   const generateRandom = () => {
     const chars = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789";
@@ -457,9 +459,17 @@ function ResetPasswordModal({ target, onClose }) {
     if (newPw !== confirmPw) { toast.error("Passwords don't match"); return; }
     setBusy(true);
     try {
-      const { data } = await api.post(`/users/${target.id}/reset-password`, { new_password: newPw });
+      const { data } = await api.post(`/users/${target.id}/reset-password`, {
+        new_password: newPw,
+        send_via_telegram: sendTelegram,
+      });
       setResult(data);
-      toast.success("Password reset");
+      if (sendTelegram) {
+        if (data?.telegram?.status === "sent") toast.success("Password reset & sent on Telegram");
+        else toast(`Password reset · Telegram: ${data?.telegram?.delivery_note || "queued"}`, { icon: "ℹ️" });
+      } else {
+        toast.success("Password reset");
+      }
     } catch (err) { toast.error(formatApiError(err)); }
     finally { setBusy(false); }
   };
@@ -481,6 +491,16 @@ function ResetPasswordModal({ target, onClose }) {
             <div className="font-medium text-status-success mb-1">Password updated</div>
             <div className="text-ink-soft text-xs">Share the new password with <strong>{result.name}</strong> ({result.email}) — they can use it to log in immediately. This is the only time it will be shown.</div>
           </div>
+          {result.telegram ? (
+            <div
+              className={`rounded-md border p-3 text-xs ${result.telegram.status === "sent" ? "border-status-success/40 bg-status-success/5 text-status-success" : "border-status-warning/40 bg-status-warning/5 text-status-warning"}`}
+              data-testid="reset-telegram-status"
+            >
+              {result.telegram.status === "sent"
+                ? <>✅ New password sent to {result.name} on Telegram.</>
+                : <>⚠️ Telegram delivery: <code>{result.telegram.delivery_note || result.telegram.status}</code>{result.telegram.linked ? "" : " — user hasn't linked Telegram yet."}</>}
+            </div>
+          ) : null}
           <div>
             <label className="label">New password</label>
             <div className="flex items-stretch gap-2">
@@ -505,7 +525,7 @@ function ResetPasswordModal({ target, onClose }) {
       ) : (
         <form onSubmit={submit} className="space-y-4">
           <div className="text-sm text-ink-soft">
-            Set a new password for <strong>{target.name}</strong> ({target.email}). The user is not notified — share it with them manually.
+            Set a new password for <strong>{target.name}</strong> ({target.email}). Either share it manually after submit, or tick the box below to push it directly to their Telegram.
           </div>
           <div>
             <label className="label">New password</label>
@@ -542,9 +562,33 @@ function ResetPasswordModal({ target, onClose }) {
               data-testid="reset-password-confirm"
             />
           </div>
+          <label className="flex items-start gap-2 text-sm cursor-pointer rounded-md border border-line p-3 hover:bg-bg-subtle">
+            <input
+              type="checkbox"
+              checked={sendTelegram}
+              onChange={(e) => setSendTelegram(e.target.checked)}
+              data-testid="reset-password-send-telegram"
+              className="mt-0.5"
+            />
+            <div className="flex-1">
+              <div className="font-medium flex items-center gap-2">
+                <PaperPlaneTilt size={14}/> Also send the new password via Telegram
+                {telegramLinked
+                  ? <span className="badge-success text-[10px]">Linked</span>
+                  : <span className="badge-neutral text-[10px]">Not linked</span>}
+              </div>
+              <div className="text-xs text-ink-muted mt-0.5">
+                {telegramLinked
+                  ? "We'll push the credentials straight to their Telegram chat — no manual sharing needed."
+                  : "User hasn't linked Telegram yet — the message will be queued and delivered once they connect."}
+              </div>
+            </div>
+          </label>
           <div className="flex justify-end gap-2">
             <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
-            <button type="submit" className="btn-primary" disabled={busy} data-testid="reset-password-submit">{busy ? "Resetting…" : "Reset password"}</button>
+            <button type="submit" className="btn-primary" disabled={busy} data-testid="reset-password-submit">
+              {busy ? "Resetting…" : (sendTelegram ? "Reset & send" : "Reset password")}
+            </button>
           </div>
         </form>
       )}

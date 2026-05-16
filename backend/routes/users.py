@@ -245,6 +245,7 @@ class ChangePasswordPayload(_BaseModel):
 
 class AdminResetPasswordPayload(_BaseModel):
     new_password: str
+    send_via_telegram: bool = False
 
 
 @router.post("/{user_id}/reset-password")
@@ -261,6 +262,9 @@ async def admin_reset_user_password(
     Returns `{ok: True, email, new_password}` so the resetting admin can share the new password
     with the user manually. The new password is shown on-screen exactly once (audit-logged but never
     persisted in plaintext).
+    Pass `send_via_telegram: true` to also push the new credentials to the target's linked
+    Telegram chat in the same call. The response then also carries `telegram` with the delivery
+    status (sent / queued / failed) and any delivery_note.
     """
     if user["role"] not in ("school_admin", "platform_admin"):
         raise HTTPException(status_code=403, detail="Forbidden")
@@ -318,16 +322,51 @@ async def admin_reset_user_password(
     await log_action(
         user["id"], user["role"], target.get("school_id"),
         "reset_password", "user", user_id,
-        {"target_email": target.get("email"), "target_role": target_role},
+        {
+            "target_email": target.get("email"),
+            "target_role": target_role,
+            "sent_via_telegram": bool(payload.send_via_telegram),
+        },
     )
 
-    return {
+    response: dict = {
         "ok": True,
         "email": target.get("email"),
         "name": target.get("name"),
         "role": target_role,
         "new_password": payload.new_password,
     }
+
+    if payload.send_via_telegram:
+        role_label = {"teacher": "Teacher", "accounts": "Accounts", "school_admin": "School Super Admin"}.get(target_role, target_role.title())
+        msg = (
+            f"🔐 Your {role_label.lower()} password has been reset by an administrator.\n"
+            f"Login email: {target.get('email')}\n"
+            f"New password: {payload.new_password}\n\n"
+            f"Please log in and change this password from your profile."
+        )
+        try:
+            from core.notify import queue_notification
+            note = await queue_notification(
+                school_id=target.get("school_id"),
+                recipient_type=target_role,
+                recipient_id=user_id,
+                phone=target.get("phone"),
+                channel="telegram",
+                template="admin_password_reset",
+                message=msg,
+                context={"target_role": target_role, "reset_by": user["role"]},
+                telegram_chat_id=target.get("telegram_chat_id"),
+            )
+            response["telegram"] = {
+                "status": note.get("status"),
+                "delivery_note": note.get("delivery_note"),
+                "linked": bool(target.get("telegram_chat_id")),
+            }
+        except Exception as e:
+            response["telegram"] = {"status": "failed", "delivery_note": str(e), "linked": bool(target.get("telegram_chat_id"))}
+
+    return response
 
 
 @router.post("/me/change-password")
