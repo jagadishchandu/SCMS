@@ -48,17 +48,12 @@ export default function SchoolSubscription() {
         />
       )}
 
-      {isApproved && approval.approved_children_count != null && (
-        <div className="border border-status-success/40 bg-status-success/5 rounded-lg p-4 mb-6 flex items-start gap-3" data-testid="approval-approved-banner">
-          <ShieldCheck size={20} className="text-status-success mt-0.5" />
-          <div>
-            <div className="font-medium text-status-success">Subscription approved by Platform Super Admin</div>
-            <div className="text-xs text-ink-soft mt-1">
-              Approved capacity: <span className="font-medium">{approval.approved_children_count} children</span>.
-              {approval.approval_note ? <> Note: <span className="italic">{approval.approval_note}</span></> : null}
-            </div>
-          </div>
-        </div>
+      {isApproved && (
+        <ApprovedEditPanel
+          approval={approval}
+          actualCount={q.students_active}
+          onSubmitted={async () => { await load(); await refresh(); }}
+        />
       )}
       {/* Current plan summary */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
@@ -160,6 +155,89 @@ export default function SchoolSubscription() {
     </div>
   );
 }
+
+function ApprovedEditPanel({ approval, actualCount, onSubmitted }) {
+  const cap = approval.approved_children_count ?? approval.requested_children_count;
+  const [editing, setEditing] = useState(false);
+  const [count, setCount] = useState(approval.requested_children_count || cap || "");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const overCapacity = cap != null && actualCount > cap;
+
+  const submit = async (e) => {
+    e.preventDefault();
+    const n = Number(count);
+    if (!n || n < 1) { toast.error("Enter a valid children count (>= 1)"); return; }
+    setBusy(true);
+    try {
+      await api.post("/subscriptions/approval-request", {
+        requested_children_count: n,
+        note: note || null,
+      });
+      toast.success("Requested children count updated");
+      setEditing(false);
+      setNote("");
+      onSubmitted();
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div
+      className={`border rounded-lg p-5 mb-6 ${overCapacity ? "border-status-danger/40 bg-status-danger/5" : "border-status-success/40 bg-status-success/5"}`}
+      data-testid="approved-edit-panel"
+    >
+      <div className="flex items-start gap-3 mb-3">
+        <ShieldCheck size={20} className={`mt-0.5 ${overCapacity ? "text-status-danger" : "text-status-success"}`} />
+        <div className="flex-1">
+          <div className={`font-medium ${overCapacity ? "text-status-danger" : "text-status-success"}`}>
+            {overCapacity ? "Over capacity — update your requested count" : "Subscription approved"}
+          </div>
+          <div className="text-xs text-ink-soft mt-1">
+            Approved capacity: <span className="font-semibold">{cap ?? "—"}</span> children · Actual active students: <span className="font-semibold">{actualCount}</span>
+            {overCapacity && <> · <span className="font-semibold">{actualCount - cap} over</span></>}
+            {approval.approval_note ? <> · Note: <span className="italic">{approval.approval_note}</span></> : null}
+          </div>
+        </div>
+        {!editing && (
+          <button className="btn-secondary text-xs" onClick={() => setEditing(true)} data-testid="edit-approval-btn">
+            Edit count
+          </button>
+        )}
+      </div>
+      {editing && (
+        <form onSubmit={submit} className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end mt-2 pt-3 border-t border-line">
+          <div className="md:col-span-1">
+            <label className="label">Requested children count</label>
+            <input
+              type="number" min="1" max="100000" className="input" required
+              value={count} onChange={(e) => setCount(e.target.value)}
+              data-testid="edit-approval-count-input"
+            />
+          </div>
+          <div className="md:col-span-2">
+            <label className="label">Reason for change <span className="text-xs text-ink-muted">(optional)</span></label>
+            <input
+              className="input" value={note} onChange={(e) => setNote(e.target.value)}
+              placeholder="e.g. Adding a new section in Grade 5"
+              data-testid="edit-approval-note-input"
+            />
+          </div>
+          <div className="md:col-span-3 flex justify-end gap-2">
+            <button type="button" className="btn-secondary" onClick={() => { setEditing(false); setCount(approval.requested_children_count || cap || ""); }}>
+              Cancel
+            </button>
+            <button type="submit" className="btn-primary" disabled={busy} data-testid="save-approval-edit-btn">
+              {busy ? "Saving…" : "Save changes"}
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
+}
+
 
 function ApprovalPanel({ approval, onSubmitted }) {
   const [count, setCount] = useState(approval.requested_children_count || "");

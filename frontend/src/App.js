@@ -15,6 +15,7 @@ import ForgotPassword from "./pages/ForgotPassword";
 // Platform
 import PlatformOverview from "./pages/platform/PlatformOverview";
 import SubscriptionsPage from "./pages/platform/SubscriptionsPage";
+import CompliancePage from "./pages/platform/CompliancePage";
 
 // Shared
 import StudentAnalytics from "./pages/shared/StudentAnalytics";
@@ -79,6 +80,7 @@ export default function App() {
       <Route path="/platform" element={<ProtectedRoute allow={["platform_admin"]}>{withLayout(PlatformOverview)}</ProtectedRoute>} />
       <Route path="/platform/schools" element={<ProtectedRoute allow={["platform_admin"]}>{withLayout(PlatformOverview)}</ProtectedRoute>} />
       <Route path="/platform/subscriptions" element={<ProtectedRoute allow={["platform_admin"]}>{withLayout(SubscriptionsPage)}</ProtectedRoute>} />
+      <Route path="/platform/compliance" element={<ProtectedRoute allow={["platform_admin"]}>{withLayout(CompliancePage)}</ProtectedRoute>} />
       <Route path="/platform/notifications" element={<ProtectedRoute allow={["platform_admin"]}>{withLayout(NotificationsLog)}</ProtectedRoute>} />
       <Route path="/platform/audit" element={<ProtectedRoute allow={["platform_admin"]}>{withLayout(AuditLogPage)}</ProtectedRoute>} />
 

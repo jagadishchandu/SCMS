@@ -119,6 +119,34 @@ async def submit_approval_request(payload: ApprovalRequest, user: dict = Depends
     if not school:
         raise HTTPException(status_code=404, detail="School not found")
     now = utc_now()
+    existing = school.get("subscription_approval") or {}
+    current_status = existing.get("status") or "not_started"
+
+    # If the school is already approved, treat this as an edit — keep status='approved',
+    # update the requested count, and log an edit event. Compliance view surfaces variance.
+    if current_status == "approved":
+        update = {
+            "subscription_approval.requested_children_count": payload.requested_children_count,
+            "subscription_approval.last_edited_at": now,
+            "subscription_approval.last_edited_by": user["id"],
+        }
+        if payload.note:
+            update["subscription_approval.note"] = payload.note
+        await db.schools.update_one({"id": user["school_id"]}, {"$set": update})
+        await log_action(
+            user["id"], user["role"], user["school_id"], "edit_approval_request",
+            "subscription_approval", user["school_id"],
+            meta={"requested_children_count": payload.requested_children_count,
+                  "prev_requested": existing.get("requested_children_count")},
+        )
+        refreshed = (await db.schools.find_one({"id": user["school_id"]}, {"_id": 0})).get("subscription_approval") or {}
+        for k in ("requested_at", "decided_at", "last_edited_at"):
+            v = refreshed.get(k)
+            if hasattr(v, "isoformat"):
+                refreshed[k] = v.isoformat()
+        return {"ok": True, "edited": True, "subscription_approval": refreshed}
+
+    # Otherwise (not_started / pending / rejected) — submit/resubmit as a fresh request.
     approval = {
         "status": "pending",
         "requested_children_count": payload.requested_children_count,
@@ -139,7 +167,6 @@ async def submit_approval_request(payload: ApprovalRequest, user: dict = Depends
         meta={"requested_children_count": payload.requested_children_count},
     )
     approval.pop("_id", None)
-    # Convert datetime → iso for JSON
     if isinstance(approval.get("requested_at"), object):
         approval["requested_at"] = now.isoformat()
     return {"ok": True, "subscription_approval": approval}
@@ -205,6 +232,76 @@ async def decide_approval_request(school_id: str, payload: ApprovalDecide,
               "requested_children_count": approval.get("requested_children_count")},
     )
     return {"ok": True, "status": new_status, "approved_children_count": approved_count if new_status == "approved" else None}
+
+
+# ----------------- compliance view (platform admin) -----------------
+
+def _compute_compliance(approval: dict, actual: int) -> str:
+    """Return one of: no_request, compliant, over_capacity, pending_review, rejected."""
+    status = (approval or {}).get("status") or "not_started"
+    if status == "not_started":
+        return "no_request"
+    if status == "rejected":
+        return "rejected"
+    if status == "pending":
+        return "pending_review"
+    # approved
+    cap = approval.get("approved_children_count") or approval.get("requested_children_count")
+    if cap is None:
+        return "compliant"  # legacy auto-approved with no cap
+    return "over_capacity" if actual > cap else "compliant"
+
+
+@router.get("/compliance")
+async def compliance_view(filter: str | None = None,
+                           user: dict = Depends(require_roles("platform_admin"))):
+    """View-only compliance report for Platform Super Admin.
+
+    For each school, compares the school admin's requested/approved children count
+    against the live actual student count in their tenant DB. View-only — no edits.
+
+    Optional `filter`: compliant | over_capacity | pending_review | rejected | no_request
+    """
+    from core.db import tenant_db
+    db = get_db()
+    schools = await db.schools.find({}, {"_id": 0}).sort("name", 1).to_list(2000)
+    rows = []
+    for s in schools:
+        tdb = await tenant_db(s["id"])
+        actual = await tdb.students.count_documents({"status": "active"})
+        approval = s.get("subscription_approval") or {}
+        requested = approval.get("requested_children_count")
+        approved = approval.get("approved_children_count")
+        status = approval.get("status") or "not_started"
+        compliance = _compute_compliance(approval, actual)
+        cap = approved or requested
+        variance = (actual - cap) if cap is not None else None
+        # Convert datetime → iso
+        approval_view = dict(approval)
+        for k in ("requested_at", "decided_at", "last_edited_at"):
+            v = approval_view.get(k)
+            if hasattr(v, "isoformat"):
+                approval_view[k] = v.isoformat()
+        rows.append({
+            "school_id": s["id"],
+            "school_name": s["name"],
+            "school_code": s.get("code"),
+            "approval_status": status,
+            "requested_children_count": requested,
+            "approved_children_count": approved,
+            "actual_active_students": actual,
+            "variance": variance,
+            "compliance": compliance,
+            "approval_meta": approval_view,
+        })
+    if filter:
+        rows = [r for r in rows if r["compliance"] == filter]
+    # Summary buckets for KPI tiles
+    summary = {"compliant": 0, "over_capacity": 0, "pending_review": 0, "rejected": 0, "no_request": 0}
+    for r in rows:
+        summary[r["compliance"]] = summary.get(r["compliance"], 0) + 1
+    return {"rows": rows, "summary": summary, "total": len(rows)}
+
 
 
 @router.get("/quote/{school_id}")

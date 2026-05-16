@@ -1,0 +1,31 @@
+{
+  "summary": "Iter9 (v1.18.1 — Editable approval count + Platform Compliance view): Verified end-to-end on the deployed preview URL. Backend pytest /app/backend/tests/test_v181_editable_compliance.py = 7/7 PASS (23.2s). Regression: /app/backend/tests/test_v18_approval_payroll.py = 15/15 PASS (51.2s). FRONTEND — Platform admin: logged in with role=platform_admin, sidebar shows the new 'Compliance' link at /platform/compliance (between Subscriptions and Notifications). Compliance page renders [data-testid='compliance-page'] with all 5 KPI tiles (kpi-total-schools=325, kpi-over-capacity=3, kpi-compliant=243, kpi-pending-review=24, kpi-no-request=48) and all 6 filter buttons (all/over_capacity/compliant/pending_review/rejected/no_request). All 325 compliance-row-* rendered for the 'all' filter, 3 rows when 'over_capacity' filter clicked — variances +2 confirming the over-capacity logic. Zero action buttons in the table (read-only). SCHOOL ADMIN — logged in as principal@sunrise.edu, /school/subscription rendered [data-testid='approved-edit-panel'] with text 'Subscription approved — Approved capacity: 500 children · Actual active students: 156 — Edit count'. Clicked edit-approval-btn -> edit-approval-count-input + save-approval-edit-btn appeared. Submitted new count 777, panel re-rendered with status still 'approved' and value 777. /school/students still accessible (full feature access preserved). All data-testids in the request match: approved-edit-panel, edit-approval-btn, edit-approval-count-input, save-approval-edit-btn, compliance-page, kpi-*, compliance-filter-*, compliance-row-*.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_v181_editable_compliance.py",
+    "/app/backend/tests/test_v18_approval_payroll.py",
+    "/app/test_reports/pytest/iter9_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "routes/subscriptions.py — submit_approval_request correctly branches on existing status: when status='approved', it preserves the approved status and returns {edited: true}; when status in {not_started, pending, rejected}, it submits as fresh pending. Confirmed via test_edit_count_after_approval_keeps_status_approved + test_edit_count_when_pending_resets_to_pending.",
+    "routes/subscriptions.py — GET /compliance with _compute_compliance helper correctly: (a) computes variance against approved_children_count if present else requested_children_count, (b) classifies into compliant/over_capacity/pending_review/rejected/no_request, (c) summary counts match per-row tallies, (d) gracefully handles schools with no actual_active_students query (returns 0). Filter param works for all 5 status values.",
+    "routes/subscriptions.py — Platform-only RBAC enforced (test_compliance_rejects_non_platform_admin: school_admin -> 403).",
+    "frontend CompliancePage.jsx — clean read-only design, no Approve/Reject/Edit affordances; KPIs reflect summary; filter pill counters use summary[k]; loading state handled.",
+    "frontend SchoolSubscription.jsx — ApprovedEditPanel toggles cleanly between display + edit modes; preserves approved status via the same POST /approval-request endpoint (server-side decision), so the UI doesn't need to special-case anything. Note count was successfully edited from 500 -> 777 with status remaining approved.",
+    "Sidebar.jsx — platform_admin nav array correctly includes /platform/compliance with ShieldCheck icon."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (7/7 v181 pytest + 15/15 v18 regression)", "frontend": "100% (platform Compliance page + school ApprovedEditPanel full flow)"},
+  "test_credentials": "Used /app/memory/test_credentials.md verbatim: jagadishchandu789@gmail.com / Manasa@123 (platform admin), principal@sunrise.edu / School@123 (school admin). The frontend login form requires explicit role selection in the dropdown — the default is School Super Admin, so platform admin tests must select 'platform_admin'.",
+  "seed_data_creation": "v181 pytest creates ~7 ephemeral schools (v181.admin.*@v181.example.com / Admin@2026) per run — 4 auto-approved with capacity 100/500/1 and 2 left in pending. The over-capacity ones from prior runs are visible on the live Compliance page (3 rows at iter9 time). Expected per task author's note.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "v1.18.1 is production-ready. Re-run via `pytest backend/tests/test_v181_editable_compliance.py backend/tests/test_v18_approval_payroll.py -v` (22/22 expected). For UI: at the login screen, select the role dropdown explicitly (default = School Super Admin), then login. For platform admin compliance smoke: /platform/compliance -> check kpi-total-schools value > 0 and compliance-row-* count > 0. For school admin edit flow: principal@sunrise.edu -> /school/subscription -> approved-edit-panel should be visible. The Compliance page returns ~325 schools and can take 2-4s to load; wait for [data-testid='compliance-page'] up to 20s.",
+  "rca of the issue": "No bugs found in this iteration. (Note: my initial Playwright run failed to find the Compliance sidebar link only because I forgot to select 'platform_admin' in the login role dropdown — actual functionality is fully correct.)"
+}

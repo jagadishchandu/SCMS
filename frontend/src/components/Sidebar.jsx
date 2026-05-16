@@ -14,6 +14,7 @@ const NAV_BY_ROLE = {
     { to: "/platform", label: "Overview", icon: Gauge, end: true },
     { to: "/platform/schools", label: "Schools", icon: Buildings },
     { to: "/platform/subscriptions", label: "Subscriptions", icon: Package },
+    { to: "/platform/compliance", label: "Compliance", icon: ShieldCheck },
     { to: "/platform/notifications", label: "Notifications", icon: BellRinging },
     { to: "/platform/audit", label: "Audit log", icon: ShieldCheck },
   ],
