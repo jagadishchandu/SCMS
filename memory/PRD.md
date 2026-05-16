@@ -1,5 +1,18 @@
 # SCMS — School Child Monitoring System (PRD)
 
+## Implemented v1.34 (2026-05-16) — Multi-subject marks grid (one screen, per-subject Out-of)
+
+### 📝 Single-screen marks entry across all subjects
+- **`MarksEntryModal` (`/school/exams` + `/teacher/marks`)** redesigned: dropdown subject picker REMOVED. The modal (now `size="xl"`) renders a scrollable grid with one column per school subject, sticky Roll / UID / Student columns on the left, and a marks cell per `(student × subject)`.
+- **Per-subject editable "Out of"** input lives in every column header (`marks-max-<subject_id>`) — defaults to existing exam max (read back from `/marks`) or 100. Each subject can have a different maximum.
+- **Inline validation** — cells highlight red when the typed mark exceeds that subject's Out-of; Save also pre-validates and toasts the offending student + subject. Out-of of 0/blank is rejected with a clear message; modal stays open so the user can fix in place.
+- **Save** loops over subjects and POSTs `/marks/bulk` once per non-empty subject (existing backend endpoint, unchanged — `max_marks` is sent per request so every persisted doc carries its own subject-specific max). Success toast aggregates the count across subjects.
+- Works identically for `school_admin` and `teacher` (App.js wires both `/school/exams` and `/teacher/marks` to the same component).
+
+### Verified
+- iter22 testing agent: 100% frontend — modal render, per-subject Out-of edit, multi-cell entry, save loop, client-side validation (over-range + blank Out-of), persistence on reopen all verified live on DEMO Mid-Term exam (Grade 5, 5 subjects × 8 students = 40 cells).
+- No backend change required; `/api/marks/bulk` and `/api/marks` continue to honour per-row `max_marks`.
+
 ## Implemented v1.33 (2026-05-16) — Admin-driven password reset (+ Telegram delivery hint)
 
 ### 🔐 School admin & Platform Super Admin can reset other users' passwords
