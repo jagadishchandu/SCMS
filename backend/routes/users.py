@@ -27,6 +27,37 @@ async def list_users(role: str | None = None, user: dict = Depends(get_current_u
     if role:
         q["role"] = role
     docs = await db.users.find(q, {"_id": 0, "password_hash": 0}).to_list(2000)
+
+    # Enrich with last-telegram-credentials timestamp (per user) so the UI can
+    # surface "📲 Last sent on …" hints without an extra round-trip.
+    if docs and user["role"] in ("platform_admin", "school_admin"):
+        ids = [d["id"] for d in docs]
+        pipeline = [
+            {"$match": {
+                "resource": "user",
+                "resource_id": {"$in": ids},
+                "$or": [
+                    {"action": "reset_password", "meta.sent_via_telegram": True},
+                    {"action": "send_credentials", "meta.channel": "telegram"},
+                ],
+            }},
+            {"$sort": {"created_at": -1}},
+            {"$group": {
+                "_id": "$resource_id",
+                "last_at": {"$first": "$created_at"},
+                "last_action": {"$first": "$action"},
+            }},
+        ]
+        last_by_user: dict[str, dict] = {}
+        async for row in db.audit_logs.aggregate(pipeline):
+            last_by_user[row["_id"]] = {
+                "last_telegram_credential_at": row["last_at"],
+                "last_telegram_credential_action": row["last_action"],
+            }
+        for d in docs:
+            info = last_by_user.get(d["id"])
+            if info:
+                d.update(info)
     return docs
 
 
@@ -207,6 +238,17 @@ async def send_user_credentials(
         message=msg,
         context={"reset_first": reset_first, "role": target["role"]},
         telegram_chat_id=target.get("telegram_chat_id"),
+    )
+    await log_action(
+        user["id"], user["role"], user["school_id"],
+        "send_credentials", "user", user_id,
+        {
+            "target_email": target.get("email"),
+            "target_role": target.get("role"),
+            "channel": channel,
+            "reset_first": reset_first,
+            "delivery_status": note.get("status"),
+        },
     )
     return {
         "ok": True,

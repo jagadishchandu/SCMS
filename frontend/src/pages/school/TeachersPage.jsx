@@ -9,6 +9,21 @@ import PhoneInput from "../../components/PhoneInput";
 
 const fmtMoney = (v) => v != null && v !== "" ? new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(Number(v)) : "—";
 
+const fmtRelDate = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const now = new Date();
+  const diffMs = now - d;
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  if (diffDays < 1) {
+    const h = Math.floor(diffMs / (1000 * 60 * 60));
+    if (h < 1) return "just now";
+    return `${h}h ago`;
+  }
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+};
+
 export default function TeachersPage() {
   const { user } = useAuth();
   const canSeeSalary = user?.role === "school_admin" || user?.role === "accounts";
@@ -149,6 +164,27 @@ export default function TeachersPage() {
                     <span className="overline mr-1">Salary</span>{fmtMoney(u.monthly_salary)} / mo
                   </div>
                 ) : null}
+                {u.last_telegram_credential_at ? (
+                  <div
+                    className="text-xs text-status-success/90 flex items-center gap-1 mt-1.5"
+                    title={`${u.last_telegram_credential_action === "reset_password" ? "Password reset and sent" : "Login credentials sent"} via Telegram on ${new Date(u.last_telegram_credential_at).toLocaleString()}`}
+                    data-testid={`telegram-creds-hint-${u.id}`}
+                  >
+                    <PaperPlaneTilt size={12} weight="fill"/>
+                    <span>
+                      {u.last_telegram_credential_action === "reset_password" ? "Password sent" : "Login sent"} via Telegram · {fmtRelDate(u.last_telegram_credential_at)}
+                    </span>
+                  </div>
+                ) : (
+                  <div
+                    className="text-xs text-ink-muted flex items-center gap-1 mt-1.5"
+                    data-testid={`telegram-creds-hint-${u.id}`}
+                    title="Credentials have never been delivered to this user via Telegram — they may not have working access yet."
+                  >
+                    <PaperPlaneTilt size={12}/>
+                    <span>No credentials sent via Telegram yet</span>
+                  </div>
+                )}
                 <div className="flex gap-1.5 mt-3 pt-3 border-t border-line flex-wrap">
                   <button
                     className="btn-secondary text-xs flex-1"

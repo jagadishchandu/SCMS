@@ -1,6 +1,6 @@
 # SCMS — School Child Monitoring System (PRD)
 
-## Implemented v1.33 (2026-05-16) — Admin-driven password reset (+ one-click Telegram delivery)
+## Implemented v1.33 (2026-05-16) — Admin-driven password reset (+ Telegram delivery hint)
 
 ### 🔐 School admin & Platform Super Admin can reset other users' passwords
 - **`POST /api/users/{user_id}/reset-password`** (new). RBAC:
@@ -8,16 +8,23 @@
   - `platform_admin` may reset **school_admin** users in any school (target=teacher/accounts/parent → 403 with hint).
   - Validates `new_password >= 6` chars (400 otherwise). 404 for unknown user_id.
   - Persists `password_changed_at`, `password_reset_by_id`, `password_reset_by_role`, `password_reset_at` on the user doc; mirrors the new hash into the per-school DB; writes an `audit_logs` entry (`action=reset_password`, `resource=user`).
-  - **NEW**: optional `send_via_telegram: bool` payload field. When true, after the reset the new credentials are queued to the target's linked Telegram chat (using the existing `core.notify` pipeline, template `admin_password_reset`). Response carries `telegram: {status, delivery_note, linked}`. Audit meta records `sent_via_telegram` so admins can prove the delivery.
+  - Optional `send_via_telegram: bool` payload — when true, the new credentials are queued to the target's linked Telegram chat (template `admin_password_reset`); response carries `telegram: {status, delivery_note, linked}`; audit meta records `sent_via_telegram`.
+- **`POST /api/users/{user_id}/send-credentials`** now audit-logs (`action=send_credentials` with `meta.channel`) so deliveries can be inspected.
+- **`GET /api/users`** enriches every row with `last_telegram_credential_at` + `last_telegram_credential_action` derived from a single audit-log aggregation. No N+1.
 - **`GET /api/schools/{id}/people`** now also returns `accounts[]` + `school_admins[]` + `counts.school_admins` so the Platform drawer can list the school super admin.
 
 ### 🖥️ Frontend
-- **TeachersPage (`/school/teachers`)** — every teacher / accounts card now has a `Reset password` button (`reset-password-btn-<id>`). An additional `Reset password` link is exposed inside `EditUserModal` (`edit-user-reset-password-btn`). The shared `ResetPasswordModal` has Generate (10-char random), Confirm field, an **"Also send via Telegram"** checkbox (`reset-password-send-telegram`) showing Linked/Not-linked status, and a post-success view with `Copy` button + Telegram delivery banner (`reset-telegram-status`).
-- **PlatformOverview drawer** — new "School Super Admin(s)" section listing each school admin with `Reset password` button. `AdminResetPasswordModal` mirrors the same flow (including Telegram checkbox) but only the Platform Super Admin can trigger it.
+- **TeachersPage (`/school/teachers`)** —
+  - Reset password button (`reset-password-btn-<id>`) on every teacher / accounts card + inside `EditUserModal` (`edit-user-reset-password-btn`).
+  - `ResetPasswordModal` with Generate / Confirm fields, **"Also send via Telegram"** checkbox (`reset-password-send-telegram`), post-success Copy panel + Telegram delivery banner (`reset-telegram-status`).
+  - **NEW credential-delivery hint** under every user card (`telegram-creds-hint-<id>`) — green "📲 Password sent via Telegram · 3d ago" when a recent Telegram delivery exists, neutral "No credentials sent via Telegram yet" otherwise. Tooltip shows the full timestamp.
+- **PlatformOverview drawer** — "School Super Admin(s)" section listing each school admin with Reset button + same modal flow (incl. Telegram checkbox), platform-scoped.
 
 ### Verified
-- Backend: **16/16 pytest** in `test_admin_reset_password.py` (RBAC matrix, 401/403/404/400, happy path login-with-new-pw for teacher + accounts + school_admin, audit entry, schools/people enrichment). Live curl confirms `send_via_telegram=true` queues a telegram message and audit-logs the flag. Zero regressions.
-- Frontend: live preview verified for both school admin + platform admin flows; all 6 demo credentials restored at end of testing.
+- Backend: **16/16 pytest** in `test_admin_reset_password.py` (RBAC matrix, validation, audit entry, schools/people enrichment). Live curl confirms `send_via_telegram` flag, `send_credentials` audit logging, and `last_telegram_credential_at` enrichment on `GET /users`. Zero regressions.
+- Frontend: live preview verified for both school admin + platform admin flows; all 6 demo credentials restored.
+
+## Implemented v1.32.5 (2026-05-16) — Student search typeahead + filters · Salaries on payroll & expenses
 
 ## Implemented v1.32.5 (2026-05-16) — Student search typeahead + filters · Salaries on payroll & expenses
 
