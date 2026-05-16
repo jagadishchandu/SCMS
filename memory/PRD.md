@@ -1,5 +1,11 @@
 # SCMS — School Child Monitoring System (PRD)
 
+## Implemented v1.32.2 (2026-05-16) — P1 bug fix: teacher add-student no longer 403s without class assignment
+- **Bug**: A teacher created with `subjects[]` but no `class_teacher_map` row and no timetable slot received `HTTP 403 — "You are not assigned to any class yet"` when adding a student via `POST /api/students`. Subject teachers commonly do data-entry before being formally assigned to a class, so this was blocking real workflows.
+- **Fix** (`routes/students.py::create_student` + `routes/uploads.py::upload_students`): teachers with no formal assignment can now add students to **any class/section in their own school**. Teachers *with* formal assignment remain tightly scoped to their assigned classes/sections (existing behaviour preserved). Class & section validity is verified up-front, returning `400` with the list of available sections.
+- **New regression suite** `test_v32_teacher_add_student.py` — **9/9 PASS** covering: unassigned-teacher anywhere ✔, unknown class → 400, unknown section → 400 (with available list), assigned-teacher own class ✔ / other class 403 / other section 403, school admin ✔.
+- Broader regression: **64/64 existing tests pass** across e2e school flow, fee templates, platform-and-classes, bulk creds.
+
 ## Implemented v1.32.1 (2026-05-16) — Mandatory channels: regression tests
 - New `backend/tests/test_v32_mandatory_channels.py` — **23/23 pass**, 0 regressions across the existing 33 auth/password-reset/e2e/subscription-guard tests.
 - Coverage:

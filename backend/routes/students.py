@@ -111,14 +111,28 @@ async def create_student(payload: StudentCreate, user: dict = Depends(require_ro
     db = get_db()  # for users (master)
     tdb = await tenant_db(user["school_id"])
 
-    # Teachers can only create students in classes/sections they teach
+    # Teachers can create students in classes/sections they teach. If a teacher
+    # hasn't been formally assigned to any class/section yet (no class_teacher
+    # mapping, no timetable slot), fall back to permissive school-wide add — many
+    # subject teachers do data entry before being formally tied to a class.
+    # Updates/moves/deletes remain tightly scoped via `_teacher_class_filter`.
     if user["role"] == "teacher":
+        # Verify the target class+section actually exists in this school.
+        cls = await tdb.classes.find_one({"id": payload.class_id, "school_id": user["school_id"]}, {"_id": 0, "sections": 1})
+        if not cls:
+            raise HTTPException(status_code=400, detail="Class not found in this school")
+        valid_sections = [str(s).upper() for s in (cls.get("sections") or [])]
+        if payload.section and payload.section.upper() not in valid_sections:
+            raise HTTPException(status_code=400, detail=f"Section '{payload.section}' is not configured for this class. Available: {valid_sections}")
+
         tflt = await _teacher_class_filter(tdb, user)
-        if not tflt or tflt.get("_blocked_"):
-            raise HTTPException(status_code=403, detail="You are not assigned to any class yet")
-        allowed = {(c["class_id"], c["section"]) for c in tflt.get("$or", [])}
-        if (payload.class_id, payload.section) not in allowed:
-            raise HTTPException(status_code=403, detail="You can only add students to classes you teach")
+        # If the teacher has explicit assignments, enforce them.
+        if tflt and not tflt.get("_blocked_") and tflt.get("$or"):
+            allowed = {(c["class_id"], c["section"]) for c in tflt.get("$or", [])}
+            if (payload.class_id, payload.section) not in allowed:
+                raise HTTPException(status_code=403, detail="You can only add students to classes you teach")
+        # else: teacher has no formal class assignment — permit school-wide add
+        # (still tenant-scoped to their own school via tdb).
 
     uid = payload.student_uid or await _gen_uid(tdb, user["school_id"])
     if await tdb.students.find_one({"school_id": user["school_id"], "student_uid": uid}):

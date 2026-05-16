@@ -75,15 +75,19 @@ async def template(kind: str, _: dict = Depends(require_roles("school_admin", "t
 @router.post("/students")
 async def upload_students(file: UploadFile = File(...), user: dict = Depends(require_roles("school_admin", "teacher"))):
     db = get_db()
-    # If teacher, restrict to their assigned (class_id, section) pairs
+    # If teacher, restrict to their assigned (class_id, section) pairs. If a
+    # teacher has NO formal assignment, fall back to permissive school-wide
+    # add (matches POST /api/students behaviour after v1.32.2 bug fix).
     allowed_class_sections = None
     if user["role"] == "teacher":
         from routes.students import _teacher_class_filter
         tdb = await tenant_db(user["school_id"])
         tflt = await _teacher_class_filter(tdb, user)
-        if not tflt or tflt.get("_blocked_"):
-            raise HTTPException(status_code=403, detail="You are not assigned to any class yet")
-        allowed_class_sections = {(c["class_id"], c["section"]) for c in tflt.get("$or", [])}
+        if tflt and not tflt.get("_blocked_") and tflt.get("$or"):
+            allowed_class_sections = {(c["class_id"], c["section"]) for c in tflt.get("$or", [])}
+        # else: no formal assignment — allow all rows through; class/section
+        # validation still happens via the row's class_id/section being a real
+        # row in the tenant DB at insert time.
     else:
         tdb = await tenant_db(user["school_id"])
     rows = _read_excel(await file.read())
