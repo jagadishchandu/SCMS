@@ -15,6 +15,12 @@ Multi-school management platform with strict role-based visibility (Platform Adm
 ## Personas
 Platform Admin (SaaS operator), School Principal, Teacher / Class Teacher, Accounts staff, Parent.
 
+## Implemented v1.21 (2026-05-16) — Per-class Fee Structure Templates + Clone-to-Sections
+- `FeeStructureCreate` extended with optional `section` and `term` (Term 1/2/3/Annual/Admission/Monthly/Custom).
+- Backend: `POST /api/fees/structures` validates section against class.sections (400 on mismatch). `POST /api/fees/structures/{id}/clone-to-sections` clones section-scoped structures to every other section of the same class (idempotent — skips dup on class_id+section+term+name; refuses class-wide source with explanatory message). `assign_structure` now filters student invoicing by `struct.section` when set, otherwise invoices the whole class.
+- Frontend `FeesPage`: structure modal has Class + Section (class-aware) + Term + Due-date dropdowns; auto-suggests name like "Grade 5 Term 1 Fees"; structure cards show section/term badges with conditional "Clone to all sections" action; fee records table now exposes Section + Term columns. Both School Admin and Accountant can use the full flow.
+- Tests: 10/10 new v21 backend tests + 21/21 v19 fees regression + 6/6 frontend acceptance criteria.
+
 ## Implemented v1.1 (2026-01-15)
 **v1.0** — Auth, all 6 roles, schools, students, teachers/staff, classes/subjects, class-teacher assignment, attendance (with auto parent alerts), exams + marks (publish notifies parents), syllabus, holidays, fees + payments with receipts, timetable + my-timetable, teacher performance scoring, notifications log, Excel templates/uploads, student analytics dashboard (donut/line/bar/stacked charts + insights), parent portal with charts, accounts dashboard. Strict RBAC verified.
 
