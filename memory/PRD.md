@@ -601,6 +601,40 @@ Whenever a user is created (school admin via school creation, teachers/parents/a
 ## v1.19 — Fee Items Catalog + Per-student Fee Tracker + Teacher Schedule (2026-05-16)
 
 **Fee Items Catalog** (`/school/fee-items`, `/accounts/fee-items`)
+- New tenant collection `fee_items`. School admin + accounts define reusable fee items (Tuition · Books · Transport · Lab · Activities · Uniform · Exam · Library · Sports · Hostel · Meals · Other) with default_amount and frequency (one_time / monthly / quarterly / yearly).
+- CRUD: `GET/POST/PATCH/DELETE /api/fee-items`. School_admin + accounts can create/edit; only school_admin can delete (soft-deactivate).
+
+**Per-student Fee Tracker** (`/school/fee-tracker`, `/accounts/fee-tracker`)
+- `GET /api/fees/per-student-summary` returns one row per active student with `total_fee`, `paid_amount`, `balance_due`, `percent_paid` (0–100), status (`paid`/`partial`/`not_paid`/`no_fees`).
+- 4 KPIs + 5 filter pills + class filter + name/UID search. Per-row visual progress bar.
+
+**Teacher Schedule / Duty Roster**
+- `/school/teacher-duties` for assignment, `/teacher/duties` (readOnly) for viewing.
+- One row per teacher (multi-assignment in a single submit). Optional Telegram/WhatsApp alert.
+
+### Test status
+- **21/21 new pytest pass** (`test_v19_fees_duties.py`). Frontend Playwright by testing agent: 100% — all 3 roles verified end-to-end.
+
+## v1.20 — Fee Catalog → Structures link · Duties on calendar · Over-capacity alerts (2026-05-16)
+
+**Fee Items catalog integrated with Fee Structures**
+- `FeesPage` → "New Fee Structure" modal now has a per-line "Pick from catalog" dropdown populated by `/api/fee-items`. Selecting auto-fills the line label + amount. Custom line items still supported via "— Custom line item —" option. The `fee_item_id` reference is stored on each saved item for future analytics.
+
+**Teacher duties surfaced on the Calendar**
+- `/api/calendar/events` now also returns `type='duty'` events from `teacher_duties`. Teachers see only their own (auto-scoped); school_admin sees all. Each duty event carries `meta.duty_type`, `meta.location`, `meta.notes`, `meta.teacher_id`, `meta.teacher_name`, `meta.start_at`, `meta.end_at`.
+- `CalendarPage` renders duty events in amber (distinct from red holidays and sage exams); legend swatch added.
+
+**Over-capacity alerts to Platform Super Admin**
+- New scheduler job `over_capacity_alert` runs daily @ 09:00 IST (when `ENABLE_DIGEST_SCHEDULER=true`). Compares each school's actual active student count to `subscription_approval.approved_children_count` (falling back to `requested_children_count`). When breaches exist AND no alert went out in the last 24 hours, queues a Telegram + email notification to the Platform Super Admin listing all over-capacity schools with their variance.
+- Manual trigger: `POST /api/subscriptions/compliance/run-alert` (platform_admin only).
+- New "Alert me" button on `/platform/compliance` (auto-disabled when there are zero breaches).
+
+### Test status
+- **57/57 new pytest pass** (7 new in `test_v20_links_and_alerts.py` + 50 regression across v18/v18.1/v19/v20). Frontend Playwright by testing agent: **100%** — all 3 features verified across school_admin / teacher / platform_admin roles. 24-hour cooldown enforcement confirmed live.
+
+
+
+**Fee Items Catalog** (`/school/fee-items`, `/accounts/fee-items`)
 - New tenant collection `fee_items`. School admin + accounts can define reusable fee items (Tuition · Books · Transport · Lab · Activities · Uniform · Exam · Library · Sports · Hostel · Meals · Other) with default_amount and frequency (one_time / monthly / quarterly / yearly).
 - CRUD: `GET/POST/PATCH/DELETE /api/fee-items`. School_admin + accounts can create/edit; only school_admin can delete (soft-deactivate).
 - UI groups items by category with KPI counts and active/inactive toggle.

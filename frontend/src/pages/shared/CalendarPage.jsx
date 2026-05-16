@@ -88,6 +88,7 @@ export default function CalendarPage() {
         <div className="ml-auto flex items-center gap-3 text-xs">
           <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-status-danger inline-block"/> Holiday</span>
           <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-primary inline-block"/> Exam</span>
+          <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block"/> Duty</span>
         </div>
       </div>
 
