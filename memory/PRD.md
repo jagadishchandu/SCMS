@@ -1,5 +1,24 @@
 # SCMS — School Child Monitoring System (PRD)
 
+## Implemented v1.33 (2026-05-16) — Admin-driven password reset
+
+### 🔐 School admin & Platform Super Admin can reset other users' passwords
+- **`POST /api/users/{user_id}/reset-password`** (new). RBAC:
+  - `school_admin` may reset **teacher** + **accounts** users in their own school (cross-school → 403, target=school_admin → 403 with hint to contact Platform Super Admin).
+  - `platform_admin` may reset **school_admin** users in any school (target=teacher/accounts/parent → 403 with hint).
+  - Validates `new_password >= 6` chars (400 otherwise). 404 for unknown user_id.
+  - Persists `password_changed_at`, `password_reset_by_id`, `password_reset_by_role`, `password_reset_at` on the user doc; mirrors the new hash into the per-school DB; writes an `audit_logs` entry (`action=reset_password`, `resource=user`).
+  - Response echoes `{ok, email, name, role, new_password}` so the admin can share the password manually (chosen UX per product spec — user is *not* notified).
+- **`GET /api/schools/{id}/people`** now also returns `accounts[]` + `school_admins[]` + `counts.school_admins` so the Platform drawer can list the school super admin.
+
+### 🖥️ Frontend
+- **TeachersPage (`/school/teachers`)** — every teacher / accounts card now has a `Reset password` button (`reset-password-btn-<id>`). An additional `Reset password` link is exposed inside `EditUserModal` (`edit-user-reset-password-btn`). The shared `ResetPasswordModal` has Generate (10-char CSPRNG-ish random), Confirm field, and a post-success view with `Copy` button. Toast: *"Password reset"*. The new password is shown exactly once on screen.
+- **PlatformOverview drawer** — new "School Super Admin(s)" section listing each school admin with `Reset password` button. `AdminResetPasswordModal` mirrors the same flow but only the Platform Super Admin can trigger it.
+
+### Verified
+- Backend: **16/16 pytest** in `test_admin_reset_password.py` (RBAC matrix, 401/403/404/400, happy path login-with-new-pw for teacher + accounts + school_admin, audit entry, schools/people enrichment). Zero regressions.
+- Frontend: live preview verified for both school admin + platform admin flows; all 6 demo credentials restored at end of testing.
+
 ## Implemented v1.32.5 (2026-05-16) — Student search typeahead + filters · Salaries on payroll & expenses
 
 ### 🐛 P1 bug fix — Student search bar now shows children details
