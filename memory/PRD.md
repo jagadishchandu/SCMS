@@ -15,6 +15,11 @@ Multi-school management platform with strict role-based visibility (Platform Adm
 ## Personas
 Platform Admin (SaaS operator), School Principal, Teacher / Class Teacher, Accounts staff, Parent.
 
+## Implemented v1.24 (2026-05-16) — Class⇄Subject coverage matrix (timetable-aware)
+- Backend: `GET /api/timetable/class-subject-coverage` (school_admin only) returns one row per (class × section) with scheduled subjects (period count per week + de-duplicated teacher list), missing subjects, total periods/week, and a root-level `unscheduled_subjects` list of subjects not scheduled anywhere school-wide. Tenant-isolated.
+- Frontend `/school/classes`: new "Class ⇄ subject coverage" table coexisting with the Subject⇄Teacher matrix. Class filter dropdown, "Hide sections without a timetable" toggle, "No timetable" warning badges, scheduled subject chips with `×periods/week`, missing-subject warning chips, school-wide unscheduled-subjects callout, and a footer tip linking admins to the Timetable page.
+- Tests: 18/18 backend regression (shape, completeness, period/teacher aggregation, complement invariants, RBAC for teacher/accounts/parent/unauthenticated, tenant scope, no `_id` leak) + 14/14 frontend acceptance criteria verified live.
+
 ## Implemented v1.23 (2026-05-16) — Subject⇄Teacher coverage matrix + bulk-assign
 - Backend: `GET /api/academic/subjects/coverage` returns one row per subject with assigned teachers, `total_teachers`, `orphan_count` (school_admin only). `POST /api/academic/subjects/{id}/bulk-assign-teachers` idempotently adds the subject to all selected teachers (uses `$addToSet`); supports `replace: true` for authoritative mode that also un-assigns omitted teachers. `POST /api/academic/subjects/{id}/unassign-teacher/{teacher_id}` removes the subject from one teacher.
 - Frontend `/school/classes` (school_admin only): new "Subject ⇄ teacher coverage" table with one row per subject, orphan-subject warning badge, click-to-remove teacher chips, and "Bulk-assign teachers" button → modal with searchable checkbox list, Select-all/Clear, "Currently assigned" pre-check + selected/assigned counts, and an Authoritative-mode toggle that maps to backend `replace: true`.
