@@ -16,11 +16,14 @@ A production-ready, multi-tenant SaaS for K-12 schools to run **students, attend
 7. [Environment Variables — Full Reference](#environment-variables--full-reference)
 8. [Subscription Billing Flow](#subscription-billing-flow)
 9. [Subscription Expiry Guard](#subscription-expiry-guard)
-10. [Multilingual Notifications](#multilingual-notifications)
-11. [Scheduled Cron Jobs](#scheduled-cron-jobs)
-12. [Development (without Docker)](#development-without-docker)
-13. [Testing](#testing)
-14. [Roadmap](#roadmap)
+10. [Subscription Approval Workflow & Lockdown (v1.18)](#subscription-approval-workflow--lockdown-v118)
+11. [Platform Compliance View (v1.18.1)](#platform-compliance-view-v1181)
+12. [HR & Finance — Staff, Salaries, Expenses, Payroll PDF (v1.17 / v1.18)](#hr--finance--staff-salaries-expenses-payroll-pdf-v117--v118)
+13. [Multilingual Notifications](#multilingual-notifications)
+14. [Scheduled Cron Jobs](#scheduled-cron-jobs)
+15. [Development (without Docker)](#development-without-docker)
+16. [Testing](#testing)
+17. [Roadmap](#roadmap)
 
 ---
 
@@ -46,6 +49,13 @@ A production-ready, multi-tenant SaaS for K-12 schools to run **students, attend
 | 📱 **Mobile-first** | Parent Portal bottom nav, teacher swipe-card attendance, fully responsive | `components/MobileBottomNav.jsx` |
 | 🎨 **Branding & dark mode** | Per-school logo, primary color, tagline. Dark mode toggle persisted in localStorage | `pages/school/SchoolSettings.jsx` |
 | 🚦 **Subscription banner** | Site-wide banner: amber when ≤7 days left, red in grace, red+blocked when fully expired | `components/SubscriptionBanner.jsx` |
+| 🔐 **Subscription approval & lockdown** *(v1.18)* | New schools must request approval with a children-count. Until the Platform Super Admin approves, the entire school is locked out (HTTP 423) except Dashboard + Subscription page | `core/subscription_guard.py`, `routes/subscriptions.py` |
+| ✏️ **Editable approved count** *(v1.18.1)* | School admin can update their requested children count at any time, even after approval (status preserved). Surfaces immediately in the Compliance view | `pages/school/SchoolSubscription.jsx` |
+| 📊 **Platform Compliance view** *(v1.18.1)* | Read-only dashboard for the Platform Super Admin that compares each school's requested/approved count vs the live actual student count in their tenant DB. Filterable by `over_capacity`/`compliant`/`pending_review`/`rejected`/`no_request` | `pages/platform/CompliancePage.jsx` |
+| 💼 **HR & Finance** *(v1.17)* | Non-teaching staff roster (cleaners, drivers, security, cooks, coaches), teacher/staff monthly salaries, expense tracking + teacher reimbursement workflow with approve/reject/mark-paid | `routes/staff.py`, `routes/expenses.py` |
+| 🧾 **Monthly Payroll PDF** *(v1.18)* | One-click consolidated payroll PDF — teachers + accounts + non-teaching staff base salary, approved reimbursable expenses for the month, per-section subtotals & grand total | `routes/staff.py` `/payroll/monthly-pdf` |
+| 🗄️ **Authoritative per-school DB** *(v1.15)* | Every school's operational data (students, attendance, marks, fees, etc.) physically lives in `scms_db_school_<code>`. Master DB only holds users, schools, plans | `core/db.py:tenant_db()`, `README_DB.md` |
+| 🔑 **Password reset via Telegram OTP** *(v1.13)* | Forgot-password flow that survives lost emails — 6-digit OTP delivered to the user's linked Telegram chat, bcrypt-hashed at rest, 10-min TTL, 5-attempt cap | `routes/auth.py` (`/password-reset/*`) |
 
 ---
 
@@ -173,10 +183,10 @@ GET    /api/auth/me                 # current user + subscription_state + school
 POST   /api/auth/logout
 ```
 
-### Subscriptions (per-child billing)
+### Subscriptions (per-child billing + approval workflow)
 ```http
 GET    /api/subscriptions/pricing                 # → { per_child_monthly:30, per_child_yearly:300 }
-GET    /api/subscriptions/my                      # school admin: quote + current state + pending
+GET    /api/subscriptions/my                      # school admin: quote + current state + approval + pending
 GET    /api/subscriptions/quote/{school_id}
 POST   /api/subscriptions/payments                # school admin submits payment
 GET    /api/subscriptions/payments?status=...     # platform: all, school: own
@@ -184,6 +194,31 @@ POST   /api/subscriptions/payments/{id}/confirm   # platform admin only
 POST   /api/subscriptions/payments/{id}/reject    # platform admin only
 POST   /api/subscriptions/nudge-renewals          # platform admin — manual 7-day nudge
 POST   /api/subscriptions/admin/set-valid-until   # platform admin — set school's expiry directly
+
+# v1.18 — Approval workflow & lockdown
+POST   /api/subscriptions/approval-request        # school admin submits/edits requested_children_count
+GET    /api/subscriptions/approval-requests       # platform admin — list pending approval requests
+POST   /api/subscriptions/approval/{school_id}/decide  # platform admin — { decision: approve|reject }
+
+# v1.18.1 — Compliance view (read-only, platform admin only)
+GET    /api/subscriptions/compliance?filter=...   # over_capacity | compliant | pending_review | rejected | no_request
+```
+
+### HR & Finance (v1.17 / v1.18)
+```http
+# Non-teaching staff (cleaners, drivers, security, coaches, etc.)
+GET    /api/staff                                 # school_admin / accounts
+POST   /api/staff                                 # school admin
+PATCH  /api/staff/{id}
+DELETE /api/staff/{id}                            # soft delete (is_active=false)
+GET    /api/staff/summary/payroll                 # combined monthly + yearly outflow
+GET    /api/staff/payroll/monthly-pdf?month=YYYY-MM   # ★ Consolidated monthly payroll PDF
+
+# Expenses + teacher reimbursement requests
+POST   /api/expenses                              # school admin/accounts → auto-approved; teacher → pending
+GET    /api/expenses?status=&category=
+POST   /api/expenses/{id}/decide                  # school admin/accounts — approve | reject | mark_paid
+GET    /api/expenses/summary
 ```
 
 ### Students
@@ -420,6 +455,75 @@ A global axios interceptor on the frontend auto-redirects to `/school/subscripti
 
 ---
 
+## Subscription Approval Workflow & Lockdown (v1.18)
+
+A second gate on top of the expiry guard: every school must request approval from the Platform Super Admin BEFORE they can use any feature.
+
+### School lifecycle
+1. **Platform admin creates a school** → `subscription_approval.status = "not_started"` (pass `auto_approve: true` in `POST /api/schools` to skip this).
+2. **School admin logs in** → only Dashboard + Subscription pages are visible in the sidebar; all other routes return **HTTP 423 Locked** with `code='approval_required'` or `'approval_pending'`.
+3. **School admin submits a request** at `/school/subscription` with their desired children count → `status = "pending"`.
+4. **Platform admin** opens `/platform/subscriptions` → "Approval requests" tab → clicks Approve (or Reject with a note).
+5. On approve → `status = "approved"` → school admin's sidebar instantly expands to the full menu, full feature access unlocked.
+
+### Always-allowed endpoints (even when locked)
+- `/api/auth/*`, `/api/subscriptions/*`, `/api/users/me/*`, `/api/integrations/test/*`, `/api/webhooks/*`
+- `/api/analytics/school`, `/api/analytics/risk-students` (overview KPIs)
+- Read-only paths containing `/people`, `/db-status`, `/language`, `/branding`
+
+### Editable approved count (v1.18.1)
+After approval, the school admin can update `requested_children_count` at any time via the same `/approval-request` endpoint. Status stays `approved` — the change is purely a declaration that surfaces in the Compliance view (below). This handles real-world growth ("we just added 2 sections") without forcing a re-approval round-trip.
+
+---
+
+## Platform Compliance View (v1.18.1)
+
+Read-only dashboard for the Platform Super Admin at `/platform/compliance`.
+
+For every school, the platform admin sees:
+
+| Column | Source |
+| --- | --- |
+| Approval status | `school.subscription_approval.status` |
+| Requested | `subscription_approval.requested_children_count` (editable by school admin) |
+| Approved | `subscription_approval.approved_children_count` (set when platform admin approves) |
+| Actual | Live count from `tenant_db(school_id).students.count_documents({status:"active"})` |
+| Variance | actual − approved (or − requested if not yet approved) |
+| Compliance | `compliant` / `over_capacity` / `pending_review` / `rejected` / `no_request` |
+
+Filter pills + KPI tiles surface schools that have silently exceeded their approved capacity — useful for billing reconciliation and capacity planning. **Strictly view-only — no Approve/Edit buttons here** (changes go through the Approval Requests tab).
+
+Endpoint: `GET /api/subscriptions/compliance?filter=over_capacity` (platform_admin only).
+
+---
+
+## HR & Finance — Staff, Salaries, Expenses, Payroll PDF (v1.17 / v1.18)
+
+### Non-teaching staff (`/school/staff`)
+Roster of cleaners, bus drivers, security guards, cooks, sports coaches, nurses, librarians, lab/office assistants. Each row stores `monthly_salary` so payroll runs include them.
+
+### Teacher / Accounts salaries
+`monthly_salary` is part of the `users` schema and editable by the school admin via `PATCH /api/users/{id}`.
+
+### Expenses + Teacher Reimbursements (`/school/expenses`)
+- School admin / accounts can record a direct expense → status `approved` (school money already spent).
+- Teacher can submit an out-of-pocket reimbursement request → status `pending` → school admin / accounts approves / rejects → optionally marks `paid`.
+- Categories: `salary` · `supplies` · `maintenance` · `utilities` · `travel` · `events` · `transport` · `food` · `stationery` · `books` · `other`.
+- A teacher request can flag `reimburse_with_salary=true` so it shows in next month's payroll PDF.
+
+### Monthly Payroll PDF (`/school/staff` → "Monthly Payroll PDF" button)
+One-click ReportLab PDF generated by `GET /api/staff/payroll/monthly-pdf?month=YYYY-MM` containing:
+
+- Teaching staff section (name · role · phone/email · base salary · reimbursements · net payable)
+- Accounts staff section
+- Non-teaching support staff section
+- Per-section subtotals
+- Grand total — base salaries + reimbursements + net payable
+
+Accessible by `school_admin` and `accounts` (teachers get 403). Invalid month format returns 400.
+
+---
+
 ## Multilingual Notifications
 
 8 languages × 5 message templates = 40 entries baked into `core/i18n.py`.
@@ -515,15 +619,24 @@ yarn --cwd frontend lint
 
 ## Roadmap
 
+### Recently shipped ✓
+- **v1.18.1 — Editable approval count + Platform Compliance view** (2026-05-16)
+- **v1.18 — Subscription approval workflow & lockdown + Monthly Payroll PDF** (2026-05-15)
+- **v1.17 — HR & Finance: Staff, Salaries, Expenses, Teacher Reimbursements**
+- **v1.16 — Platform school-detail drawer + Teacher class/subject add**
+- **v1.15 — Per-school DB promoted to authoritative store**
+- **v1.13 — Password reset via Telegram OTP**
+
 ### P1 (next up)
 - Stripe / Razorpay automated subscription payments (skip the manual confirm step)
+- Email / Telegram alert when a school crosses into `over_capacity` on the Compliance view
 - "Send test email" button on `/school/settings` to validate SMTP before relying on it
 
 ### P2
 - Wire uploads (photos, medical certs, PDF receipts) to Azure Blob once the `AZURE_STORAGE_*` env vars are set
 - Recovery nudges after expiry (day 1 / 3 / 7) before full lockout
+- Auto-deduct `reimburse_with_salary` expenses from next month's payroll PDF
 - Per-school WhatsApp template editing UI (if customisation is requested)
-- `make` Makefile wrapper for common dev ops
 
 ### P3
 - React Native mobile shell reusing the same API
