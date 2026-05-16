@@ -548,15 +548,51 @@ Whenever a user is created (school admin via school creation, teachers/parents/a
 - ✅ Platform admin creds + role=Platform Super Admin → redirected to `/platform` console.
 - ✅ School admin creds + role=Platform Super Admin → blocked + session cleared; visiting `/school` after redirects back to `/login`.
 
+## v1.18 — Subscription Approval Workflow & Lockdown + Monthly Payroll PDF (2026-05-15)
+
+**Subscription approval workflow & feature lockdown**
+- New tenant-level field `school.subscription_approval = {status, requested_children_count, approved_children_count, requested_at, decided_at, decided_by, note}`. Status is one of `not_started` (default for new schools), `pending`, `approved`, `rejected`.
+- New backend endpoints in `/app/backend/routes/subscriptions.py`:
+  - `POST /api/subscriptions/approval-request { requested_children_count, note? }` — school admin submits a request; status flips to `pending`.
+  - `GET /api/subscriptions/approval-requests?status=pending` — platform admin lists requests.
+  - `POST /api/subscriptions/approval/{school_id}/decide { decision: approve|reject, approved_children_count?, note? }` — platform admin approves/rejects.
+- `core/subscription_guard.py` extended: when `subscription_approval.status != 'approved'`, ALL school routes return **HTTP 423 Locked** with `code='approval_pending'` or `'approval_required'`, EXCEPT `/api/auth/*`, `/api/subscriptions/*`, `/api/users/me/*`, `/api/integrations/test/*`, `/api/analytics/school`, `/api/analytics/risk-students`, `/api/webhooks/*`, plus read-only paths containing `/people`, `/db-status`, `/language`, `/branding` (for the overview drawer).
+- `compute_subscription_state` returns `approval_status`, `requested_children_count`, `approved_children_count`, `approval_requested_at`, `approval_decided_at`, `approval_note` so the UI banner + sidebar can react instantly.
+- `POST /api/schools` accepts optional `auto_approve: True` + `initial_children_count` (platform_admin-only) to pre-approve a school at creation. Defaults to `not_started`.
+- Startup migration: existing schools without `subscription_approval` are auto-marked `approved` (legacy compat).
+
+**Frontend lockdown UX**
+- `SchoolSubscription.jsx`: new **ApprovalPanel** with `requested_children_count` input + submit button (`data-testid='submit-approval-btn'`). Shows pending state card after submission (`data-testid='approval-pending-card'`). Approved state shows a green success banner.
+- `Sidebar.jsx`: when `user.subscription_state.approval_status !== 'approved'`, only Dashboard + Subscription nav items render.
+- `SubscriptionBanner.jsx`: red banner for `not_started`/`rejected`, amber for `pending`, with CTA to subscription page (`data-testid='banner-approval-cta'`).
+- Platform `SubscriptionsPage.jsx`: new "Approval requests" tab (default) with Approve/Reject buttons; KPI count.
+
+**Monthly Payroll PDF (HR/Finance closure)**
+- New endpoint `GET /api/staff/payroll/monthly-pdf?month=YYYY-MM` in `routes/staff.py` — ReportLab PDF compiling:
+  - Teaching staff (master `users.monthly_salary`, role=teacher)
+  - Accounts staff (master `users.monthly_salary`, role=accounts)
+  - Non-teaching support staff (tenant `staff.monthly_salary`)
+  - Approved/paid reimbursable expenses for that month (per user)
+  - Per-section subtotals + Grand Total (base + reimbursements + net payable)
+- Validates `month` format (returns 400 for invalid). Defaults to current month.
+- RBAC: school_admin + accounts only (teacher → 403).
+- New button on `/school/staff` page (`data-testid='payroll-pdf-btn'`) prompts for month and downloads the PDF.
+
+### Test status
+- **283 backend tests, 282 passing**; +15 new in `test_v18_approval_payroll.py` (all PASS). 1 known flaky test (`test_create_holiday_and_list`) is an existing module-scoped fixture race, unrelated to v1.18.
+- All existing test fixtures that create schools (`backend_test.py`, `test_e2e_school_flow.py`, `test_school_db_schema.py`, `test_tenant_authoritative.py`, `test_v16_platform_and_classes.py`, `test_v17_hr_finance.py`) updated to pass `"auto_approve": True` so they continue to operate post-creation.
+- **Frontend Playwright by testing agent: 100% pass** — locked-sidebar / banner / ApprovalPanel / Platform approval tab / post-approval unlock / payroll PDF button verified.
+
 ## Prioritized Backlog (refreshed)
 ### P1
-- Stripe / Razorpay automated subscription payments
+- Stripe / Razorpay automated subscription payments (so confirmation is one-click, not manual).
 
 ### P2
-- Wire uploads (photos / medical certs / PDF receipts) to Azure Blob once `AZURE_STORAGE_CONNECTION_STRING` is filled
-- Recovery nudges post-expiry (day 1 / 3 / 7) before full lockout (i18n templates ready; scheduler wiring pending)
-- Meta WhatsApp template approval workflow (for messages outside 24-hour session)
+- Recovery nudges post-expiry (day 1 / 3 / 7) — i18n templates ready; scheduler wiring pending (deferred this session).
+- Wire uploads (photos / medical certs / PDF receipts) to Azure Blob once `AZURE_STORAGE_CONNECTION_STRING` is filled.
+- Auto-deduct reimburse-with-salary expenses from next month's payroll (currently manual after PDF generation).
 
 ### P3
-- React Native shell reusing the same API
-- Public school directory + admissions inquiry
+- React Native shell reusing the same API.
+- Public school directory + admissions inquiry.
+

@@ -44,8 +44,11 @@ TWILIO_WHATSAPP_FROM="+14155238886"
 ```
 When unset, notifications stay `queued` in the DB (mock log).
 
-## Per-school databases
-Each school has its own physical MongoDB database named `scms_db_school_<slug-of-code>` (auto-created on POST /api/schools). Operational reads/writes still flow through the master `scms_db` for simplicity; per-school DBs carry identical indexes + a `meta` marker for future routing.
+## Subscription Approval Workflow (v1.18)
+- Newly created schools default to `subscription_approval.status='not_started'` and are **locked out** of all features (HTTP 423) except `/api/auth/*`, `/api/subscriptions/*`, `/api/users/me/*`, overview KPIs, and the school-people drawer.
+- School admin must submit `POST /api/subscriptions/approval-request {requested_children_count}` → status `pending`.
+- Platform admin approves via `POST /api/subscriptions/approval/{school_id}/decide {decision: approve}` → status `approved`, full feature access unlocked.
+- `POST /api/schools` accepts optional `auto_approve: True` + `initial_children_count` (platform_admin only) — useful for tests and pre-approved onboarding. The DEMO school (`principal@sunrise.edu`) is legacy-auto-approved.
 
 ## Seeded demo data (school: Sunrise Public School, code DEMO)
 - 2 classes (Grade 5, Grade 6), 5 subjects, 3 teachers, 1 accounts, 1 school admin
