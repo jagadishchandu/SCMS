@@ -1,0 +1,38 @@
+{
+  "summary": "iter19 — bulk-upload (parent_password + .school TLD + credentials list), edit/delete student RBAC (teacher own-class), credential-slip PDF, send-credentials (telegram/whatsapp/sms + reset_first), bulk-export parent creds, TeachersPage user CRUD, StudentUpdate gender/dob. BACKEND: 25/25 pytest cases PASS in /app/backend/tests/test_iter19_bulk_creds.py (8.71s). Verified: (1) /uploads/template/students has 11 headers with parent_password last; (2) /uploads/students applies explicit parent_password>=6 (login works with that exact pwd), falls back to Parent@123 when blank or <6 chars, uses synthetic *.school TLD (login works), returns credentials[] with parent_was_created and parent_password=null for reused parent_email; (3) /uploads/parent-credentials xlsx has 9 expected headers + 5+ active Grade-5-A rows; teacher 403; (4) PATCH /students/{id} as teacher in own (Grade 5 A) succeeds; in Grade 6 B → 403; cross-class move to Grade 6 B → 403 with 'classes you teach' detail; DELETE soft-sets status=inactive (teacher own ok, other 403); gender/dob persists; blank '' coerced to None; (5) credential-slip returns application/pdf, attachment disposition, starts with %PDF, ~2.3KB; teacher own ok / other 403 / accounts 403; (6) send-credentials validates channel, reset_first=true → parent login with Parent@123 works after; delivery_status='queued' (Telegram unset, expected); teacher other-class 403, accounts 403, anon 401; (7) POST /students still returns parent_login; (8) POST/PATCH/DELETE /users CRUD by school_admin works; teacher cannot PATCH users (403). FRONTEND (live verified): /school/teachers has 9 edit-user-btn-*/9 toggle-user-btn-*/9 delete-user-btn-* and edit-user-modal opens with edit-user-active toggle + 5 edit-user-subject-* chips. /school/students has 64 edit-student-btn-*/64 slip-btn-*/64 send-creds-btn-*/61 deactivate-student-btn-* (61 active subset) plus bulk-export-creds-btn (correctly disabled until class filter chosen). send-creds-modal mounts with send-creds-channel-telegram/whatsapp/sms chips + send-creds-reset-first toggle. ONE MINOR FRONTEND FINDING: edit-student-modal did not appear after clicking edit-student-btn-* in the harness (modal element not in DOM after the click). Possible state/portal mounting timing issue or modal closes immediately if no row data — flagged for main agent verification.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "EditStudentModal", "issue": "Modal not detected in DOM after clicking edit-student-btn-<UID> in automated harness (data-testid='edit-student-modal' missing). May be a portal/timing issue or modal closes when row data missing. Manual verification by main agent recommended.", "selector": "[data-testid=\"edit-student-modal\"]", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter19_bulk_creds.py",
+    "/app/test_reports/pytest/iter19.xml"
+  ],
+  "action_items": [
+    "Manually verify EditStudentModal opens on /school/students (and /teacher/students). The trigger button exists with data-testid but the modal (data-testid=\"edit-student-modal\") did not mount during Playwright run. If it's a state-machine guard (e.g., requires a row prop), no action needed — otherwise inspect StudentsPage.jsx mount logic."
+  ],
+  "critical_code_review_comments": [
+    "uploads.py:102 synthetic email uses school_id[:6]+'.school' deterministically; .school is a valid IANA TLD so EmailStr accepts it. parent_password handling at lines 104-114 correctly: (a) keeps explicit pwd>=6, (b) falls back to Parent@123 if blank/short, (c) re-hashes pwd if reused parent rows supply a stronger pwd (line 110-114).",
+    "uploads.py:161-168 credentials[] response correctly emits parent_password ONLY when parent_was_created=true. Reused parent → parent_password=null. parent_was_created flag set deterministically before insert.",
+    "students.py:271-277 + 364-370 RBAC for /credential-slip and /send-credentials reuses _teacher_class_filter intersection (class_teacher_map ∪ timetable) — same pattern as PATCH/DELETE; consistent and correct.",
+    "students.py:382-385 reset_first writes hash_password('Parent@123') + password_reset_to_default_at audit field. ✓ verified by post-reset login.",
+    "students.py:391-409 queue_notification('parent_credentials' template) — phone defaults to parent_whatsapp when channel=whatsapp, else parent_phone; telegram_chat_id passed only when channel=telegram. Clean dispatch logic.",
+    "students.py:502-506 teacher move validation — uses union of update.class_id/section with current values so partial updates (only section or only class_id) still validate against the target combo. Correct.",
+    "uploads.py:260-264 /uploads/parent-credentials is school_admin only — teacher correctly 403. Reasonable given bulk export of all parents in a class is an admin-scoped action.",
+    "core/models.py StudentUpdate now accepts gender + dob (with _blank_to_none) — verified via PATCH with both populated and blank values; persists / coerces correctly."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter19_bulk_creds.py (new — 25 cases covering all v1.23 features + regression)"
+  ],
+  "success_rate": {"backend": "100% (25/25)", "frontend": "~95% (TeachersPage CRUD ✓, StudentsPage Actions column + bulk-export + SendCredsModal ✓; EditStudentModal mount needs manual verify)"},
+  "test_credentials": "/app/memory/test_credentials.md unchanged. principal@sunrise.edu/School@123, priya@sunrise.edu/Teacher@123 (class teacher Grade 5 A, subject teacher Grade 6 A), accounts@sunrise.edu/Accounts@123, parent.stu-00001@sunrise.edu/Parent@123.",
+  "seed_data_creation": "Test created ~12 TEST_-prefixed students in Grade 5 A and Grade 6 B (some now status=inactive via teacher-delete), 4 students from Excel upload, 1 explicit-pwd parent (test_iter19_p1_<ts>@example.com), 1 synthetic .school parent (parent.stu-XXXXX@eb7057.school), and 1 TEST teacher user (later soft-deactivated). All clearly TEST_-prefixed.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend endpoints exercised: GET/POST /api/uploads/{template,students,parent-credentials}, PATCH/DELETE /api/students/{id}, GET /api/students/{id}/credential-slip, POST /api/students/{id}/send-credentials, POST/PATCH/DELETE /api/users. Auth uses HTTP-only cookies (access_token cookie) — pytest fixtures return requests.Session() rather than a Bearer token; do NOT use Authorization headers. /api/auth/me (not /api/users/me) for current-user. Subjects endpoint is /api/academic/subjects. Teacher creation requires at least one subject id in 'subjects' (not 'subject_ids'). For teacher 'other class' negatives use (Grade 6 B) because Priya teaches Grade 6 A via timetable. Telegram delivery_status='queued' is expected (TELEGRAM_BOT_TOKEN unset).",
+  "rca of the issue": "Initial test failures were all test-harness bugs: (a) auth uses cookies not Bearer tokens — fixed by switching to requests.Session(); (b) users.POST requires 'subjects' not 'subject_ids' and needs ≥1 id; (c) subjects endpoint is /academic/subjects; (d) /auth/me not /users/me. No production-code defects found in the 6 features under test."
+}

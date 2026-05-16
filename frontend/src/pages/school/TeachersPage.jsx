@@ -2,12 +2,13 @@ import React, { useEffect, useState } from "react";
 import { api, formatApiError } from "../../lib/api";
 import { PageHeader, Section, Empty } from "../../components/Primitives";
 import { Modal } from "../../components/Modal";
-import { Plus, UserCircle } from "@phosphor-icons/react";
+import { Plus, UserCircle, PencilSimple, Trash, ToggleRight, ToggleLeft } from "@phosphor-icons/react";
 import toast from "react-hot-toast";
 
 export default function TeachersPage() {
   const [users, setUsers] = useState([]);
   const [open, setOpen] = useState(false);
+  const [editUser, setEditUser] = useState(null);
   const [role, setRole] = useState("teacher");
   const [subjects, setSubjects] = useState([]);
 
@@ -25,6 +26,28 @@ export default function TeachersPage() {
   };
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [role]);
   useEffect(() => { loadSubjects(); }, []);
+
+  const toggleActive = async (u) => {
+    if (u.is_active && !window.confirm(`Mark ${u.name} as Inactive? They will no longer be able to log in.`)) return;
+    try {
+      if (u.is_active) {
+        await api.delete(`/users/${u.id}`); // soft-deactivate
+      } else {
+        await api.patch(`/users/${u.id}`, { is_active: true });
+      }
+      toast.success(u.is_active ? "Marked inactive" : "Reactivated");
+      load();
+    } catch (err) { toast.error(formatApiError(err)); }
+  };
+
+  const remove = async (u) => {
+    if (!window.confirm(`Permanently mark ${u.name} as inactive? (We don't hard-delete user records.)`)) return;
+    try {
+      await api.delete(`/users/${u.id}`);
+      toast.success("Marked inactive");
+      load();
+    } catch (err) { toast.error(formatApiError(err)); }
+  };
 
   const subjectMap = Object.fromEntries(subjects.map((s) => [s.id, s]));
 
@@ -75,6 +98,26 @@ export default function TeachersPage() {
                     <div className="text-status-warning"><span className="overline mr-1">Subjects</span>None assigned</div>
                   ))}
                 </div>
+                <div className="flex gap-1.5 mt-3 pt-3 border-t border-line">
+                  <button
+                    className="btn-secondary text-xs flex-1"
+                    onClick={() => setEditUser(u)}
+                    data-testid={`edit-user-btn-${u.id}`}
+                  ><PencilSimple size={12}/> Edit</button>
+                  <button
+                    className="btn-secondary text-xs flex-1"
+                    onClick={() => toggleActive(u)}
+                    data-testid={`toggle-user-btn-${u.id}`}
+                  >
+                    {u.is_active ? <><ToggleRight size={12}/> Deactivate</> : <><ToggleLeft size={12}/> Reactivate</>}
+                  </button>
+                  <button
+                    className="btn-secondary text-xs text-status-danger"
+                    onClick={() => remove(u)}
+                    data-testid={`delete-user-btn-${u.id}`}
+                    title="Mark inactive"
+                  ><Trash size={12}/></button>
+                </div>
               </div>
             ))}
           </div>}
@@ -87,6 +130,14 @@ export default function TeachersPage() {
         onClose={() => setOpen(false)}
         onCreated={() => { setOpen(false); load(); }}
       />
+      {editUser && (
+        <EditUserModal
+          target={editUser}
+          subjects={subjects}
+          onClose={() => setEditUser(null)}
+          onSaved={() => { setEditUser(null); load(); }}
+        />
+      )}
     </div>
   );
 }
@@ -179,3 +230,93 @@ function CreateUserModal({ role, open, subjects, onClose, onCreated }) {
     </Modal>
   );
 }
+
+function EditUserModal({ target, subjects, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    name: target.name || "",
+    phone: target.phone || "",
+    employee_id: target.employee_id || "",
+    qualifications: target.qualifications || "",
+    subjects: target.subjects || [],
+    is_active: target.is_active !== false,
+  });
+  const [busy, setBusy] = useState(false);
+  const isTeacher = target.role === "teacher";
+
+  const toggleSubject = (id) => {
+    setForm((f) => ({
+      ...f,
+      subjects: f.subjects.includes(id) ? f.subjects.filter((s) => s !== id) : [...f.subjects, id],
+    }));
+  };
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (isTeacher && form.subjects.length === 0) {
+      toast.error("Teachers must have at least one subject.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const payload = {
+        name: form.name,
+        phone: form.phone,
+        employee_id: form.employee_id,
+        qualifications: form.qualifications,
+        is_active: form.is_active,
+      };
+      if (isTeacher) payload.subjects = form.subjects;
+      await api.patch(`/users/${target.id}`, payload);
+      toast.success("Saved");
+      onSaved();
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Modal open onClose={onClose} title={`Edit ${target.role} — ${target.name}`} size="md" testId="edit-user-modal">
+      <form onSubmit={submit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="md:col-span-2"><label className="label">Full name</label><input className="input" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} data-testid="edit-user-name" /></div>
+        <div><label className="label">Phone</label><input className="input" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} data-testid="edit-user-phone" /></div>
+        <div><label className="label">Employee ID</label><input className="input" value={form.employee_id} onChange={(e) => setForm({ ...form, employee_id: e.target.value })} /></div>
+        <div className="md:col-span-2"><label className="label">Qualifications</label><input className="input" value={form.qualifications} onChange={(e) => setForm({ ...form, qualifications: e.target.value })} /></div>
+        {isTeacher && (
+          <div className="md:col-span-2" data-testid="edit-user-subjects-wrap">
+            <label className="label">Subjects <span className="text-status-danger">*</span></label>
+            <div className="flex flex-wrap gap-2" data-testid="edit-user-subjects">
+              {subjects.length === 0 ? (
+                <div className="text-sm text-ink-muted">No subjects defined.</div>
+              ) : subjects.map((s) => {
+                const selected = form.subjects.includes(s.id);
+                return (
+                  <button
+                    type="button"
+                    key={s.id}
+                    onClick={() => toggleSubject(s.id)}
+                    className={selected ? "badge bg-primary text-white cursor-pointer" : "badge-neutral cursor-pointer hover:bg-line"}
+                    data-testid={`edit-user-subject-${s.id}`}
+                    aria-pressed={selected}
+                  >{selected ? "✓ " : "+ "}{s.name}</button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        <label className="md:col-span-2 flex items-center gap-2 text-sm cursor-pointer">
+          <input
+            type="checkbox"
+            checked={form.is_active}
+            onChange={(e) => setForm({ ...form, is_active: e.target.checked })}
+            data-testid="edit-user-active"
+          />
+          Account is active (can log in)
+        </label>
+        <div className="md:col-span-2 flex justify-end gap-2">
+          <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn-primary" disabled={busy} data-testid="edit-user-submit">{busy ? "Saving…" : "Save changes"}</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+

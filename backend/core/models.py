@@ -139,10 +139,17 @@ class StudentUpdate(BaseModel):
     class_id: Optional[str] = None
     section: Optional[str] = None
     roll_number: Optional[str] = None
+    gender: Optional[str] = None
+    dob: Optional[str] = None
     medical_notes: Optional[str] = None
     emergency_contact: Optional[str] = None
     parent: Optional[ParentInfo] = None
     status: Optional[Literal["active", "inactive", "transferred"]] = None
+
+    @field_validator("roll_number", "gender", "dob", "medical_notes", "emergency_contact", mode="before")
+    @classmethod
+    def _blank_optional(cls, v):
+        return _blank_to_none(v)
 
 
 # ---------- Attendance ----------

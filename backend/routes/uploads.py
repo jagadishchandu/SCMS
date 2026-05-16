@@ -43,9 +43,9 @@ async def template(kind: str, _: dict = Depends(require_roles("school_admin", "t
     templates = {
         "students": (
             ["name", "class_id", "section", "roll_number", "gender", "dob",
-             "parent_name", "parent_phone", "parent_whatsapp", "parent_email"],
+             "parent_name", "parent_phone", "parent_whatsapp", "parent_email", "parent_password"],
             [["Aarav Sharma", "CLASS_ID_HERE", "A", "1", "M", "2014-05-10",
-              "Rakesh Sharma", "+911234567890", "+911234567890", "rakesh@example.com"]],
+              "Rakesh Sharma", "+911234567890", "+911234567890", "rakesh@example.com", "Parent@123"]],
         ),
         "attendance": (
             ["student_uid", "date", "status", "remark"],
@@ -88,6 +88,7 @@ async def upload_students(file: UploadFile = File(...), user: dict = Depends(req
         tdb = await tenant_db(user["school_id"])
     rows = _read_excel(await file.read())
     inserted, errors = 0, []
+    credentials: list[dict] = []
     for idx, r in enumerate(rows, start=2):
         try:
             row_class = r.get("class_id")
@@ -98,16 +99,27 @@ async def upload_students(file: UploadFile = File(...), user: dict = Depends(req
             from core.auth import hash_password
             count = await tdb.students.count_documents({"school_id": user["school_id"]})
             uid = f"STU-{(count + 1):05d}"
-            parent_email = (r.get("parent_email") or f"parent.{uid.lower()}@local").lower()
+            parent_email = (r.get("parent_email") or f"parent.{uid.lower()}@{user['school_id'][:6]}.school").lower()
+            # Optional explicit password in Excel — falls back to school default.
+            row_pwd = str(r.get("parent_password") or "").strip()
+            parent_password = row_pwd if len(row_pwd) >= 6 else "Parent@123"
             existing_parent = await db.users.find_one({"email": parent_email})
             if existing_parent:
                 parent_user_id = existing_parent["id"]
+                # If a non-default password was provided for an existing parent, update it.
+                if row_pwd and len(row_pwd) >= 6:
+                    await db.users.update_one(
+                        {"id": parent_user_id},
+                        {"$set": {"password_hash": hash_password(row_pwd), "password_reset_to_default_at": utc_now()}},
+                    )
+                parent_was_created = False
             else:
                 parent_user_id = new_id()
+                parent_was_created = True
                 parent_doc = {
                     "id": parent_user_id,
                     "email": parent_email,
-                    "password_hash": hash_password("Parent@123"),
+                    "password_hash": hash_password(parent_password),
                     "name": r.get("parent_name") or "Parent",
                     "role": "parent",
                     "school_id": user["school_id"],
@@ -146,6 +158,14 @@ async def upload_students(file: UploadFile = File(...), user: dict = Depends(req
                 "status": "active",
                 "created_at": utc_now(),
             })
+            credentials.append({
+                "row": idx,
+                "student_uid": uid,
+                "student_name": r.get("name"),
+                "parent_email": parent_email,
+                "parent_password": parent_password if parent_was_created else None,
+                "parent_was_created": parent_was_created,
+            })
             inserted += 1
         except Exception as e:
             errors.append({"row": idx, "error": str(e)})
@@ -154,7 +174,7 @@ async def upload_students(file: UploadFile = File(...), user: dict = Depends(req
         "rows": len(rows), "inserted": inserted, "errors": errors,
         "by": user["id"], "created_at": utc_now(),
     })
-    return {"rows": len(rows), "inserted": inserted, "errors": errors}
+    return {"rows": len(rows), "inserted": inserted, "errors": errors, "credentials": credentials}
 
 
 # ---------- Attendance ----------
@@ -234,3 +254,51 @@ async def upload_logs(user: dict = Depends(require_roles("school_admin", "platfo
         return out
     tdb = await tenant_db(user["school_id"])
     return await tdb.bulk_uploads.find({"school_id": user["school_id"]}, {"_id": 0}).sort("created_at", -1).to_list(100)
+
+
+# ---------- Bulk export: parent credentials for a class ----------
+@router.get("/parent-credentials")
+async def export_parent_credentials(
+    class_id: str | None = None,
+    section: str | None = None,
+    user: dict = Depends(require_roles("school_admin")),
+):
+    """Download an Excel sheet of (student_uid, name, class, section, parent_name,
+    parent_phone, parent_email, default_password_hint) for every active student in
+    the given class (or whole school if no class given).
+
+    The 'default_password_hint' column is `Parent@123 (unless changed)` — we never
+    persist plaintext passwords. To force-reset a parent back to the default, use
+    POST /api/students/{id}/parent-reset-password.
+    """
+    tdb = await tenant_db(user["school_id"])
+    flt = {"school_id": user["school_id"], "status": "active"}
+    if class_id:
+        flt["class_id"] = class_id
+    if section:
+        flt["section"] = section.upper()
+    students = await tdb.students.find(flt, {"_id": 0}).sort("student_uid", 1).to_list(5000)
+    classes = await tdb.classes.find({"school_id": user["school_id"]}, {"_id": 0, "id": 1, "name": 1}).to_list(500)
+    cmap = {c["id"]: c["name"] for c in classes}
+    headers = [
+        "student_uid", "student_name", "class", "section",
+        "parent_name", "parent_phone", "parent_whatsapp", "parent_email",
+        "default_password_hint",
+    ]
+    body = []
+    for s in students:
+        p = s.get("parent") or {}
+        body.append([
+            s.get("student_uid"), s.get("name"),
+            cmap.get(s.get("class_id"), s.get("class_id")), s.get("section"),
+            p.get("name"), p.get("phone"), p.get("whatsapp"), p.get("email"),
+            "Parent@123 (unless changed)",
+        ])
+    xlsx = _write_excel(headers, body)
+    class_label = (cmap.get(class_id, class_id) if class_id else "all").replace(" ", "_")
+    fname = f"parent-credentials-{class_label}{('-'+section) if section else ''}.xlsx"
+    return StreamingResponse(
+        io.BytesIO(xlsx),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )

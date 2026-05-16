@@ -2,9 +2,11 @@ import React, { useEffect, useMemo, useState } from "react";
 import { api, formatApiError } from "../../lib/api";
 import { PageHeader, Section, Empty } from "../../components/Primitives";
 import { Modal } from "../../components/Modal";
-import { Plus, MagnifyingGlass, Key, Copy } from "@phosphor-icons/react";
+import { Plus, MagnifyingGlass, Key, Copy, PencilSimple, ArrowsLeftRight, Trash, FilePdf, PaperPlaneTilt, DownloadSimple } from "@phosphor-icons/react";
 import toast from "react-hot-toast";
 import { useNavigate } from "react-router-dom";
+
+const API_BASE = (process.env.REACT_APP_BACKEND_URL || "") + "/api";
 
 export default function StudentsPage() {
   const [students, setStudents] = useState([]);
@@ -12,6 +14,8 @@ export default function StudentsPage() {
   const [filter, setFilter] = useState({ class_id: "", section: "", q: "" });
   const [open, setOpen] = useState(false);
   const [credsFor, setCredsFor] = useState(null);
+  const [editFor, setEditFor] = useState(null);
+  const [sendFor, setSendFor] = useState(null);
   const navigate = useNavigate();
 
   const load = async () => {
@@ -32,13 +36,56 @@ export default function StudentsPage() {
     return c ? c.sections : [];
   }, [classes, filter.class_id]);
 
+  const deactivate = async (s) => {
+    if (!window.confirm(`Mark ${s.name} (${s.student_uid}) as inactive?`)) return;
+    try {
+      await api.delete(`/students/${s.id}`);
+      toast.success("Student marked inactive");
+      load();
+    } catch (err) { toast.error(formatApiError(err)); }
+  };
+
+  const downloadSlip = async (s) => {
+    try {
+      const res = await api.get(`/students/${s.id}/credential-slip`, { responseType: "blob" });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement("a");
+      a.href = url; a.download = `credentials-${s.student_uid}.pdf`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) { toast.error(formatApiError(err)); }
+  };
+
+  const exportClassCreds = async () => {
+    if (!filter.class_id) { toast.error("Pick a class first"); return; }
+    try {
+      const res = await api.get("/uploads/parent-credentials", {
+        params: { class_id: filter.class_id, section: filter.section || undefined },
+        responseType: "blob",
+      });
+      const url = URL.createObjectURL(res.data);
+      const cls = classes.find((c) => c.id === filter.class_id);
+      const a = document.createElement("a");
+      a.href = url; a.download = `parent-credentials-${(cls?.name || "class").replace(/\s+/g, "_")}${filter.section ? "-" + filter.section : ""}.xlsx`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) { toast.error(formatApiError(err)); }
+  };
+
   return (
     <div data-testid="students-page">
       <PageHeader
         eyebrow="Students"
         title="Manage students & parents"
         subtitle="Add students manually or via Excel. Click any student to view their analytics."
-        actions={<button className="btn-primary" onClick={() => setOpen(true)} data-testid="add-student-btn"><Plus size={16}/> New student</button>}
+        actions={
+          <div className="flex gap-2">
+            <button className="btn-secondary" onClick={exportClassCreds} disabled={!filter.class_id} data-testid="bulk-export-creds-btn" title={filter.class_id ? "Download parent-creds Excel for this class" : "Pick a class first"}>
+              <DownloadSimple size={14}/> Export creds
+            </button>
+            <button className="btn-primary" onClick={() => setOpen(true)} data-testid="add-student-btn"><Plus size={16}/> New student</button>
+          </div>
+        }
       />
       <div className="flex flex-wrap gap-3 mb-4">
         <div className="relative">
@@ -71,6 +118,7 @@ export default function StudentsPage() {
                 <th className="th">Section</th><th className="th">Roll</th><th className="th">Parent</th>
                 <th className="th">Parent login</th>
                 <th className="th">Status</th>
+                <th className="th">Actions</th>
               </tr></thead>
               <tbody>
                 {students.map((s) => (
@@ -90,6 +138,24 @@ export default function StudentsPage() {
                       ><Key size={12}/> Show login</button>
                     </td>
                     <td className="td"><span className={s.status === "active" ? "badge-success" : "badge-neutral"}>{s.status}</span></td>
+                    <td className="td">
+                      <div className="flex gap-1 flex-wrap">
+                        <button className="btn-secondary text-xs" onClick={() => setEditFor(s)} title="Edit / move section" data-testid={`edit-student-btn-${s.student_uid}`}>
+                          <PencilSimple size={12}/>
+                        </button>
+                        <button className="btn-secondary text-xs" onClick={() => downloadSlip(s)} title="Download credential slip PDF" data-testid={`slip-btn-${s.student_uid}`}>
+                          <FilePdf size={12}/>
+                        </button>
+                        <button className="btn-secondary text-xs" onClick={() => setSendFor(s)} title="Send credentials to parent" data-testid={`send-creds-btn-${s.student_uid}`}>
+                          <PaperPlaneTilt size={12}/>
+                        </button>
+                        {s.status === "active" && (
+                          <button className="btn-secondary text-xs text-status-danger" onClick={() => deactivate(s)} title="Mark inactive" data-testid={`deactivate-student-btn-${s.student_uid}`}>
+                            <Trash size={12}/>
+                          </button>
+                        )}
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -99,7 +165,148 @@ export default function StudentsPage() {
 
       <CreateStudentModal classes={classes} open={open} onClose={() => setOpen(false)} onCreated={() => { setOpen(false); load(); }} />
       {credsFor && <ParentCredsModal student={credsFor} onClose={() => setCredsFor(null)} />}
+      {editFor && (
+        <EditStudentModal
+          target={editFor}
+          classes={classes}
+          onClose={() => setEditFor(null)}
+          onSaved={() => { setEditFor(null); load(); }}
+        />
+      )}
+      {sendFor && (
+        <SendCredsModal
+          student={sendFor}
+          onClose={() => setSendFor(null)}
+          onSent={() => { setSendFor(null); load(); }}
+        />
+      )}
     </div>
+  );
+}
+
+function EditStudentModal({ target, classes, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    name: target.name || "",
+    class_id: target.class_id,
+    section: target.section,
+    roll_number: target.roll_number || "",
+    gender: target.gender || "M",
+    dob: target.dob || "",
+    emergency_contact: target.emergency_contact || "",
+    medical_notes: target.medical_notes || "",
+    status: target.status || "active",
+  });
+  const [busy, setBusy] = useState(false);
+  const sections = classes.find((c) => c.id === form.class_id)?.sections || [];
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await api.patch(`/students/${target.id}`, form);
+      toast.success("Student updated");
+      onSaved();
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Modal open onClose={onClose} title={`Edit student — ${target.name} (${target.student_uid})`} size="lg" testId="edit-student-modal">
+      <form onSubmit={submit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="md:col-span-2"><label className="label">Name</label><input className="input" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} data-testid="edit-student-name" /></div>
+        <div>
+          <label className="label">Class <span className="text-xs text-ink-muted">(teachers can only move within their assigned classes)</span></label>
+          <select className="input" value={form.class_id} onChange={(e) => setForm({ ...form, class_id: e.target.value, section: classes.find((c) => c.id === e.target.value)?.sections?.[0] || "A" })} data-testid="edit-student-class">
+            {classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="label">Section</label>
+          <select className="input" value={form.section} onChange={(e) => setForm({ ...form, section: e.target.value })} data-testid="edit-student-section">
+            {sections.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
+        <div><label className="label">Roll number</label><input className="input" value={form.roll_number} onChange={(e) => setForm({ ...form, roll_number: e.target.value })} /></div>
+        <div>
+          <label className="label">Gender</label>
+          <select className="input" value={form.gender} onChange={(e) => setForm({ ...form, gender: e.target.value })}>
+            <option value="M">Male</option><option value="F">Female</option><option value="O">Other</option>
+          </select>
+        </div>
+        <div><label className="label">Date of birth</label><input className="input" type="date" value={form.dob} onChange={(e) => setForm({ ...form, dob: e.target.value })} /></div>
+        <div><label className="label">Emergency contact</label><input className="input" value={form.emergency_contact} onChange={(e) => setForm({ ...form, emergency_contact: e.target.value })} /></div>
+        <div className="md:col-span-2"><label className="label">Medical notes</label><textarea className="input" rows={2} value={form.medical_notes} onChange={(e) => setForm({ ...form, medical_notes: e.target.value })} /></div>
+        <div>
+          <label className="label">Status</label>
+          <select className="input" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })} data-testid="edit-student-status">
+            <option value="active">Active</option><option value="inactive">Inactive</option>
+          </select>
+        </div>
+        <div className="md:col-span-2 flex justify-end gap-2">
+          <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn-primary" disabled={busy} data-testid="edit-student-submit">{busy ? "Saving…" : <><ArrowsLeftRight size={14}/> Save changes</>}</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function SendCredsModal({ student, onClose, onSent }) {
+  const [channel, setChannel] = useState("telegram");
+  const [resetFirst, setResetFirst] = useState(true);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const { data } = await api.post(`/students/${student.id}/send-credentials`, { channel, reset_first: resetFirst });
+      if (data.delivery_status === "sent") {
+        toast.success(`Credentials sent via ${channel}`);
+      } else {
+        toast(`Queued via ${channel} (${data.delivery_note || data.delivery_status})`, { icon: "ℹ️" });
+      }
+      onSent();
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Modal open onClose={onClose} title={`Send parent credentials — ${student.name}`} size="md" testId="send-creds-modal">
+      <form onSubmit={submit} className="space-y-4">
+        <div className="text-sm text-ink-soft">
+          Send the parent's login credentials directly to their phone — no need to copy/paste manually.
+        </div>
+        <div>
+          <label className="label">Channel</label>
+          <div className="flex gap-2" data-testid="send-creds-channel">
+            {["telegram", "whatsapp", "sms"].map((c) => (
+              <button
+                key={c} type="button" onClick={() => setChannel(c)}
+                className={channel === c ? "badge bg-primary text-white cursor-pointer capitalize" : "badge-neutral cursor-pointer hover:bg-line capitalize"}
+                data-testid={`send-creds-channel-${c}`}
+              >{c}</button>
+            ))}
+          </div>
+        </div>
+        <label className="flex items-start gap-2 text-sm cursor-pointer">
+          <input type="checkbox" checked={resetFirst} onChange={(e) => setResetFirst(e.target.checked)} data-testid="send-creds-reset-first" className="mt-0.5" />
+          <span>
+            <strong>Reset password to default first</strong>
+            <span className="block text-xs text-ink-muted">The message will include the new default password (Parent@123). Recommended for first-time hand-off.</span>
+          </span>
+        </label>
+        <div className="text-xs text-ink-muted">
+          ⓘ Telegram requires the parent to have linked the bot. WhatsApp/SMS require provider configuration. If delivery isn't possible, the message is queued and you'll see it in the notifications log.
+        </div>
+        <div className="flex justify-end gap-2">
+          <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn-primary" disabled={busy} data-testid="send-creds-submit">
+            {busy ? "Sending…" : "Send now"}
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
