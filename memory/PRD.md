@@ -1,5 +1,16 @@
 # SCMS — School Child Monitoring System (PRD)
 
+## Implemented v1.32 (2026-05-16) — Per-school mandatory channels + Self-service Profile page
+- **Per-school mandatory channels** — Platform Super Admin can pick any combination of `email`, `whatsapp`, `telegram` per school (at least one required). Stored on `schools.mandatory_channels`; default `['telegram']` (back-compat).
+  - `GET /api/schools/{id}/mandatory-channels` (platform admin + own school admin) → `{channels, allowed}`
+  - `PATCH /api/schools/{id}/mandatory-channels` (platform admin only) — validates empty/unknown channels with 400
+  - `/auth/me` + `/auth/login` now return `school_mandatory_channels`, `email_linked`, `phone_linked`, `telegram_linked`
+- **Multi-channel link banner** — `components/TelegramLinkBanner.jsx` rewritten as a generic banner stack that renders one alert per unlinked mandatory channel. Each banner is dismissible per-session via `sessionStorage.channel_banner_dismissed`.
+- **Self-service Profile page** — new `pages/Profile.jsx` route at `/profile` (all roles: teacher/admin/accounts/parent). Sections: Account details (name, role, email, phone, employee_id, school), Communication channels (per-channel linked/not-linked status with Required badge), Link Telegram (QR via `api.qrserver.com`, Open-in-Telegram deep-link, copy-link, step-by-step instructions, Refresh status button).
+- **Sidebar**: "My Profile" link added for school_admin, teacher, accounts, parent roles.
+- **Platform UI**: `PlatformOverview` school drawer now includes a `MandatoryChannelsPanel` so super admins toggle channels with one click.
+- Verified live: drawer save works, profile page renders correctly with mandatory chips + QR for teacher Priya, banner stack appears for unlinked mandatory channels.
+
 ## Implemented v1.31 (2026-05-16) — Telegram-linked status badges in Students page
 - **`GET /api/students`** now enriches every row with `parent_telegram_linked: bool` via a single bulk-lookup against master `users` (one query for all `parent_user_id`s, no N+1).
 - **`GET /api/students/{id}/parent-login`** now returns `telegram_linked: bool` and `telegram_linked_at: ISO datetime` so the modal can show *when* the parent linked Telegram.

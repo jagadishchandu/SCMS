@@ -261,3 +261,66 @@ async def set_school_language(school_id: str, payload: LanguagePayload, user: di
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Not found")
     return {"ok": True, "language": payload.language}
+
+
+# ---------- Mandatory communication channels per school ----------
+ALLOWED_CHANNELS = ("email", "whatsapp", "telegram")
+
+
+class MandatoryChannelsPayload(_BaseModel):
+    channels: list[str]
+
+
+def _normalize_channels(value: list[str] | None) -> list[str]:
+    """Return the school's mandatory_channels list with safe defaults.
+    Default for legacy schools is ['telegram'] (back-compat with v1.30 banner)."""
+    if not value:
+        return ["telegram"]
+    seen = []
+    for c in value:
+        if c in ALLOWED_CHANNELS and c not in seen:
+            seen.append(c)
+    return seen or ["telegram"]
+
+
+@router.get("/{school_id}/mandatory-channels")
+async def get_mandatory_channels(school_id: str, user: dict = Depends(get_current_user)):
+    """Visible to platform admin and the school's own school admin."""
+    if user["role"] != "platform_admin" and user.get("school_id") != school_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    db = get_db()
+    s = await db.schools.find_one({"id": school_id}, {"_id": 0, "id": 1, "mandatory_channels": 1})
+    if s is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {
+        "school_id": school_id,
+        "channels": _normalize_channels(s.get("mandatory_channels")),
+        "allowed": list(ALLOWED_CHANNELS),
+    }
+
+
+@router.patch("/{school_id}/mandatory-channels")
+async def set_mandatory_channels(
+    school_id: str,
+    payload: MandatoryChannelsPayload,
+    user: dict = Depends(require_roles("platform_admin")),
+):
+    """Platform Super Admin can set which communication channels each school
+    must enforce for its users (any combination of email / whatsapp / telegram).
+    At least one channel must be selected."""
+    incoming = [c.lower().strip() for c in (payload.channels or [])]
+    bad = [c for c in incoming if c not in ALLOWED_CHANNELS]
+    if bad:
+        raise HTTPException(status_code=400, detail=f"Unsupported channels: {bad}. Allowed: {list(ALLOWED_CHANNELS)}")
+    # De-dupe while preserving order
+    cleaned: list[str] = []
+    for c in incoming:
+        if c not in cleaned:
+            cleaned.append(c)
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="At least one mandatory channel is required")
+    db = get_db()
+    res = await db.schools.update_one({"id": school_id}, {"$set": {"mandatory_channels": cleaned}})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"ok": True, "school_id": school_id, "channels": cleaned}

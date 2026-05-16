@@ -168,6 +168,8 @@ function SchoolDetailDrawer({ open, detail, loading, onClose }) {
                 <KPI label="Classes" value={detail?.counts?.classes || 0} accent="primary" testId="drawer-kpi-classes" />
               </div>
 
+              {school?.id && <MandatoryChannelsPanel schoolId={school.id} schoolName={school.name} />}
+
               <Section title={`Teachers (${teachers.length})`}>
                 {teachers.length === 0 ? (
                   <Empty title="No teachers" message="This school hasn't added any teachers yet." />
@@ -272,5 +274,84 @@ function CreateSchoolModal({ open, onClose, onCreated }) {
         </div>
       </form>
     </Modal>
+  );
+}
+
+
+function MandatoryChannelsPanel({ schoolId, schoolName }) {
+  const [data, setData] = useState(null);
+  const [draft, setDraft] = useState([]);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.get(`/schools/${schoolId}/mandatory-channels`)
+      .then((r) => { setData(r.data); setDraft(r.data.channels || []); })
+      .catch((err) => toast.error(formatApiError(err)));
+  }, [schoolId]);
+
+  if (!data) return null;
+  const toggle = (ch) => {
+    setDraft((d) => d.includes(ch) ? d.filter((x) => x !== ch) : [...d, ch]);
+  };
+  const dirty = JSON.stringify([...draft].sort()) !== JSON.stringify([...(data.channels || [])].sort());
+
+  const save = async () => {
+    if (draft.length === 0) { toast.error("Pick at least one channel"); return; }
+    setBusy(true);
+    try {
+      const { data: r } = await api.patch(`/schools/${schoolId}/mandatory-channels`, { channels: draft });
+      setData({ ...data, channels: r.channels });
+      toast.success(`Mandatory channels updated for ${schoolName}`);
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setBusy(false); }
+  };
+
+  const meta = {
+    email: { label: "Email", hint: "Required for digest summaries & password reset" },
+    whatsapp: { label: "WhatsApp / SMS", hint: "Requires user phone number on file" },
+    telegram: { label: "Telegram", hint: "Free, fastest. Users link via /start bot" },
+  };
+
+  return (
+    <Section title="Mandatory communication channels">
+      <div className="text-xs text-ink-muted mb-3">
+        Pick one or more channels every user in this school must link. Banners appear inside the user's account until they comply.
+      </div>
+      <div className="space-y-2" data-testid="mandatory-channels-config">
+        {(data.allowed || ["email", "whatsapp", "telegram"]).map((ch) => {
+          const checked = draft.includes(ch);
+          return (
+            <label
+              key={ch}
+              className={"flex items-center gap-3 p-3 rounded-md border cursor-pointer transition " + (checked ? "bg-primary-light/40 border-primary" : "border-line/60 hover:bg-bg-subtle")}
+              data-testid={`mc-row-${ch}`}
+            >
+              <input
+                type="checkbox" className="w-4 h-4"
+                checked={checked} onChange={() => toggle(ch)}
+                data-testid={`mc-check-${ch}`}
+              />
+              <div className="flex-1">
+                <div className="text-sm font-medium capitalize">{meta[ch]?.label || ch}</div>
+                <div className="text-xs text-ink-muted">{meta[ch]?.hint}</div>
+              </div>
+            </label>
+          );
+        })}
+      </div>
+      <div className="flex items-center justify-between mt-3">
+        <div className="text-xs text-ink-muted" data-testid="mc-current">
+          Currently mandatory: {(data.channels || []).map((c) => (
+            <span key={c} className="badge bg-primary-light text-primary mr-1 capitalize">{c}</span>
+          ))}
+        </div>
+        <button
+          type="button" className="btn-primary text-xs"
+          disabled={!dirty || busy || draft.length === 0}
+          onClick={save}
+          data-testid="mc-save-btn"
+        >{busy ? "Saving…" : "Save"}</button>
+      </div>
+    </Section>
   );
 }

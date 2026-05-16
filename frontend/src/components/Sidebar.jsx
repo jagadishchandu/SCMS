@@ -6,7 +6,7 @@ import {
   House, Buildings, GraduationCap, ClipboardText, ChartLineUp,
   Calendar, BookOpen, Receipt, BellRinging, UploadSimple,
   Gauge, ChalkboardTeacher, SignOut, ChartPieSlice, FileText, MagnifyingGlass,
-  ShieldCheck, Package, X, Heartbeat, Users, MoneyWavy,
+  ShieldCheck, Package, X, Heartbeat, Users, MoneyWavy, UserCircle,
 } from "@phosphor-icons/react";
 
 const NAV_BY_ROLE = {
@@ -44,6 +44,7 @@ const NAV_BY_ROLE = {
     { to: "/school/settings", label: "Branding", icon: ShieldCheck },
     { to: "/school/audit", label: "Audit log", icon: ShieldCheck },
     { to: "/student-search", label: "Student Analytics", icon: MagnifyingGlass },
+    { to: "/profile", label: "My Profile", icon: UserCircle },
   ],
   teacher: [
     { to: "/teacher", label: "My Dashboard", icon: Gauge, end: true },
@@ -59,6 +60,7 @@ const NAV_BY_ROLE = {
     { to: "/teacher/duties", label: "My Schedule", icon: Calendar },
     { to: "/teacher/calendar", label: "Calendar", icon: Calendar },
     { to: "/teacher/performance", label: "My Performance", icon: ChartLineUp },
+    { to: "/profile", label: "My Profile", icon: UserCircle },
     { to: "/student-search", label: "Student Search", icon: MagnifyingGlass },
   ],
   accounts: [
@@ -69,11 +71,13 @@ const NAV_BY_ROLE = {
     { to: "/accounts/payments", label: "Payments", icon: ChartPieSlice },
     { to: "/accounts/expenses", label: "Expenses & Reimbursements", icon: MoneyWavy },
     { to: "/student-search", label: "Student Search", icon: MagnifyingGlass },
+    { to: "/profile", label: "My Profile", icon: UserCircle },
   ],
   parent: [
     { to: "/parent", label: "My Child", icon: House, end: true },
     { to: "/parent/calendar", label: "Calendar", icon: Calendar },
     { to: "/parent/sick-leaves", label: "Sick Leaves", icon: Heartbeat },
+    { to: "/profile", label: "My Profile", icon: UserCircle },
   ],
 };
 

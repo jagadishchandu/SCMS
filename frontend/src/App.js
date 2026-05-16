@@ -57,6 +57,9 @@ import AccountsDashboard from "./pages/accounts/AccountsDashboard";
 // Parent
 import ParentPortal from "./pages/parent/ParentPortal";
 
+// Shared profile (telegram-linking + reachability)
+import Profile from "./pages/Profile";
+
 function Home() {
   const { user } = useAuth();
   if (user === null) return null;
@@ -147,6 +150,9 @@ export default function App() {
       {/* Shared analytics */}
       <Route path="/student-search" element={<ProtectedRoute allow={["platform_admin","school_admin","teacher","accounts"]}>{withLayout(StudentAnalytics)}</ProtectedRoute>} />
       <Route path="/student/:uid" element={<ProtectedRoute allow={["platform_admin","school_admin","teacher","accounts","parent"]}>{withLayout(StudentAnalytics)}</ProtectedRoute>} />
+
+      {/* Self-service profile — Telegram linking + channel reachability */}
+      <Route path="/profile" element={<ProtectedRoute allow={["platform_admin","school_admin","teacher","accounts","parent"]}>{withLayout(Profile)}</ProtectedRoute>} />
 
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

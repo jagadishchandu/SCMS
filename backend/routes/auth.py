@@ -75,13 +75,18 @@ async def login(payload: LoginRequest, response: Response, request: Request):
     if user.get("school_id"):
         school = await db.schools.find_one(
             {"id": user["school_id"]},
-            {"_id": 0, "subscription": 1, "subscription_approval": 1, "name": 1, "language": 1, "branding": 1},
+            {"_id": 0, "subscription": 1, "subscription_approval": 1, "name": 1, "language": 1, "branding": 1, "mandatory_channels": 1},
         ) or {}
         from core.subscription_guard import compute_subscription_state
         out["subscription_state"] = compute_subscription_state(school.get("subscription"), school.get("subscription_approval"))
         out["school_name"] = school.get("name")
         out["school_language"] = school.get("language") or "en"
         out["school_branding"] = school.get("branding") or {}
+        out["school_mandatory_channels"] = school.get("mandatory_channels") or ["telegram"]
+    # Reachability flags so the UI can decide which mandatory-channel banners to render
+    out["email_linked"] = bool(out.get("email"))
+    out["phone_linked"] = bool(out.get("phone"))
+    out["telegram_linked"] = bool(out.get("telegram_chat_id"))
     return out
 
 
@@ -100,13 +105,17 @@ async def me(user: dict = Depends(get_current_user)):
     if user.get("school_id"):
         school = await db.schools.find_one(
             {"id": user["school_id"]},
-            {"_id": 0, "subscription": 1, "subscription_approval": 1, "name": 1, "language": 1, "branding": 1},
+            {"_id": 0, "subscription": 1, "subscription_approval": 1, "name": 1, "language": 1, "branding": 1, "mandatory_channels": 1},
         ) or {}
         from core.subscription_guard import compute_subscription_state
         out["subscription_state"] = compute_subscription_state(school.get("subscription"), school.get("subscription_approval"))
         out["school_name"] = school.get("name")
         out["school_language"] = school.get("language") or "en"
         out["school_branding"] = school.get("branding") or {}
+        out["school_mandatory_channels"] = school.get("mandatory_channels") or ["telegram"]
+    # Reachability flags so the UI can decide which mandatory-channel banners to render
+    out["email_linked"] = bool(out.get("email"))
+    out["phone_linked"] = bool(out.get("phone"))
     # Telegram link helpers — render the deep-link to /start the bot with the
     # user's role-specific identifier (student UID for parents, email otherwise).
     # The UI uses this for the "Link Telegram" mandatory banner.
