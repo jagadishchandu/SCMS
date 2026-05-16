@@ -99,6 +99,16 @@ async def create_school(payload: SchoolCreate, user: dict = Depends(require_role
         raise HTTPException(status_code=400, detail="Admin email already exists")
 
     school_id = new_id()
+    initial_approval = (
+        {
+            "status": "approved",
+            "approved_children_count": payload.initial_children_count,
+            "decided_at": utc_now(),
+            "decided_by": user["id"],
+            "note": "Auto-approved at creation by Platform Super Admin",
+        }
+        if payload.auto_approve else {"status": "not_started"}
+    )
     school_doc = {
         "id": school_id,
         "name": payload.name,
@@ -108,6 +118,7 @@ async def create_school(payload: SchoolCreate, user: dict = Depends(require_role
         "email": payload.email,
         "academic_year": payload.academic_year or "2025-2026",
         "is_active": True,
+        "subscription_approval": initial_approval,
         "created_at": utc_now(),
     }
     school_doc["db_name"] = school_db_name(school_doc)

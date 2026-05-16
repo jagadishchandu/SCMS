@@ -32,6 +32,7 @@ def ctx():
         "address": "x", "phone": "+910", "email": f"info.{suffix.lower()}@v17.example.com",
         "academic_year": "2025-2026",
         "admin_email": admin_email, "admin_password": admin_pw, "admin_name": "V17 Admin",
+        "auto_approve": True,
     }, timeout=20)
     assert r.status_code == 200
     school = r.json()["school"]

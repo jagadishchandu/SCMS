@@ -36,6 +36,7 @@ def ctx():
         "address": "x", "phone": "+910", "email": f"info.{suffix.lower()}@v16.example.com",
         "academic_year": "2025-2026",
         "admin_email": admin_email, "admin_password": admin_pw, "admin_name": "V16 Admin",
+        "auto_approve": True,
     }
     r = plat.post(f"{API}/schools", json=payload, timeout=20)
     assert r.status_code == 200
@@ -102,6 +103,7 @@ class TestPlatformOverviewEndpoints:
             "academic_year": "2025-2026",
             "admin_email": f"v16.other.{suffix.lower()}@v16.example.com",
             "admin_password": "Other@2026", "admin_name": "Other",
+            "auto_approve": True,
         }, timeout=15)
         other = r.json()["school"]
         r2 = ctx["school_admin"].get(f"{API}/schools/{other['id']}/people", timeout=15)

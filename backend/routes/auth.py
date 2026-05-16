@@ -75,10 +75,10 @@ async def login(payload: LoginRequest, response: Response, request: Request):
     if user.get("school_id"):
         school = await db.schools.find_one(
             {"id": user["school_id"]},
-            {"_id": 0, "subscription": 1, "name": 1, "language": 1, "branding": 1},
+            {"_id": 0, "subscription": 1, "subscription_approval": 1, "name": 1, "language": 1, "branding": 1},
         ) or {}
         from core.subscription_guard import compute_subscription_state
-        out["subscription_state"] = compute_subscription_state(school.get("subscription"))
+        out["subscription_state"] = compute_subscription_state(school.get("subscription"), school.get("subscription_approval"))
         out["school_name"] = school.get("name")
         out["school_language"] = school.get("language") or "en"
         out["school_branding"] = school.get("branding") or {}
@@ -99,10 +99,10 @@ async def me(user: dict = Depends(get_current_user)):
     if user.get("school_id"):
         school = await db.schools.find_one(
             {"id": user["school_id"]},
-            {"_id": 0, "subscription": 1, "name": 1, "language": 1, "branding": 1},
+            {"_id": 0, "subscription": 1, "subscription_approval": 1, "name": 1, "language": 1, "branding": 1},
         ) or {}
         from core.subscription_guard import compute_subscription_state
-        out["subscription_state"] = compute_subscription_state(school.get("subscription"))
+        out["subscription_state"] = compute_subscription_state(school.get("subscription"), school.get("subscription_approval"))
         out["school_name"] = school.get("name")
         out["school_language"] = school.get("language") or "en"
         out["school_branding"] = school.get("branding") or {}

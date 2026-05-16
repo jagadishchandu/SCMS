@@ -53,6 +53,7 @@ def tenant_authoritative_ctx():
         "email": f"info.{suffix.lower()}@tenant.example.com",
         "academic_year": "2025-2026",
         "admin_email": admin_email, "admin_password": admin_pw, "admin_name": "Tenant Admin",
+        "auto_approve": True,
     }, timeout=20)
     assert r.status_code == 200
     school = r.json()["school"]

@@ -509,7 +509,7 @@ class TestReceipts:
         payload = {"name": f"X {code}", "code": code, "address": "x", "phone": "+91",
                    "email": f"info-{code.lower()}@x.edu", "academic_year": "2025-2026",
                    "admin_email": admin_email, "admin_password": "Admin@123",
-                   "admin_name": "X Admin"}
+                   "admin_name": "X Admin", "auto_approve": True}
         rs = platform_session.post(f"{API}/schools", json=payload, timeout=20)
         assert rs.status_code in (200, 201), rs.text
         # login as new admin
@@ -697,6 +697,7 @@ class TestPerSchoolDB:
             "email": f"info-{code.lower()}@x.edu", "academic_year": "2025-2026",
             "admin_email": f"adb.{code.lower()}@test.edu",
             "admin_password": "Admin@123", "admin_name": "DB Admin",
+            "auto_approve": True,
         }
         r = platform_session.post(f"{API}/schools", json=payload, timeout=20)
         assert r.status_code in (200, 201), r.text

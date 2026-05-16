@@ -35,6 +35,17 @@ class PaymentRequest(BaseModel):
     note: str | None = None
 
 
+class ApprovalRequest(BaseModel):
+    requested_children_count: int = Field(..., ge=1, le=100000)
+    note: str | None = None
+
+
+class ApprovalDecide(BaseModel):
+    decision: str = Field(..., pattern="^(approve|reject)$")
+    approved_children_count: int | None = Field(default=None, ge=1, le=100000)
+    note: str | None = None
+
+
 # ----------------- pricing & quotes -----------------
 
 def _calc(student_count: int, cycle: str) -> dict:
@@ -85,12 +96,115 @@ async def my_subscription(user: dict = Depends(require_roles("school_admin"))):
         {"_id": 0},
         sort=[("created_at", -1)],
     )
+    approval = school.get("subscription_approval") or {"status": "not_started"}
     return {
         "school": {"id": school["id"], "name": school["name"], "code": school.get("code")},
         "subscription": school.get("subscription") or {"status": "none"},
+        "subscription_approval": approval,
         "quote": quote,
         "pending_payment": pending,
     }
+
+
+# ----------------- approval workflow -----------------
+
+@router.post("/approval-request")
+async def submit_approval_request(payload: ApprovalRequest, user: dict = Depends(require_roles("school_admin"))):
+    """School admin submits an approval request with the desired children count.
+    Until the Platform Super Admin approves it, the school is locked out of all
+    operational routes (the SubscriptionGuard middleware enforces this).
+    """
+    db = get_db()
+    school = await db.schools.find_one({"id": user["school_id"]})
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+    now = utc_now()
+    approval = {
+        "status": "pending",
+        "requested_children_count": payload.requested_children_count,
+        "requested_at": now,
+        "requested_by": user["id"],
+        "requested_by_email": user["email"],
+        "note": payload.note,
+        "school_id": user["school_id"],
+        "school_name": school["name"],
+        "school_code": school.get("code"),
+    }
+    await db.schools.update_one(
+        {"id": user["school_id"]}, {"$set": {"subscription_approval": approval}},
+    )
+    await log_action(
+        user["id"], user["role"], user["school_id"], "submit_approval_request",
+        "subscription_approval", user["school_id"],
+        meta={"requested_children_count": payload.requested_children_count},
+    )
+    approval.pop("_id", None)
+    # Convert datetime → iso for JSON
+    if isinstance(approval.get("requested_at"), object):
+        approval["requested_at"] = now.isoformat()
+    return {"ok": True, "subscription_approval": approval}
+
+
+@router.get("/approval-requests")
+async def list_approval_requests(status: str | None = None,
+                                  user: dict = Depends(require_roles("platform_admin"))):
+    """Platform Super Admin: list school approval requests (default: pending only)."""
+    db = get_db()
+    flt: dict = {}
+    if status:
+        flt["subscription_approval.status"] = status
+    else:
+        flt["subscription_approval.status"] = "pending"
+    cursor = db.schools.find(
+        flt, {"_id": 0, "id": 1, "name": 1, "code": 1, "subscription_approval": 1, "subscription": 1},
+    )
+    rows = []
+    async for s in cursor:
+        appr = s.get("subscription_approval") or {}
+        # Compose datetime → iso
+        for k in ("requested_at", "decided_at"):
+            v = appr.get(k)
+            if hasattr(v, "isoformat"):
+                appr[k] = v.isoformat()
+        rows.append({
+            "school_id": s["id"],
+            "school_name": s["name"],
+            "school_code": s.get("code"),
+            "approval": appr,
+        })
+    return rows
+
+
+@router.post("/approval/{school_id}/decide")
+async def decide_approval_request(school_id: str, payload: ApprovalDecide,
+                                    user: dict = Depends(require_roles("platform_admin"))):
+    db = get_db()
+    school = await db.schools.find_one({"id": school_id})
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+    approval = school.get("subscription_approval") or {}
+    if approval.get("status") != "pending":
+        raise HTTPException(status_code=400, detail=f"No pending approval request (current: {approval.get('status', 'not_started')})")
+    now = utc_now()
+    new_status = "approved" if payload.decision == "approve" else "rejected"
+    approved_count = payload.approved_children_count or approval.get("requested_children_count")
+    update = {
+        "subscription_approval.status": new_status,
+        "subscription_approval.decided_at": now,
+        "subscription_approval.decided_by": user["id"],
+        "subscription_approval.decided_by_email": user["email"],
+        "subscription_approval.note": payload.note,
+    }
+    if new_status == "approved":
+        update["subscription_approval.approved_children_count"] = approved_count
+    await db.schools.update_one({"id": school_id}, {"$set": update})
+    await log_action(
+        user["id"], user["role"], school_id, f"approval_{new_status}",
+        "subscription_approval", school_id,
+        meta={"approved_children_count": approved_count if new_status == "approved" else None,
+              "requested_children_count": approval.get("requested_children_count")},
+    )
+    return {"ok": True, "status": new_status, "approved_children_count": approved_count if new_status == "approved" else None}
 
 
 @router.get("/quote/{school_id}")

@@ -75,6 +75,7 @@ def fresh_school():
         "admin_email": admin_email,
         "admin_password": admin_pw,
         "admin_name": "DB Test Admin",
+        "auto_approve": True,
     }
     r = plat.post(f"{API}/schools", json=payload, timeout=20)
     assert r.status_code == 200, r.text

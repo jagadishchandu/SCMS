@@ -1,0 +1,35 @@
+{
+  "summary": "Iter8 (v1.18 — Subscription Approval Workflow & Lockdown + Monthly Payroll PDF): Verified end-to-end. Backend pytest /app/backend/tests/test_v18_approval_payroll.py = 15/15 PASS (40.9s). Backend curl smoke: school_admin GET /api/subscriptions/approval-requests = 403, platform = 200; locked school GET /api/students = 423 with code='approval_pending'; auto_approve school = full access; payroll PDF invalid month = 400, accounts can fetch (200), teacher 403; login response includes complete subscription_state with approval_status, requested/approved_children_count, approval_decided_at, approval_note. Frontend Playwright: created a brand-new locked school as platform admin, logged in as that admin -> sidebar showed exactly 2 links (/school, /school/subscription) + red SubscriptionBanner with data-testid='subscription-banner' + data-testid='banner-approval-cta'. Subscription page showed ApprovalPanel (input data-testid='approval-count-input', submit data-testid='submit-approval-btn'). After submitting 175 children, the page rendered data-testid='approval-pending-card' with text 'Awaiting Platform Super Admin approval - Your request for 175 children was submitted on 15 May 2026'. Platform /platform/subscriptions showed default 'Approval requests (16)' tab + KPI 'Approval requests 16' and the new school row was visible with Approve/Reject buttons. After approval the same school admin reloaded and the sidebar expanded to 22 links (full menu). Payroll PDF button on /school/staff is rendered with data-testid='payroll-pdf-btn' as expected.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/school/subscription (ApprovalPanel)", "issues": ["Minor naming discrepancy vs PRD: the requested-children input uses data-testid='approval-count-input' (PRD/task description suggested 'requested-children-input'). Functionality is correct — only the testid string differs. Either update the PRD or rename the attribute for consistency."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_v18_approval_payroll.py",
+    "/app/test_reports/pytest/iter8_results.xml"
+  ],
+  "action_items": [
+    "Optional: align the data-testid on the requested-children input. Current = 'approval-count-input'; PRD spec implied 'requested-children-input'. Low priority — does not block users."
+  ],
+  "critical_code_review_comments": [
+    "subscription_guard.py — lockdown correctly returns HTTP 423 (Locked) with structured body {code: 'approval_pending'|'approval_required'}; allowed read-only paths (/people, /db-status, /language, /branding, /analytics/school, /analytics/risk-students, /subscriptions/*, /auth/*, /users/me/*, /integrations/test/*, /webhooks/*) are honored. Verified via curl + pytest.",
+    "routes/schools.py — POST /api/schools defaults subscription_approval.status='not_started' and only allows auto_approve=True from platform_admin role. Legacy schools migrated at startup to 'approved' with note 'Auto-approved (legacy school created before approval workflow)' — confirmed live in DB.",
+    "routes/staff.py — /payroll/monthly-pdf returns valid PDF (starts with %PDF-), correct content-type 'application/pdf'. RBAC: school_admin OK (200), accounts OK (200), teacher 403, invalid month string 400. Good input validation.",
+    "routes/subscriptions.py — /approval/{school_id}/decide flips status atomically; rejecting keeps school locked and sets status='rejected' (verified via test_reject_keeps_school_locked_with_status_rejected).",
+    "frontend Sidebar.jsx — correctly filters to only Dashboard + Subscription items when user.subscription_state.approval_status !== 'approved'. AuthContext refresh after submit-approval triggers re-render so user sees pending state without manual reload.",
+    "SubscriptionBanner.jsx — uses semantic colors (red for not_started/rejected, amber for pending) and exposes data-testid='banner-approval-cta'. Confirmed visually.",
+    "Minor: data-testid naming inconsistency between 'approval-count-input' (actual) and 'requested-children-input' (PRD spec). Cosmetic only."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (15/15 v18 pytest + all curl smoke)", "frontend": "100% on the v18 flows (locked sidebar, banner, approval panel, pending card, platform approval-requests tab + KPI, post-approval unlock to full sidebar, payroll PDF button presence)"},
+  "test_credentials": "Used /app/memory/test_credentials.md verbatim. Created ephemeral school admins as 'v18ui.{suffix}@v18.example.com' / 'Admin@2026' for lockdown testing.",
+  "seed_data_creation": "Iter8 left ~16 pending approval-request schools created by the v18 pytest suite + 1 created by the UI flow (then approved). These remain in DB but do not affect other tests. Optionally cleanable by platform admin.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "v1.18 approval workflow + payroll PDF is production-ready. Re-run via `pytest backend/tests/test_v18_approval_payroll.py -v` (15/15). For full regression: 282/283 across the suite (1 known flake from a module-scoped fixture race unrelated to this work). UI flow can be reproduced by creating a school via POST /api/schools without auto_approve=True and logging in as that admin — sidebar should show only Dashboard + Subscription until /api/subscriptions/approval/{sid}/decide approve is called.",
+  "rca of the issue": "No bugs found in this iteration."
+}

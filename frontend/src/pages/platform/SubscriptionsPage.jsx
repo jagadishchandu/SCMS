@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { api, formatApiError } from "../../lib/api";
 import { PageHeader, Section, Empty, KPI } from "../../components/Primitives";
 import { currency, formatDate } from "../../lib/utils";
-import { CheckCircle, XCircle, Receipt, Clock } from "@phosphor-icons/react";
+import { CheckCircle, XCircle, Receipt, Clock, ShieldCheck } from "@phosphor-icons/react";
 import toast from "react-hot-toast";
 
 const STATUS_BADGE = {
@@ -13,17 +13,20 @@ const STATUS_BADGE = {
 
 export default function SubscriptionsPage() {
   const [payments, setPayments] = useState([]);
+  const [approvalReqs, setApprovalReqs] = useState([]);
   const [pricing, setPricing] = useState({ per_child_monthly: 30, per_child_yearly: 300, currency: "INR" });
   const [busy, setBusy] = useState(null);
-  const [tab, setTab] = useState("pending_confirmation");
+  const [tab, setTab] = useState("approval_requests");
 
   const load = async () => {
-    const [p, pr] = await Promise.all([
+    const [p, pr, ar] = await Promise.all([
       api.get("/subscriptions/payments").then((r) => r.data),
       api.get("/subscriptions/pricing").then((r) => r.data),
+      api.get("/subscriptions/approval-requests").then((r) => r.data).catch(() => []),
     ]);
     setPayments(p);
     setPricing(pr);
+    setApprovalReqs(ar);
   };
   useEffect(() => { load(); }, []);
 
@@ -37,39 +40,114 @@ export default function SubscriptionsPage() {
     finally { setBusy(null); }
   };
 
+  const decideApproval = async (schoolId, decision, requestedCount) => {
+    const approved = decision === "approve"
+      ? Number(window.prompt(`Approved children count? (default: ${requestedCount})`, requestedCount) || requestedCount)
+      : null;
+    if (decision === "approve" && (!approved || approved < 1)) {
+      toast.error("Approved count must be at least 1"); return;
+    }
+    const note = decision === "reject"
+      ? window.prompt("Reason for rejection? (optional)", "") : null;
+    setBusy(schoolId);
+    try {
+      await api.post(`/subscriptions/approval/${schoolId}/decide`, {
+        decision,
+        approved_children_count: approved,
+        note: note || null,
+      });
+      toast.success(decision === "approve" ? "School approved — features unlocked" : "Request rejected");
+      load();
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setBusy(null); }
+  };
+
   const filtered = payments.filter((p) => p.status === tab);
   const counts = {
     pending_confirmation: payments.filter((p) => p.status === "pending_confirmation").length,
     confirmed: payments.filter((p) => p.status === "confirmed").length,
     rejected: payments.filter((p) => p.status === "rejected").length,
   };
+  const approvalCount = approvalReqs.length;
 
   return (
     <div data-testid="subscriptions-page">
       <PageHeader eyebrow="Billing" title="Subscriptions & payments"
-        subtitle={`Per-child pricing: ${currency(pricing.per_child_monthly)}/child/month or ${currency(pricing.per_child_yearly)}/child/year. Approve or reject payments raised by schools.`} />
+        subtitle={`Per-child pricing: ${currency(pricing.per_child_monthly)}/child/month or ${currency(pricing.per_child_yearly)}/child/year. Approve subscription requests and confirm payments raised by schools.`} />
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
-        <KPI label="Pending confirmation" value={counts.pending_confirmation} accent="warning" testId="kpi-pending" />
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+        <KPI label="Approval requests" value={approvalCount} accent="danger" testId="kpi-approval-requests" />
+        <KPI label="Pending payments" value={counts.pending_confirmation} accent="warning" testId="kpi-pending" />
         <KPI label="Confirmed" value={counts.confirmed} accent="success" testId="kpi-confirmed" />
         <KPI label="Rejected" value={counts.rejected} accent="danger" testId="kpi-rejected" />
       </div>
 
-      <div className="flex gap-2 mb-4" role="tablist">
+      <div className="flex flex-wrap gap-2 mb-4" role="tablist">
         {[
-          ["pending_confirmation", "Pending"],
-          ["confirmed", "Confirmed"],
-          ["rejected", "Rejected"],
+          ["approval_requests", `Approval requests (${approvalCount})`],
+          ["pending_confirmation", `Pending payments (${counts.pending_confirmation})`],
+          ["confirmed", `Confirmed (${counts.confirmed})`],
+          ["rejected", `Rejected (${counts.rejected})`],
         ].map(([k, label]) => (
           <button key={k} onClick={() => setTab(k)}
             className={`btn-secondary ${tab === k ? "border-primary text-primary" : ""}`}
             data-testid={`sub-tab-${k}`}>
-            {label} <span className="ml-1 text-xs text-ink-muted">({counts[k]})</span>
+            {label}
           </button>
         ))}
       </div>
 
-      <Section title={tab === "pending_confirmation" ? "Awaiting your confirmation" : tab === "confirmed" ? "Confirmed payments" : "Rejected payments"}>
+      {tab === "approval_requests" ? (
+        <Section title="School subscription approval requests"
+                  subtitle="Schools cannot use any feature until you approve their requested children count.">
+          {approvalReqs.length === 0 ? (
+            <Empty title="No pending approval requests"
+                   message="When a school admin submits a subscription request, it will appear here." />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="table">
+                <thead><tr>
+                  <th className="th">School</th>
+                  <th className="th">Requested children</th>
+                  <th className="th">Submitted</th>
+                  <th className="th">Submitted by</th>
+                  <th className="th">Note</th>
+                  <th className="th">Actions</th>
+                </tr></thead>
+                <tbody>
+                  {approvalReqs.map((r) => (
+                    <tr key={r.school_id} className="table-row" data-testid={`approval-row-${r.school_id}`}>
+                      <td className="td">
+                        <div className="font-medium">{r.school_name}</div>
+                        <div className="text-xs text-ink-muted font-mono">{r.school_code}</div>
+                      </td>
+                      <td className="td font-semibold">{r.approval.requested_children_count}</td>
+                      <td className="td text-xs text-ink-muted">{formatDate(r.approval.requested_at)}</td>
+                      <td className="td text-xs">{r.approval.requested_by_email}</td>
+                      <td className="td text-xs italic">{r.approval.note || "—"}</td>
+                      <td className="td">
+                        <div className="flex flex-wrap gap-2">
+                          <button className="btn-primary text-xs px-3 py-1.5" disabled={busy === r.school_id}
+                            onClick={() => decideApproval(r.school_id, "approve", r.approval.requested_children_count)}
+                            data-testid={`approve-${r.school_id}`}>
+                            <ShieldCheck size={14} /> Approve
+                          </button>
+                          <button className="btn-secondary text-xs px-3 py-1.5 text-status-danger" disabled={busy === r.school_id}
+                            onClick={() => decideApproval(r.school_id, "reject", r.approval.requested_children_count)}
+                            data-testid={`reject-approval-${r.school_id}`}>
+                            <XCircle size={14} /> Reject
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Section>
+      ) : (
+        <Section title={tab === "pending_confirmation" ? "Awaiting your confirmation" : tab === "confirmed" ? "Confirmed payments" : "Rejected payments"}>
         {filtered.length === 0 ? (
           <Empty title={tab === "pending_confirmation" ? "Nothing to confirm right now" : "No records"}
                  message="When a school submits a subscription payment, it will appear here." />
@@ -138,9 +216,10 @@ export default function SubscriptionsPage() {
           </div>
         )}
       </Section>
+      )}
 
       <div className="mt-8 text-xs text-ink-muted flex items-center gap-2">
-        <Receipt size={14} /> Tip: schools see a "Subscription" page in their sidebar where they can view the quote and submit payment.
+        <Receipt size={14} /> Tip: schools see a "Subscription" page in their sidebar where they submit their approval request and pay.
       </div>
     </div>
   );

@@ -420,6 +420,18 @@ async def lifespan(app: FastAPI):
                 non_zero = {k: v for k, v in migrated.items() if isinstance(v, int) and v > 0}
                 if non_zero:
                     print(f"[migrate] {s['code']}: {non_zero}")
+                # Legacy schools created before v1.18 have no `subscription_approval`.
+                # Auto-mark them approved so they don't get locked out by the new guard.
+                if not s.get("subscription_approval"):
+                    await db.schools.update_one(
+                        {"id": s["id"]},
+                        {"$set": {"subscription_approval": {
+                            "status": "approved",
+                            "approved_children_count": None,
+                            "decided_at": utc_now(),
+                            "note": "Auto-approved (legacy school created before approval workflow)",
+                        }}},
+                    )
         except Exception as e:
             print(f"[startup] per-school DB init/migrate error: {e}")
         digest_scheduler.start()

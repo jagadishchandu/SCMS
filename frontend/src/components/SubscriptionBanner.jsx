@@ -13,11 +13,44 @@ import { Warning, Clock } from "@phosphor-icons/react";
  */
 export default function SubscriptionBanner({ user }) {
   const s = user?.subscription_state;
-  if (!s || s.status !== "active") return null;
-  if (!(s.is_expiring_soon || s.is_in_grace || s.is_expired)) return null;
+  if (!s) return null;
 
   const isParent = user.role === "parent";
   const isSchoolAdmin = user.role === "school_admin";
+  const approvalStatus = s.approval_status;
+
+  // ---- Approval lockdown banner (takes priority) ----
+  if (isSchoolAdmin && approvalStatus && approvalStatus !== "approved") {
+    let label = "";
+    if (approvalStatus === "not_started") {
+      label = "Your school is awaiting setup. Submit a subscription request to unlock all features.";
+    } else if (approvalStatus === "pending") {
+      const cnt = s.requested_children_count;
+      label = `Subscription request for ${cnt} child${cnt === 1 ? "" : "ren"} is pending Platform Super Admin approval. All features are locked until approved.`;
+    } else if (approvalStatus === "rejected") {
+      label = "Your subscription request was rejected. Please review the note and submit a new request.";
+    }
+    return (
+      <div
+        className="flex items-center gap-3 px-4 lg:px-8 py-2.5 border-b bg-status-danger/10 border-status-danger/40 text-status-danger"
+        data-testid="subscription-banner"
+        role="alert"
+      >
+        <Warning size={18} weight="duotone" className="shrink-0" />
+        <div className="text-sm leading-snug flex-1" data-testid="approval-lockdown-label">{label}</div>
+        <Link
+          to="/school/subscription"
+          className="btn-secondary text-xs px-3 py-1.5 whitespace-nowrap"
+          data-testid="banner-approval-cta"
+        >
+          {approvalStatus === "not_started" || approvalStatus === "rejected" ? "Submit request" : "View status"}
+        </Link>
+      </div>
+    );
+  }
+
+  if (s.status !== "active") return null;
+  if (!(s.is_expiring_soon || s.is_in_grace || s.is_expired)) return null;
 
   let bg = "bg-amber-100 border-amber-300 text-amber-900";
   let Icon = Clock;

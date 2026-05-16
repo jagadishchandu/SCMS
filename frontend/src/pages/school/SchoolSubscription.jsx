@@ -3,10 +3,12 @@ import { api, formatApiError } from "../../lib/api";
 import { PageHeader, Section, KPI } from "../../components/Primitives";
 import { Modal } from "../../components/Modal";
 import { currency, formatDate } from "../../lib/utils";
-import { CheckCircle, Clock, XCircle, Package, Users, CalendarBlank, Receipt } from "@phosphor-icons/react";
+import { CheckCircle, Clock, XCircle, Package, Users, CalendarBlank, Receipt, ShieldCheck, Warning } from "@phosphor-icons/react";
+import { useAuth } from "../../contexts/AuthContext";
 import toast from "react-hot-toast";
 
 export default function SchoolSubscription() {
+  const { refresh } = useAuth();
   const [data, setData] = useState(null);
   const [history, setHistory] = useState([]);
   const [open, setOpen] = useState(false);
@@ -27,6 +29,8 @@ export default function SchoolSubscription() {
   const sub = data.subscription || { status: "none" };
   const q = data.quote;
   const pending = data.pending_payment;
+  const approval = data.subscription_approval || { status: "not_started" };
+  const isApproved = approval.status === "approved";
 
   return (
     <div data-testid="school-subscription-page">
@@ -36,6 +40,26 @@ export default function SchoolSubscription() {
         subtitle="Pay per child — your invoice is calculated live from your current active students."
       />
 
+      {/* Approval request panel — visible until approved */}
+      {!isApproved && (
+        <ApprovalPanel
+          approval={approval}
+          onSubmitted={async () => { await load(); await refresh(); }}
+        />
+      )}
+
+      {isApproved && approval.approved_children_count != null && (
+        <div className="border border-status-success/40 bg-status-success/5 rounded-lg p-4 mb-6 flex items-start gap-3" data-testid="approval-approved-banner">
+          <ShieldCheck size={20} className="text-status-success mt-0.5" />
+          <div>
+            <div className="font-medium text-status-success">Subscription approved by Platform Super Admin</div>
+            <div className="text-xs text-ink-soft mt-1">
+              Approved capacity: <span className="font-medium">{approval.approved_children_count} children</span>.
+              {approval.approval_note ? <> Note: <span className="italic">{approval.approval_note}</span></> : null}
+            </div>
+          </div>
+        </div>
+      )}
       {/* Current plan summary */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
         <KPI label="Active students" value={q.students_active} accent="primary" testId="kpi-students" />
@@ -136,6 +160,104 @@ export default function SchoolSubscription() {
     </div>
   );
 }
+
+function ApprovalPanel({ approval, onSubmitted }) {
+  const [count, setCount] = useState(approval.requested_children_count || "");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    const n = Number(count);
+    if (!n || n < 1) { toast.error("Enter a valid children count (>= 1)"); return; }
+    setBusy(true);
+    try {
+      await api.post("/subscriptions/approval-request", {
+        requested_children_count: n,
+        note: note || null,
+      });
+      toast.success("Approval request submitted — awaiting Platform Super Admin");
+      setNote("");
+      onSubmitted();
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setBusy(false); }
+  };
+
+  if (approval.status === "pending") {
+    return (
+      <div className="border border-amber-300 bg-amber-50 rounded-lg p-5 mb-6" data-testid="approval-pending-card">
+        <div className="flex items-start gap-3">
+          <Clock size={22} className="text-amber-700 mt-0.5" />
+          <div className="flex-1">
+            <div className="font-display text-base font-medium text-amber-900">Awaiting Platform Super Admin approval</div>
+            <div className="text-sm text-amber-800 mt-1">
+              Your request for <span className="font-semibold">{approval.requested_children_count}</span> children was submitted
+              {approval.requested_at ? <> on {formatDate(approval.requested_at)}</> : null}.
+              All school features are locked until approval — only this page and the dashboard overview remain accessible.
+            </div>
+            {approval.note && (
+              <div className="text-xs text-amber-800 mt-2">Your note: <span className="italic">{approval.note}</span></div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="border border-status-danger/40 bg-status-danger/5 rounded-lg p-5 mb-6" data-testid="approval-request-form">
+      <div className="flex items-start gap-3 mb-4">
+        <Warning size={22} className="text-status-danger mt-0.5" />
+        <div>
+          <div className="font-display text-base font-medium">
+            {approval.status === "rejected"
+              ? "Your previous request was rejected"
+              : "Submit your subscription request"}
+          </div>
+          <div className="text-sm text-ink-soft mt-1">
+            Tell us the maximum number of children you intend to onboard. The Platform Super Admin will approve your school
+            and unlock all features. Until then, only the Overview and this Subscription page are visible.
+          </div>
+          {approval.status === "rejected" && approval.approval_note && (
+            <div className="text-xs text-status-danger mt-2">Reviewer note: <span className="italic">{approval.approval_note}</span></div>
+          )}
+        </div>
+      </div>
+      <form onSubmit={submit} className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+        <div className="md:col-span-1">
+          <label className="label">Requested children count</label>
+          <input
+            type="number"
+            min="1"
+            max="100000"
+            className="input"
+            placeholder="e.g. 250"
+            value={count}
+            onChange={(e) => setCount(e.target.value)}
+            data-testid="approval-count-input"
+            required
+          />
+        </div>
+        <div className="md:col-span-2">
+          <label className="label">Note for the Platform Super Admin <span className="text-xs text-ink-muted">(optional)</span></label>
+          <input
+            className="input"
+            placeholder="Anything that will help process your request quickly."
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            data-testid="approval-note-input"
+          />
+        </div>
+        <div className="md:col-span-3 flex justify-end">
+          <button type="submit" className="btn-primary" disabled={busy} data-testid="submit-approval-btn">
+            {busy ? "Submitting…" : "Submit approval request"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 
 function PlanCard({ title, badge, rate, amount, students, savings, disabled, onPay, testId }) {
   return (

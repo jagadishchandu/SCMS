@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { api, formatApiError } from "../../lib/api";
 import { PageHeader, Section, Empty, KPI } from "../../components/Primitives";
 import { Modal } from "../../components/Modal";
-import { Plus, Trash, Pencil, Money, Users } from "@phosphor-icons/react";
+import { Plus, Trash, Pencil, FilePdf } from "@phosphor-icons/react";
 import toast from "react-hot-toast";
 
 const ROLE_LABEL = {
@@ -40,6 +40,27 @@ export default function StaffPage() {
   };
 
   const activeRows = rows.filter((r) => r.is_active !== false);
+
+  const downloadPayrollPdf = async () => {
+    const month = window.prompt(
+      "Generate monthly payroll PDF for which month? (YYYY-MM)",
+      new Date().toISOString().slice(0, 7),
+    );
+    if (!month) return;
+    try {
+      const res = await api.get(`/staff/payroll/monthly-pdf?month=${month}`, { responseType: "blob" });
+      const url = window.URL.createObjectURL(new Blob([res.data], { type: "application/pdf" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `payroll_${month}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success("Payroll PDF downloaded");
+    } catch (err) { toast.error(formatApiError(err)); }
+  };
+
   return (
     <div data-testid="staff-page">
       <PageHeader
@@ -47,9 +68,14 @@ export default function StaffPage() {
         title="Support staff"
         subtitle="Cleaners, drivers, security, cooks, sports coaches, and other non-teaching team members."
         actions={
-          <button className="btn-primary" onClick={() => { setEditing(null); setModalOpen(true); }} data-testid="add-staff-btn">
-            <Plus size={16} /> Add staff
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button className="btn-secondary" onClick={downloadPayrollPdf} data-testid="payroll-pdf-btn">
+              <FilePdf size={16} /> Monthly Payroll PDF
+            </button>
+            <button className="btn-primary" onClick={() => { setEditing(null); setModalOpen(true); }} data-testid="add-staff-btn">
+              <Plus size={16} /> Add staff
+            </button>
+          </div>
         }
       />
 

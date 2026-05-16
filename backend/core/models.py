@@ -31,6 +31,8 @@ class SchoolCreate(BaseModel):
     admin_name: str
     admin_email: EmailStr
     admin_password: str
+    auto_approve: Optional[bool] = False  # If True, skip approval lockdown (Platform admin pre-approves)
+    initial_children_count: Optional[int] = None  # Capacity when auto-approving
 
 
 class SchoolUpdate(BaseModel):

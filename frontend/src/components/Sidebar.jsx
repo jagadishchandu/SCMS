@@ -133,7 +133,14 @@ function Footer() {
 export default function Sidebar({ mobileOpen, onCloseMobile }) {
   const { user } = useAuth();
   if (!user) return null;
-  const items = NAV_BY_ROLE[user.role] || [];
+  let items = NAV_BY_ROLE[user.role] || [];
+
+  // Lockdown: when a school is awaiting approval (or rejected, or no request yet),
+  // only show the Dashboard overview + Subscription page so the admin can submit/track the request.
+  const approvalStatus = user?.subscription_state?.approval_status;
+  if (user.role === "school_admin" && approvalStatus && approvalStatus !== "approved") {
+    items = items.filter((it) => it.to === "/school" || it.to === "/school/subscription");
+  }
 
   return (
     <>

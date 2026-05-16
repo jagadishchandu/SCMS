@@ -57,6 +57,7 @@ def e2e_school():
         "admin_email": admin_email,
         "admin_password": admin_password,
         "admin_name": "E2E Admin",
+        "auto_approve": True,
     }
     r = plat.post(f"{API}/schools", json=payload, timeout=20)
     assert r.status_code == 200, f"school create failed: {r.status_code} {r.text}"
