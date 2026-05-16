@@ -136,3 +136,90 @@ async def list_payments(student_id: str | None = None, user: dict = Depends(get_
     if student_id:
         flt["student_id"] = student_id
     return await tdb.fee_payments.find(flt, {"_id": 0}).sort("created_at", -1).to_list(1000)
+
+
+@router.get("/per-student-summary")
+async def per_student_summary(
+    class_id: str | None = None,
+    status: str | None = None,
+    q: str | None = None,
+    user: dict = Depends(require_roles("school_admin", "accounts")),
+):
+    """One row per active student with total fee, paid amount, balance,
+    percent_paid (0–100) and overall status (paid / partial / not_paid / no_fees).
+    Used by the Accountant fee tracker page.
+    """
+    tdb = await tenant_db(user["school_id"])
+    student_flt = {"school_id": user["school_id"], "status": "active"}
+    if class_id:
+        student_flt["class_id"] = class_id
+    if q:
+        student_flt["$or"] = [
+            {"name": {"$regex": q, "$options": "i"}},
+            {"uid": {"$regex": q, "$options": "i"}},
+        ]
+    students = await tdb.students.find(student_flt, {"_id": 0}).sort("name", 1).to_list(10000)
+
+    # Pre-aggregate fees per student (one DB call instead of N).
+    agg = tdb.fees.aggregate([
+        {"$match": {"school_id": user["school_id"]}},
+        {"$group": {
+            "_id": "$student_id",
+            "total_fee": {"$sum": "$total"},
+            "paid_amount": {"$sum": "$paid"},
+            "due_amount": {"$sum": "$due"},
+            "invoices": {"$sum": 1},
+        }},
+    ])
+    fee_map: dict[str, dict] = {}
+    async for row in agg:
+        fee_map[row["_id"]] = row
+
+    rows = []
+    counts = {"paid": 0, "partial": 0, "not_paid": 0, "no_fees": 0}
+    for s in students:
+        f = fee_map.get(s["id"])
+        total = float(f["total_fee"]) if f else 0.0
+        paid = float(f["paid_amount"]) if f else 0.0
+        balance = max(total - paid, 0.0)
+        if total <= 0:
+            st = "no_fees"
+            percent = 0.0
+        elif balance <= 0.01:
+            st = "paid"
+            percent = 100.0
+        elif paid <= 0:
+            st = "not_paid"
+            percent = 0.0
+        else:
+            st = "partial"
+            percent = round((paid / total) * 100, 1)
+        if status and st != status:
+            continue
+        counts[st] += 1
+        rows.append({
+            "student_id": s["id"],
+            "student_name": s["name"],
+            "student_uid": s.get("uid"),
+            "class_id": s.get("class_id"),
+            "section": s.get("section"),
+            "parent_name": (s.get("parent") or {}).get("name"),
+            "parent_phone": (s.get("parent") or {}).get("phone"),
+            "total_fee": total,
+            "paid_amount": paid,
+            "balance_due": balance,
+            "percent_paid": percent,
+            "status": st,
+            "invoice_count": int(f["invoices"]) if f else 0,
+        })
+
+    return {
+        "rows": rows,
+        "summary": counts,
+        "total_students": len(rows),
+        "totals": {
+            "total_fee": sum(r["total_fee"] for r in rows),
+            "paid_amount": sum(r["paid_amount"] for r in rows),
+            "balance_due": sum(r["balance_due"] for r in rows),
+        },
+    }

@@ -1,0 +1,32 @@
+{
+  "summary": "Iter10 (v1.19 — Fee Items Catalog + Fee Tracker + Teacher Schedule): Verified end-to-end on the deployed preview URL across all 3 roles. BACKEND: pytest /app/backend/tests/test_v19_fees_duties.py = 21/21 PASS (10.5s). FRONTEND: School admin sidebar shows all 4 new links (Teacher Schedule, Fee Catalog, Fee Structures, Fee Tracker). /school/fee-items renders fee-items-page with add-fee-item-btn — modal contains form (fee-item-name, fee-item-category, fee-item-frequency, fee-item-amount, save-fee-item-btn) and successfully created TEST_QA_Library_Fee (rows incremented to 12). /school/fee-tracker renders fee-tracker-page with all 4 KPIs (Total ₹1,51,23,000 · Collected ₹3,44,000 · Balance ₹1,48,51,000 · 156 students), all 5 filter pills, class filter, search input; filter works: 156→146(not_paid)→1(paid). /school/teacher-duties renders teacher-duties-page with add-duty-btn + duty-teacher-filter; duty modal has form/title/type/start/teacher-list/save-btn + 79 teacher checkboxes. TEACHER: sidebar shows 'My Schedule' + 'My Timetable', no 'Teacher Schedule' / 'Fee Catalog'. /teacher/duties renders teacher-duties-page in readonly mode (add-duty-btn=0, duty-teacher-filter=0, delete-btns=0) with 13 auto-scoped duty rows. RBAC: teacher GET /api/fee-items → 403, GET /api/fees/per-student-summary → 403. ACCOUNTS: sidebar shows exactly the 6 expected links (Fee Dashboard, Fee Catalog, Fee Tracker, Fee Structures, Payments, Expenses & Reimbursements), no Teacher Schedule / Students / Attendance. /accounts/fee-items + /accounts/fee-tracker both render correctly with same data as school_admin (Total ₹1,51,23,000 · 156 students). Accounts GET /api/fee-items → 200 (15 items).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_v19_fees_duties.py",
+    "/app/test_reports/pytest/iter10_v19.xml"
+  ],
+  "action_items": [
+    "Minor — request spec mentioned modal field testids with -input/-select suffix (e.g. fee-item-name-input), but implementation uses bare names (fee-item-name, save-fee-item-btn, duty-title, save-duty-btn). All fields are functional and discoverable; only the naming convention diverges from the spec. Consider aligning if the spec is authoritative; otherwise update the spec to match. No functional impact."
+  ],
+  "critical_code_review_comments": [
+    "FeeItemsPage modal correctly wires name/category/frequency/default_amount/description/active fields with save-fee-item-btn; create flow verified live (new item appears in the grouped list).",
+    "TeacherDutiesPage admin mode renders add-duty-btn + duty-teacher-filter and a per-teacher checkbox grid (data-testid=duty-teacher-{id}). Successfully showed 79 teacher entries from the seeded school.",
+    "Teacher /teacher/duties correctly hides add-duty-btn, duty-teacher-filter, and per-row delete buttons — readOnly mode is enforced cleanly at the component level.",
+    "Sidebar.jsx role gating verified: accounts role does NOT see Teacher Schedule / Students / Attendance; teacher role does NOT see Teacher Schedule / Fee Catalog; school_admin sees all 4 new links.",
+    "Backend RBAC enforced at API layer: teacher 403 on /api/fee-items and /api/fees/per-student-summary, matching the pytest contract.",
+    "Fee Tracker KPI math is internally consistent: Total (1,51,23,000) = Collected (3,44,000) + Balance (1,48,51,000); students=156 matches school_admin overview."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (21/21 v19 pytest)", "frontend": "100% (3 roles × all pages and modals verified)"},
+  "test_credentials": "Used /app/memory/test_credentials.md verbatim: principal@sunrise.edu / School@123 (school_admin), priya@sunrise.edu / Teacher@123 (teacher), accounts@sunrise.edu / Accounts@123 (accounts). Role dropdown is a native <select>; use page.select_option(value='school_admin'|'teacher'|'accounts').",
+  "seed_data_creation": "Created 1 TEST_ fee item ('TEST_QA_Library_Fee', books, ₹500) via the school_admin UI to validate create flow. No other test data created.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "v1.19 is production-ready end-to-end. (1) The login role dropdown is a native HTML <select> with values school_admin/teacher/accounts/parent/platform_admin — use page.select_option, NOT click. (2) Between role switches you must clear cookies + localStorage (page.context.clear_cookies + page.evaluate to clear storage) before going to /login again, otherwise the app auto-redirects you back to the prior role's dashboard. (3) Fee modal testids are fee-item-name / fee-item-category / fee-item-frequency / fee-item-amount / save-fee-item-btn (no -input/-select suffix). Duty modal: duty-title / duty-type / duty-start / duty-end / duty-location / duty-notes / duty-notify / save-duty-btn, with per-teacher checkboxes data-testid=duty-teacher-{id}. (4) Live data: 156 students, fees Total ₹1,51,23,000 / Collected ₹3,44,000.",
+  "rca of the issue": "No bugs found. The only observation is a minor testid naming-convention mismatch between the review_request spec and the implementation (-input/-select suffixes), but every field is present and functional. The earlier test-run that reported 'modal fields = 0' was due to using the spec's testids; switching to the implementation's actual testids (fee-item-name, save-fee-item-btn, duty-title, save-duty-btn) yielded full coverage."
+}

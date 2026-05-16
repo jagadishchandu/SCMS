@@ -112,7 +112,7 @@ TENANT_OPERATIONAL_COLLECTIONS = (
     "holidays", "fee_structures", "fees", "fee_payments",
     "timetable", "activities", "activity_enrollments",
     "sick_leaves", "notifications", "bulk_uploads", "receipts",
-    "audit_logs", "staff", "expenses",
+    "audit_logs", "staff", "expenses", "fee_items", "teacher_duties",
 )
 
 
@@ -310,6 +310,16 @@ async def init_school_db(school: dict):
     await sdb.expenses.create_index("status")
     await sdb.expenses.create_index("category")
     await sdb.expenses.create_index("submitted_by")
+
+    # ---- Fee items catalog (v1.19) — reusable line-items for Fee Structures ----
+    await sdb.fee_items.create_index("category")
+    await sdb.fee_items.create_index("is_active")
+    await sdb.fee_items.create_index("name")
+
+    # ---- Teacher duties / schedule events (v1.19) ----
+    await sdb.teacher_duties.create_index([("teacher_id", 1), ("start_at", 1)])
+    await sdb.teacher_duties.create_index("start_at")
+    await sdb.teacher_duties.create_index("type")
 
     # ---- Meta marker (lists which version provisioned the schema) ----
     await sdb.meta.update_one(
