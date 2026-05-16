@@ -583,16 +583,19 @@ Whenever a user is created (school admin via school creation, teachers/parents/a
 - All existing test fixtures that create schools (`backend_test.py`, `test_e2e_school_flow.py`, `test_school_db_schema.py`, `test_tenant_authoritative.py`, `test_v16_platform_and_classes.py`, `test_v17_hr_finance.py`) updated to pass `"auto_approve": True` so they continue to operate post-creation.
 - **Frontend Playwright by testing agent: 100% pass** — locked-sidebar / banner / ApprovalPanel / Platform approval tab / post-approval unlock / payroll PDF button verified.
 
-## Prioritized Backlog (refreshed)
-### P1
-- Stripe / Razorpay automated subscription payments (so confirmation is one-click, not manual).
+## v1.18.1 — Editable approval count + Platform Compliance view (2026-05-16)
 
-### P2
-- Recovery nudges post-expiry (day 1 / 3 / 7) — i18n templates ready; scheduler wiring pending (deferred this session).
-- Wire uploads (photos / medical certs / PDF receipts) to Azure Blob once `AZURE_STORAGE_CONNECTION_STRING` is filled.
-- Auto-deduct reimburse-with-salary expenses from next month's payroll (currently manual after PDF generation).
+**School admin can edit requested children count at any time**
+- `POST /api/subscriptions/approval-request` is now idempotent across statuses:
+  - If `approval.status == "approved"` → simply updates `requested_children_count` + `last_edited_at`, keeps status approved (no re-approval needed). Response includes `edited: True`.
+  - If status in {`not_started`, `pending`, `rejected`} → submits/resubmits as a fresh pending request.
+- Frontend `SchoolSubscription.jsx` — new `ApprovedEditPanel` (data-testid='approved-edit-panel') shown when approved. Displays approved capacity, actual active students, and over/within-capacity indicator. "Edit count" toggle reveals input + save.
 
-### P3
-- React Native shell reusing the same API.
-- Public school directory + admissions inquiry.
+**Platform Super Admin Compliance view (read-only, separate page)**
+- New endpoint `GET /api/subscriptions/compliance?filter=...` (platform_admin only) returning per-school: requested vs approved vs actual active students, variance, and a `compliance` label (`compliant` / `over_capacity` / `pending_review` / `rejected` / `no_request`).
+- New page `/platform/compliance` (`CompliancePage.jsx`) — sidebar entry under "Subscriptions". 5 KPI tiles + 6 filter pills + read-only table with status badge, variance, last edited timestamp. **Zero action buttons** — strictly view-only.
+
+### Test status
+- **22/22 new pytest pass** (7 v181 + 15 v18 regression). Frontend Playwright by testing agent: 100% — Compliance page with all KPIs + filters + 325 rows verified; school admin edited count 500 → 777 with status preserved.
+
 
