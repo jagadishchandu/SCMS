@@ -107,18 +107,21 @@ async def create_student(payload: StudentCreate, user: dict = Depends(require_ro
     if await tdb.students.find_one({"school_id": user["school_id"], "student_uid": uid}):
         raise HTTPException(status_code=400, detail="Student UID already exists")
 
-    parent_email = payload.parent.email or f"parent.{uid.lower()}@{user['school_id'][:6]}.local"
+    parent_email = payload.parent.email or f"parent.{uid.lower()}@{user['school_id'][:6]}.school"
     parent_email = parent_email.lower()
     existing_parent = await db.users.find_one({"email": parent_email})
+    DEFAULT_PARENT_PWD = "Parent@123"
+    parent_is_new = False
     if existing_parent:
         parent_user_id = existing_parent["id"]
     else:
         from core.auth import hash_password
         parent_user_id = new_id()
+        parent_is_new = True
         parent_doc = {
             "id": parent_user_id,
             "email": parent_email,
-            "password_hash": hash_password("Parent@123"),
+            "password_hash": hash_password(DEFAULT_PARENT_PWD),
             "name": payload.parent.name,
             "role": "parent",
             "school_id": user["school_id"],
@@ -161,7 +164,89 @@ async def create_student(payload: StudentCreate, user: dict = Depends(require_ro
     }
     await tdb.students.insert_one(doc)
     await log_action(user["id"], user["role"], user["school_id"], "create", "student", doc["id"], {"uid": uid})
-    return clean_doc(doc)
+    out = clean_doc(doc)
+    # Attach parent-login hint so the UI can immediately surface credentials.
+    out["parent_login"] = {
+        "email": parent_email,
+        "is_new_account": parent_is_new,
+        "default_password": DEFAULT_PARENT_PWD if parent_is_new else None,
+    }
+    return out
+
+
+@router.get("/{student_id}/parent-login")
+async def get_parent_login(student_id: str, user: dict = Depends(require_roles("school_admin", "teacher"))):
+    """Return the parent's login email for this student (+ whether the default
+    password was reset since creation). Never returns plaintext password except
+    immediately after a reset.
+    """
+    tdb = await tenant_db(user["school_id"])
+    s = await tdb.students.find_one({"id": student_id, "school_id": user["school_id"]}, {"_id": 0})
+    if not s:
+        raise HTTPException(status_code=404, detail="Student not found")
+    # Teacher visibility constraint
+    if user["role"] == "teacher":
+        tflt = await _teacher_class_filter(tdb, user)
+        if not tflt or tflt.get("_blocked_"):
+            raise HTTPException(status_code=403, detail="Forbidden")
+        allowed = {(c["class_id"], c["section"]) for c in tflt.get("$or", [])}
+        if (s["class_id"], s["section"]) not in allowed:
+            raise HTTPException(status_code=403, detail="Not your class")
+    db = get_db()
+    parent = await db.users.find_one(
+        {"id": s.get("parent_user_id")},
+        {"_id": 0, "id": 1, "email": 1, "last_login_at": 1, "password_changed_at": 1, "password_reset_to_default_at": 1},
+    ) or {}
+    return {
+        "student_id": student_id,
+        "student_name": s["name"],
+        "student_uid": s.get("student_uid"),
+        "parent_user_id": s.get("parent_user_id"),
+        "email": parent.get("email") or (s.get("parent") or {}).get("email"),
+        "phone": (s.get("parent") or {}).get("phone"),
+        "last_login_at": parent.get("last_login_at"),
+        "password_changed_at": parent.get("password_changed_at"),
+        "password_reset_to_default_at": parent.get("password_reset_to_default_at"),
+    }
+
+
+@router.post("/{student_id}/parent-reset-password")
+async def reset_parent_password(student_id: str, user: dict = Depends(require_roles("school_admin", "teacher"))):
+    """Reset the parent's password to the default (`Parent@123`) and return it
+    once so the staff member can hand it to the parent.
+    """
+    tdb = await tenant_db(user["school_id"])
+    s = await tdb.students.find_one({"id": student_id, "school_id": user["school_id"]}, {"_id": 0})
+    if not s:
+        raise HTTPException(status_code=404, detail="Student not found")
+    if user["role"] == "teacher":
+        tflt = await _teacher_class_filter(tdb, user)
+        if not tflt or tflt.get("_blocked_"):
+            raise HTTPException(status_code=403, detail="Forbidden")
+        allowed = {(c["class_id"], c["section"]) for c in tflt.get("$or", [])}
+        if (s["class_id"], s["section"]) not in allowed:
+            raise HTTPException(status_code=403, detail="Not your class")
+    if not s.get("parent_user_id"):
+        raise HTTPException(status_code=400, detail="Student has no linked parent account")
+    from core.auth import hash_password
+    DEFAULT_PARENT_PWD = "Parent@123"
+    db = get_db()
+    res = await db.users.update_one(
+        {"id": s["parent_user_id"]},
+        {"$set": {
+            "password_hash": hash_password(DEFAULT_PARENT_PWD),
+            "password_reset_to_default_at": utc_now(),
+        }},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Parent account not found")
+    await log_action(user["id"], user["role"], user["school_id"], "reset_parent_password", "user", s["parent_user_id"], {"student_uid": s.get("student_uid")})
+    parent = await db.users.find_one({"id": s["parent_user_id"]}, {"_id": 0, "email": 1})
+    return {
+        "ok": True,
+        "email": (parent or {}).get("email"),
+        "default_password": DEFAULT_PARENT_PWD,
+    }
 
 
 @router.post("/{student_id}/photo")

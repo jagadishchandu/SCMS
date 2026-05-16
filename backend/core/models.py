@@ -1,7 +1,18 @@
 """Pydantic schemas for request/response models."""
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from typing import Optional, List, Literal
 from datetime import date
+
+
+def _blank_to_none(v):
+    """Normalise empty / whitespace-only strings to None so Optional[EmailStr]
+    and similar fields don't reject UI defaults like email="" from a form.
+    """
+    if v is None:
+        return None
+    if isinstance(v, str) and v.strip() == "":
+        return None
+    return v
 
 
 # ---------- Auth ----------
@@ -98,6 +109,11 @@ class ParentInfo(BaseModel):
     whatsapp: Optional[str] = None
     email: Optional[EmailStr] = None
 
+    @field_validator("email", "whatsapp", mode="before")
+    @classmethod
+    def _blank_email(cls, v):
+        return _blank_to_none(v)
+
 
 class StudentCreate(BaseModel):
     name: str
@@ -111,6 +127,11 @@ class StudentCreate(BaseModel):
     medical_notes: Optional[str] = None
     emergency_contact: Optional[str] = None
     parent: ParentInfo
+
+    @field_validator("roll_number", "gender", "dob", "admission_date", "medical_notes", "emergency_contact", mode="before")
+    @classmethod
+    def _blank_optional(cls, v):
+        return _blank_to_none(v)
 
 
 class StudentUpdate(BaseModel):
