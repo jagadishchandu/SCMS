@@ -4,7 +4,7 @@ import { PageHeader, Section, KPI, Empty } from "../../components/Primitives";
 import { Modal } from "../../components/Modal";
 import toast from "react-hot-toast";
 import { currency, formatDate } from "../../lib/utils";
-import { Plus, Receipt, DownloadSimple } from "@phosphor-icons/react";
+import { Plus, Receipt, DownloadSimple, CopySimple } from "@phosphor-icons/react";
 
 export default function FeesPage() {
   const [structures, setStructures] = useState([]);
@@ -44,6 +44,21 @@ export default function FeesPage() {
     } catch (err) { toast.error(formatApiError(err)); }
   };
 
+  const cloneToSections = async (s) => {
+    try {
+      const { data } = await api.post(`/fees/structures/${s.id}/clone-to-sections`);
+      if (data.message) {
+        toast(data.message, { icon: "ℹ️" });
+      } else if (data.cloned === 0) {
+        toast(`Nothing to clone — already exists in sections: ${(data.skipped || []).join(", ") || "—"}`, { icon: "ℹ️" });
+      } else {
+        const skippedNote = (data.skipped || []).length ? ` (skipped existing: ${data.skipped.join(", ")})` : "";
+        toast.success(`Cloned to ${data.cloned} section(s)${skippedNote}`);
+      }
+      load();
+    } catch (err) { toast.error(formatApiError(err)); }
+  };
+
   const totals = fees.reduce((acc, f) => ({
     total: acc.total + f.total, paid: acc.paid + f.paid, due: acc.due + f.due,
   }), { total: 0, paid: 0, due: 0 });
@@ -68,21 +83,40 @@ export default function FeesPage() {
       <Section title="Fee structures">
         {structures.length === 0 ? <Empty title="No fee structures" /> :
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {structures.map((s) => (
-              <div key={s.id} className="border border-line rounded-lg p-5">
+            {structures.map((s) => {
+              const cls = classes.find(c => c.id === s.class_id);
+              const sectionLabel = s.section ? `Section ${s.section}` : "All sections";
+              return (
+              <div key={s.id} className="border border-line rounded-lg p-5" data-testid={`struct-card-${s.id}`}>
                 <div className="flex items-start justify-between mb-2">
                   <div>
                     <div className="font-display text-lg font-medium">{s.name}</div>
-                    <div className="text-xs text-ink-muted">{classes.find(c => c.id === s.class_id)?.name} · Due {formatDate(s.due_date)}</div>
+                    <div className="text-xs text-ink-muted">
+                      {cls?.name} · {sectionLabel}
+                      {s.term ? <> · <span className="badge-neutral">{s.term}</span></> : null}
+                    </div>
+                    <div className="text-xs text-ink-muted mt-0.5">Due {formatDate(s.due_date)}</div>
                   </div>
                   <div className="font-display text-xl">{currency(s.total)}</div>
                 </div>
                 <ul className="text-sm text-ink-soft space-y-1 mb-3">
                   {s.items.map((it, idx) => <li key={idx} className="flex justify-between"><span>{it.type}</span><span>{currency(it.amount)}</span></li>)}
                 </ul>
-                <button className="btn-secondary w-full" onClick={() => assignStructure(s.id)} data-testid={`assign-struct-${s.id}`}>Assign to class</button>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <button className="btn-secondary flex-1" onClick={() => assignStructure(s.id)} data-testid={`assign-struct-${s.id}`}>Assign to {s.section ? `Section ${s.section}` : "class"}</button>
+                  {s.section && (cls?.sections || []).length > 1 && (
+                    <button
+                      className="btn-secondary flex-1"
+                      title={`Clone this structure to other sections of ${cls?.name}`}
+                      onClick={() => cloneToSections(s)}
+                      data-testid={`clone-struct-${s.id}`}
+                    >
+                      <CopySimple size={14}/> Clone to all sections
+                    </button>
+                  )}
+                </div>
               </div>
-            ))}
+            );})}
           </div>}
       </Section>
 
@@ -92,7 +126,7 @@ export default function FeesPage() {
             <div className="overflow-x-auto">
               <table className="table">
                 <thead><tr>
-                  <th className="th">Student</th><th className="th">Class</th><th className="th">Name</th>
+                  <th className="th">Student</th><th className="th">Class</th><th className="th">Section</th><th className="th">Term</th><th className="th">Name</th>
                   <th className="th">Total</th><th className="th">Paid</th><th className="th">Due</th><th className="th">Status</th><th className="th"></th>
                 </tr></thead>
                 <tbody>
@@ -105,6 +139,8 @@ export default function FeesPage() {
                           <div className="text-xs text-ink-muted">{st?.student_uid}</div>
                         </td>
                         <td className="td">{classes.find(c => c.id === f.class_id)?.name}</td>
+                        <td className="td">{f.section || st?.section || "—"}</td>
+                        <td className="td">{f.term || "—"}</td>
                         <td className="td">{f.name}</td>
                         <td className="td">{currency(f.total)}</td>
                         <td className="td">{currency(f.paid)}</td>
@@ -159,16 +195,56 @@ export default function FeesPage() {
 }
 
 function StructureModal({ classes, open, onClose, onCreated }) {
-  const [form, setForm] = useState({ class_id: "", name: "Term 1 Fees", due_date: "", items: [{ type: "tuition", amount: 0, fee_item_id: null }] });
+  const TERM_OPTIONS = ["Term 1", "Term 2", "Term 3", "Annual", "Admission", "Monthly", "Custom"];
+  const [form, setForm] = useState({
+    class_id: "",
+    section: "",
+    term: "Term 1",
+    name: "Term 1 Fees",
+    due_date: "",
+    items: [{ type: "tuition", amount: 0, fee_item_id: null }],
+  });
   const [catalog, setCatalog] = useState([]);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (open) {
       api.get("/fee-items").then((r) => setCatalog(r.data || [])).catch(() => setCatalog([]));
-      setForm({ class_id: "", name: "Term 1 Fees", due_date: "", items: [{ type: "tuition", amount: 0, fee_item_id: null }] });
+      setForm({
+        class_id: "",
+        section: "",
+        term: "Term 1",
+        name: "Term 1 Fees",
+        due_date: "",
+        items: [{ type: "tuition", amount: 0, fee_item_id: null }],
+      });
     }
   }, [open]);
+
+  // Auto-derive name when term changes & class selected, if user hasn't customized.
+  const selectedClass = classes.find((c) => c.id === form.class_id);
+  const sectionsForClass = selectedClass?.sections || [];
+
+  const onTermChange = (term) => {
+    // If user picked a known term and the name field still looks default, sync the name
+    const looksDefault = /Fees?$/i.test(form.name) || form.name === "" || form.name.startsWith("Term ");
+    const next = { ...form, term };
+    if (term !== "Custom" && looksDefault) {
+      const className = selectedClass?.name ? `${selectedClass.name} ` : "";
+      next.name = `${className}${term} Fees`.trim();
+    }
+    setForm(next);
+  };
+
+  const onClassChange = (class_id) => {
+    const cls = classes.find((c) => c.id === class_id);
+    const looksDefault = /Fees?$/i.test(form.name) || form.name === "" || form.name.startsWith("Term ");
+    let name = form.name;
+    if (looksDefault && cls && form.term && form.term !== "Custom") {
+      name = `${cls.name} ${form.term} Fees`;
+    }
+    setForm({ ...form, class_id, section: "", name });
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -178,8 +254,19 @@ function StructureModal({ classes, open, onClose, onCreated }) {
     }
     setBusy(true);
     try {
-      await api.post("/fees/structures", form);
-      toast.success("Fee structure created");
+      const payload = {
+        class_id: form.class_id,
+        name: form.name,
+        items: form.items,
+        due_date: form.due_date,
+        section: form.section || null,
+        term: form.term === "Custom" ? null : form.term,
+      };
+      await api.post("/fees/structures", payload);
+      const tip = form.section
+        ? " You can now click ‘Clone to all sections’ on the card to replicate it across the grade."
+        : "";
+      toast.success("Fee structure created." + tip);
       onCreated();
     } catch (err) { toast.error(formatApiError(err)); }
     finally { setBusy(false); }
@@ -196,13 +283,46 @@ function StructureModal({ classes, open, onClose, onCreated }) {
   return (
     <Modal open={open} onClose={onClose} title="New fee structure" size="lg" testId="new-structure-modal">
       <form onSubmit={submit} className="space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <select className="input md:col-span-1" required value={form.class_id} onChange={(e) => setForm({ ...form, class_id: e.target.value })} data-testid="struct-class">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <select className="input" required value={form.class_id} onChange={(e) => onClassChange(e.target.value)} data-testid="struct-class">
             <option value="">Class…</option>
             {classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
-          <input className="input" placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} data-testid="struct-name" />
+          <select
+            className="input"
+            value={form.section}
+            onChange={(e) => setForm({ ...form, section: e.target.value })}
+            disabled={!form.class_id}
+            data-testid="struct-section"
+          >
+            <option value="">All sections (class-wide)</option>
+            {sectionsForClass.map((sec) => (
+              <option key={sec} value={sec}>Section {sec}</option>
+            ))}
+          </select>
+          <select
+            className="input"
+            value={form.term}
+            onChange={(e) => onTermChange(e.target.value)}
+            data-testid="struct-term"
+          >
+            {TERM_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
           <input className="input" type="date" required value={form.due_date} onChange={(e) => setForm({ ...form, due_date: e.target.value })} data-testid="struct-due-date" />
+        </div>
+        <div>
+          <label className="label">Structure name</label>
+          <input className="input" placeholder="e.g. Grade 1 Term 1 Fees" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} data-testid="struct-name" />
+          {form.class_id && form.section && (
+            <div className="text-xs text-ink-muted mt-1" data-testid="struct-section-hint">
+              This structure will apply only to <strong>{selectedClass?.name} – Section {form.section}</strong>. After saving, use “Clone to all sections” to replicate across the grade.
+            </div>
+          )}
+          {form.class_id && !form.section && sectionsForClass.length > 1 && (
+            <div className="text-xs text-ink-muted mt-1">
+              This structure will apply to <strong>all sections</strong> of {selectedClass?.name} ({sectionsForClass.join(", ")}).
+            </div>
+          )}
         </div>
         <div className="flex items-center justify-between">
           <div className="overline">Items</div>

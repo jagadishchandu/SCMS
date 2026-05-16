@@ -3,7 +3,7 @@ import os
 import requests
 import pytest
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://4d977b08-b8f9-4943-a6f8-176d61d36e7e.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://fee-template-clone.preview.emergentagent.com").rstrip("/")
 API = f"{BASE_URL}/api"
 
 CREDS = {

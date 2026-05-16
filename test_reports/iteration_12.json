@@ -1,0 +1,27 @@
+{
+  "summary": "v1.21 — Per-class fee structure templates (section + term + clone-to-sections): full backend + frontend verification on the deployed preview URL. BACKEND: pytest /app/backend/tests/test_v21_fee_templates.py = 10/10 PASS in 2.04s. Regression on v19 fees suite = 21/21 PASS. FRONTEND: Logged in as Accountant (accounts@sunrise.edu / Accounts@123) on /school/fees. All 6 frontend acceptance criteria verified end-to-end: (1) Fee structure modal shows new Section + Term dropdowns; (2) Section dropdown is disabled before class pick and gets populated from class.sections after class pick (Section A, B for Grade 5); (3) Selecting Grade 5 auto-populates name to 'Grade 5 Term 1 Fees'; (4) After creating section-scoped structure, card shows 'Section A' + 'Term 1' badges and a 'Clone to all sections' button; clicking it shows toast 'Cloned to 1 section(s)' and a new 'Section B' card appears with same name; second click is idempotent and shows toast 'Nothing to clone — already exists in sections: B'; (5) Class-wide structure card shows 'All sections' label and does NOT render the Clone button; (6) Student fee records table has 'Section' and 'Term' columns and per-row values render correctly (e.g. TEST_AssignA row shows 'A' / 'Term 1', legacy seeded rows show 'A' / '—').",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_v21_fee_templates.py",
+    "/app/test_reports/pytest/iter12_v21.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "fees.py: section is normalized to UPPER on create AND validated against the class's sections list (returns 400 with descriptive message when section not in class). Confirmed: lowercase 'a' is stored as 'A'.",
+    "clone_structure_to_sections is correctly idempotent — uniqueness check is on (school_id, class_id, section, term, name); good choice because it survives legacy structures with term=null and lets admins iterate names.",
+    "Class-wide clone correctly short-circuits with cloned=0 + explanatory message instead of throwing — matches frontend toast handling that branches on data.message.",
+    "assign_structure honors struct.section: when set, the student_filter narrows to that section; otherwise the entire class is invoiced. Verified end-to-end (8 Section-A students invoiced for the TEST_AssignA structure; no Section-B students received it).",
+    "GET /fees/structures returns _id excluded and tolerates legacy docs missing `section`/`term` (seeded 'Term 1 Fees' shows up fine with section=undefined → UI renders 'All sections', term '—').",
+    "FeesPage.jsx: Clone button is correctly conditional on `s.section && (cls?.sections || []).length > 1` — so single-section classes won't show a useless clone button either; nice extra guard.",
+    "Accountant role can both create section-scoped structures AND clone them (require_roles('school_admin', 'accounts') on both endpoints). Verified live as accounts@sunrise.edu."
+  ],
+  "updated_files": ["/app/backend/tests/test_v21_fee_templates.py"],
+  "success_rate": {"backend": "100% (10/10 v21 + 21/21 v19 regression)", "frontend": "100% (6/6 acceptance criteria verified)"},
+  "test_credentials": "Used /app/memory/test_credentials.md verbatim — school_admin=principal@sunrise.edu/School@123, accountant=accounts@sunrise.edu/Accounts@123.",
+  "seed_data_creation": "Backend pytest created several TEST_-prefixed fee structures (TEST_G5_ClassWide_*, TEST_G5_A_*, TEST_CloneG5_* incl. cloned B copy, TEST_CloneClassWide_*, TEST_AssignA_*, TEST_Acc_G6A_* incl. cloned B copy) plus per-student fee invoices for the TEST_AssignA structure across 8 Grade-5 Section-A students. UI test added TEST_UI_* and TEST_CW_* structures with their Section-B clones. None of these touch any seeded/production fee data; all are clearly identifiable by the TEST_ prefix if cleanup is desired later.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "v1.21 fee templates ship clean. Login dropdown on /login REQUIRES selecting the role from the single <select> before submitting — value 'accounts' for Accountant; otherwise auth defaults to school_admin and accounts credentials 401. Reusable: /app/backend/tests/test_v21_fee_templates.py covers section/term create + clone idempotency + class-wide message + section-filtered assign + accountant RBAC; safe to run against any environment with the standard Sunrise seed. Frontend selectors: struct-class, struct-section, struct-section-hint, struct-term, struct-due-date, struct-name, struct-item-{i}-(catalog|type|amount|remove), struct-add-line, submit-structure-btn, struct-card-{id}, assign-struct-{id}, clone-struct-{id}, fee-row-{id}.",
+  "rca of the issue": "No bugs found. Feature behaves exactly per spec on both API and UI; clone-to-sections is correctly idempotent, section validation rejects invalid sections with HTTP 400, class-wide structures correctly suppress the clone affordance, and assign honors the section filter."
+}

@@ -189,6 +189,8 @@ class FeeStructureCreate(BaseModel):
     name: str  # Term 1, Annual etc
     items: List[dict]  # [{type, amount}]
     due_date: str
+    section: Optional[str] = None  # If set, applies to that section only; None = whole class (all sections)
+    term: Optional[str] = None  # e.g. "Term 1", "Term 2", "Term 3", "Annual", custom
 
 
 class FeePaymentCreate(BaseModel):

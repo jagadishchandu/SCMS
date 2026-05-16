@@ -19,10 +19,21 @@ async def list_structures(user: dict = Depends(get_current_user)):
 async def create_structure(payload: FeeStructureCreate, user: dict = Depends(require_roles("school_admin", "accounts"))):
     tdb = await tenant_db(user["school_id"])
     total = sum(it.get("amount", 0) for it in payload.items)
+    section = (payload.section or "").strip().upper() or None
+    # Validate section against class definition if provided
+    if section:
+        cls = await tdb.classes.find_one({"id": payload.class_id, "school_id": user["school_id"]})
+        if not cls:
+            raise HTTPException(status_code=404, detail="Class not found")
+        cls_sections = [s.upper() for s in (cls.get("sections") or [])]
+        if section not in cls_sections:
+            raise HTTPException(status_code=400, detail=f"Section '{section}' not found in class")
     doc = {
         "id": new_id(),
         "school_id": user["school_id"],
         "class_id": payload.class_id,
+        "section": section,
+        "term": (payload.term or None),
         "name": payload.name,
         "items": payload.items,
         "total": total,
@@ -34,13 +45,86 @@ async def create_structure(payload: FeeStructureCreate, user: dict = Depends(req
     return doc
 
 
+@router.post("/structures/{structure_id}/clone-to-sections")
+async def clone_structure_to_sections(structure_id: str, user: dict = Depends(require_roles("school_admin", "accounts"))):
+    """Clone a section-scoped fee structure to ALL other sections of the same class.
+
+    Useful when admin defines e.g. "Grade 1 Term 1 Fees" for section A and wants
+    to replicate it for sections B, C, D... in one click.
+
+    Skips sections that already have a structure with the same (class_id, term, name).
+    If the source structure was class-wide (no section), the response indicates
+    nothing was cloned (because it already covers all sections).
+    """
+    tdb = await tenant_db(user["school_id"])
+    src = await tdb.fee_structures.find_one(
+        {"id": structure_id, "school_id": user["school_id"]}, {"_id": 0}
+    )
+    if not src:
+        raise HTTPException(status_code=404, detail="Fee structure not found")
+    cls = await tdb.classes.find_one({"id": src["class_id"], "school_id": user["school_id"]})
+    if not cls:
+        raise HTTPException(status_code=404, detail="Class not found for this structure")
+
+    all_sections = [s.upper() for s in (cls.get("sections") or [])]
+    src_section = (src.get("section") or "").upper() or None
+    if not src_section:
+        return {
+            "cloned": 0,
+            "skipped": [],
+            "message": "Source structure is class-wide (no specific section) — already covers all sections.",
+        }
+
+    target_sections = [s for s in all_sections if s != src_section]
+    cloned = 0
+    skipped = []
+    created_ids = []
+    for sec in target_sections:
+        # idempotency: if a structure already exists for this class/section with same term+name, skip
+        dup = await tdb.fee_structures.find_one({
+            "school_id": user["school_id"],
+            "class_id": src["class_id"],
+            "section": sec,
+            "term": src.get("term"),
+            "name": src["name"],
+        })
+        if dup:
+            skipped.append(sec)
+            continue
+        doc = {
+            "id": new_id(),
+            "school_id": user["school_id"],
+            "class_id": src["class_id"],
+            "section": sec,
+            "term": src.get("term"),
+            "name": src["name"],
+            "items": src["items"],
+            "total": src["total"],
+            "due_date": src["due_date"],
+            "created_at": utc_now(),
+            "cloned_from": structure_id,
+        }
+        await tdb.fee_structures.insert_one(doc)
+        created_ids.append(doc["id"])
+        cloned += 1
+    return {
+        "cloned": cloned,
+        "skipped": skipped,
+        "target_sections": target_sections,
+        "created_ids": created_ids,
+    }
+
+
 @router.post("/structures/{structure_id}/assign")
 async def assign_structure(structure_id: str, user: dict = Depends(require_roles("school_admin", "accounts"))):
     tdb = await tenant_db(user["school_id"])
     struct = await tdb.fee_structures.find_one({"id": structure_id, "school_id": user["school_id"]})
     if not struct:
         raise HTTPException(status_code=404, detail="Not found")
-    students = await tdb.students.find({"school_id": user["school_id"], "class_id": struct["class_id"]}, {"_id": 0}).to_list(5000)
+    student_filter = {"school_id": user["school_id"], "class_id": struct["class_id"]}
+    if struct.get("section"):
+        student_filter["section"] = struct["section"]
+    students = await tdb.students.find(student_filter, {"_id": 0}).to_list(5000)
     created = 0
     for s in students:
         existing = await tdb.fees.find_one({"school_id": user["school_id"], "student_id": s["id"], "structure_id": structure_id})
@@ -52,6 +136,8 @@ async def assign_structure(structure_id: str, user: dict = Depends(require_roles
             "structure_id": structure_id,
             "student_id": s["id"],
             "class_id": struct["class_id"],
+            "section": struct.get("section") or s.get("section"),
+            "term": struct.get("term"),
             "name": struct["name"],
             "total": struct["total"],
             "paid": 0.0,

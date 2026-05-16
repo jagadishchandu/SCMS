@@ -1,6 +1,6 @@
 # SCMS Test Credentials
 
-Login URL: <https://4d977b08-b8f9-4943-a6f8-176d61d36e7e.preview.emergentagent.com/login>
+Login URL: <https://fee-template-clone.preview.emergentagent.com/login>
 
 All non-admin accounts are seeded automatically on backend startup (idempotent).
 The Platform Super Admin is provisioned from Docker env vars (`ADMIN_EMAIL` / `ADMIN_PASSWORD`).

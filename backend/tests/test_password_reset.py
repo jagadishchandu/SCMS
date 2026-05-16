@@ -18,7 +18,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 BASE_URL = os.environ.get(
     "REACT_APP_BACKEND_URL",
-    "https://student-tracker-478.preview.emergentagent.com",
+    "https://fee-template-clone.preview.emergentagent.com",
 ).rstrip("/")
 API = f"{BASE_URL}/api"
 
