@@ -15,6 +15,12 @@ Multi-school management platform with strict role-based visibility (Platform Adm
 ## Personas
 Platform Admin (SaaS operator), School Principal, Teacher / Class Teacher, Accounts staff, Parent.
 
+## Implemented v1.22 (2026-05-16) — Subjects selector in “Add Teacher” modal
+- Frontend `TeachersPage` CreateUserModal: when role tab is **Teachers**, the modal now fetches `/api/academic/subjects` and renders a multi-select chip grid (required, with selected-count helper text and an empty-state message if the school has no subjects defined yet). Frontend short-circuits with a clear error toast when a teacher is submitted without any subjects.
+- Teacher list cards now display the assigned subject names as badges (legacy teachers without subjects show a clear "None assigned" warning).
+- Backend (`POST /api/users`) already enforced `teacher must have >=1 subject` — no API change needed; behaviour fully regression-tested (6/6).
+- Tests: 6/6 new backend regression cases + 5/5 frontend acceptance criteria.
+
 ## Implemented v1.21 (2026-05-16) — Per-class Fee Structure Templates + Clone-to-Sections
 - `FeeStructureCreate` extended with optional `section` and `term` (Term 1/2/3/Annual/Admission/Monthly/Custom).
 - Backend: `POST /api/fees/structures` validates section against class.sections (400 on mismatch). `POST /api/fees/structures/{id}/clone-to-sections` clones section-scoped structures to every other section of the same class (idempotent — skips dup on class_id+section+term+name; refuses class-wide source with explanatory message). `assign_structure` now filters student invoicing by `struct.section` when set, otherwise invoices the whole class.
