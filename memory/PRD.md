@@ -15,6 +15,11 @@ Multi-school management platform with strict role-based visibility (Platform Adm
 ## Personas
 Platform Admin (SaaS operator), School Principal, Teacher / Class Teacher, Accounts staff, Parent.
 
+## Implemented v1.23 (2026-05-16) — Subject⇄Teacher coverage matrix + bulk-assign
+- Backend: `GET /api/academic/subjects/coverage` returns one row per subject with assigned teachers, `total_teachers`, `orphan_count` (school_admin only). `POST /api/academic/subjects/{id}/bulk-assign-teachers` idempotently adds the subject to all selected teachers (uses `$addToSet`); supports `replace: true` for authoritative mode that also un-assigns omitted teachers. `POST /api/academic/subjects/{id}/unassign-teacher/{teacher_id}` removes the subject from one teacher.
+- Frontend `/school/classes` (school_admin only): new "Subject ⇄ teacher coverage" table with one row per subject, orphan-subject warning badge, click-to-remove teacher chips, and "Bulk-assign teachers" button → modal with searchable checkbox list, Select-all/Clear, "Currently assigned" pre-check + selected/assigned counts, and an Authoritative-mode toggle that maps to backend `replace: true`.
+- Tests: 12/12 backend (coverage shape, idempotency, validation 400, replace authoritative, unassign, full RBAC) + all frontend acceptance criteria verified live.
+
 ## Implemented v1.22 (2026-05-16) — Subjects selector in “Add Teacher” modal
 - Frontend `TeachersPage` CreateUserModal: when role tab is **Teachers**, the modal now fetches `/api/academic/subjects` and renders a multi-select chip grid (required, with selected-count helper text and an empty-state message if the school has no subjects defined yet). Frontend short-circuits with a clear error toast when a teacher is submitted without any subjects.
 - Teacher list cards now display the assigned subject names as badges (legacy teachers without subjects show a clear "None assigned" warning).

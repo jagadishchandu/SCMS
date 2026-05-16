@@ -400,8 +400,8 @@ function BulkAssignModal({ subject, teachers, onClose, onDone }) {
       const parts = [];
       if (data.added) parts.push(`${data.added} added`);
       if (data.removed) parts.push(`${data.removed} removed`);
-      if (parts.length === 0) parts.push("no changes");
-      toast.success(`${subject.subject_name}: ${parts.join(", ")}`);
+      const summary = parts.length === 0 ? "no changes" : parts.join(", ");
+      toast.success(`${subject.subject_name}: ${summary}`);
       onDone();
     } catch (err) { toast.error(formatApiError(err)); }
     finally { setBusy(false); }
