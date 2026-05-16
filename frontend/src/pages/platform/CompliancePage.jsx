@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { api } from "../../lib/api";
+import { api, formatApiError } from "../../lib/api";
 import { PageHeader, Section, Empty, KPI } from "../../components/Primitives";
 import { formatDate } from "../../lib/utils";
-import { ShieldCheck, Warning, Clock, XCircle, MinusCircle } from "@phosphor-icons/react";
+import { ShieldCheck, Warning, Clock, XCircle, MinusCircle, BellRinging } from "@phosphor-icons/react";
+import toast from "react-hot-toast";
 
 const COMPLIANCE_LABELS = {
   compliant: { label: "Within capacity", className: "badge-success", Icon: ShieldCheck },
@@ -24,10 +25,20 @@ const FILTERS = [
 export default function CompliancePage() {
   const [data, setData] = useState(null);
   const [filter, setFilter] = useState("all");
+  const [alerting, setAlerting] = useState(false);
 
   useEffect(() => {
     api.get("/subscriptions/compliance").then((r) => setData(r.data));
   }, []);
+
+  const runAlert = async () => {
+    setAlerting(true);
+    try {
+      const { data } = await api.post("/subscriptions/compliance/run-alert");
+      toast.success(`Over-capacity alert queued (${data.messages_queued} message${data.messages_queued === 1 ? "" : "s"})`);
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setAlerting(false); }
+  };
 
   const filtered = useMemo(() => {
     if (!data) return [];
@@ -44,6 +55,11 @@ export default function CompliancePage() {
         eyebrow="Platform · Compliance"
         title="Subscription compliance"
         subtitle="Read-only view comparing each school's requested/approved children count against the actual active students in their tenant database."
+        actions={
+          <button className="btn-secondary" onClick={runAlert} disabled={alerting || !(summary.over_capacity > 0)} data-testid="run-over-capacity-alert-btn">
+            <BellRinging size={16} /> {alerting ? "Sending…" : `Alert me (${summary.over_capacity || 0})`}
+          </button>
+        }
       />
 
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 mb-8">

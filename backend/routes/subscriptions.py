@@ -303,6 +303,14 @@ async def compliance_view(filter: str | None = None,
     return {"rows": rows, "summary": summary, "total": len(rows)}
 
 
+@router.post("/compliance/run-alert")
+async def trigger_over_capacity_alert(user: dict = Depends(require_roles("platform_admin"))):
+    """Manually trigger the over-capacity alert (also runs as a daily cron @ 09:00 IST)."""
+    from core.scheduler import _run_over_capacity_alerts
+    sent = await _run_over_capacity_alerts()
+    return {"ok": True, "messages_queued": sent}
+
+
 
 @router.get("/quote/{school_id}")
 async def quote_for_school(school_id: str, user: dict = Depends(get_current_user)):

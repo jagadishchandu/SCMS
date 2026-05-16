@@ -159,10 +159,23 @@ export default function FeesPage() {
 }
 
 function StructureModal({ classes, open, onClose, onCreated }) {
-  const [form, setForm] = useState({ class_id: "", name: "Term 1 Fees", due_date: "", items: [{ type: "tuition", amount: 0 }] });
+  const [form, setForm] = useState({ class_id: "", name: "Term 1 Fees", due_date: "", items: [{ type: "tuition", amount: 0, fee_item_id: null }] });
+  const [catalog, setCatalog] = useState([]);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      api.get("/fee-items").then((r) => setCatalog(r.data || [])).catch(() => setCatalog([]));
+      setForm({ class_id: "", name: "Term 1 Fees", due_date: "", items: [{ type: "tuition", amount: 0, fee_item_id: null }] });
+    }
+  }, [open]);
+
   const submit = async (e) => {
     e.preventDefault();
+    if (!form.class_id || !form.due_date) { toast.error("Class and due date are required"); return; }
+    if (form.items.length === 0 || !form.items.some((i) => Number(i.amount) > 0)) {
+      toast.error("Add at least one line item with amount > 0"); return;
+    }
     setBusy(true);
     try {
       await api.post("/fees/structures", form);
@@ -171,6 +184,15 @@ function StructureModal({ classes, open, onClose, onCreated }) {
     } catch (err) { toast.error(formatApiError(err)); }
     finally { setBusy(false); }
   };
+
+  const pickFromCatalog = (idx, itemId) => {
+    const it = catalog.find((c) => c.id === itemId);
+    if (!it) return;
+    const items = [...form.items];
+    items[idx] = { ...items[idx], type: it.name, amount: it.default_amount, fee_item_id: it.id };
+    setForm({ ...form, items });
+  };
+
   return (
     <Modal open={open} onClose={onClose} title="New fee structure" size="lg" testId="new-structure-modal">
       <form onSubmit={submit} className="space-y-4">
@@ -182,21 +204,67 @@ function StructureModal({ classes, open, onClose, onCreated }) {
           <input className="input" placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} data-testid="struct-name" />
           <input className="input" type="date" required value={form.due_date} onChange={(e) => setForm({ ...form, due_date: e.target.value })} data-testid="struct-due-date" />
         </div>
-        <div className="overline">Items</div>
+        <div className="flex items-center justify-between">
+          <div className="overline">Items</div>
+          {catalog.length > 0 && (
+            <span className="text-xs text-ink-muted">Tip: pick from the catalog ({catalog.length} items) or type a custom name.</span>
+          )}
+        </div>
         {form.items.map((it, idx) => (
-          <div key={idx} className="grid grid-cols-3 gap-3">
-            <input className="input" value={it.type} onChange={(e) => {
-              const items = [...form.items]; items[idx] = { ...items[idx], type: e.target.value }; setForm({ ...form, items });
-            }} />
-            <input className="input" type="number" value={it.amount} onChange={(e) => {
-              const items = [...form.items]; items[idx] = { ...items[idx], amount: Number(e.target.value) }; setForm({ ...form, items });
-            }} />
-            <button type="button" className="btn-secondary" onClick={() => {
-              setForm({ ...form, items: form.items.filter((_, i) => i !== idx) });
-            }}>Remove</button>
+          <div key={idx} className="grid grid-cols-12 gap-2 items-start" data-testid={`struct-item-${idx}`}>
+            <select
+              className="input col-span-4"
+              value={it.fee_item_id || ""}
+              onChange={(e) => {
+                if (e.target.value === "__custom__") {
+                  const items = [...form.items];
+                  items[idx] = { ...items[idx], fee_item_id: null, type: "", amount: 0 };
+                  setForm({ ...form, items });
+                } else if (e.target.value) {
+                  pickFromCatalog(idx, e.target.value);
+                }
+              }}
+              data-testid={`struct-item-${idx}-catalog`}
+            >
+              <option value="">Pick from catalog…</option>
+              {catalog.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name} ({c.category}) · {currency(c.default_amount)}
+                </option>
+              ))}
+              <option value="__custom__">— Custom line item —</option>
+            </select>
+            <input
+              className="input col-span-4"
+              placeholder="Line item label"
+              value={it.type}
+              onChange={(e) => {
+                const items = [...form.items]; items[idx] = { ...items[idx], type: e.target.value }; setForm({ ...form, items });
+              }}
+              data-testid={`struct-item-${idx}-type`}
+            />
+            <input
+              className="input col-span-3"
+              type="number" min="0" step="0.01"
+              placeholder="Amount"
+              value={it.amount}
+              onChange={(e) => {
+                const items = [...form.items]; items[idx] = { ...items[idx], amount: Number(e.target.value) }; setForm({ ...form, items });
+              }}
+              data-testid={`struct-item-${idx}-amount`}
+            />
+            <button
+              type="button"
+              className="btn-secondary col-span-1 text-status-danger"
+              title="Remove line"
+              onClick={() => setForm({ ...form, items: form.items.filter((_, i) => i !== idx) })}
+              data-testid={`struct-item-${idx}-remove`}
+            >×</button>
           </div>
         ))}
-        <button type="button" className="btn-secondary" onClick={() => setForm({ ...form, items: [...form.items, { type: "", amount: 0 }] })}>+ Add item</button>
+        <button type="button" className="btn-secondary" onClick={() => setForm({ ...form, items: [...form.items, { type: "", amount: 0, fee_item_id: null }] })} data-testid="struct-add-line">
+          + Add line item
+        </button>
         <div className="text-right font-display text-lg">Total: {currency(form.items.reduce((a, b) => a + Number(b.amount || 0), 0))}</div>
         <div className="flex justify-end gap-2">
           <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>

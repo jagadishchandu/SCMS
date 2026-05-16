@@ -105,11 +105,18 @@ export default function CalendarPage() {
               <div key={i} className={`aspect-square rounded-md p-1.5 border ${isToday ? "border-primary bg-primary-light" : "border-line bg-bg-surface"} text-left overflow-hidden`} data-testid={`cal-day-${key}`}>
                 <div className={`text-xs ${isToday ? "font-semibold text-primary" : "text-ink-soft"}`}>{d.getDate()}</div>
                 <div className="mt-1 space-y-0.5">
-                  {dayEvents.slice(0, 2).map((e, idx) => (
-                    <div key={idx} className={`text-[10px] px-1.5 py-0.5 rounded truncate ${e.type === "holiday" ? "bg-status-danger-bg text-status-danger" : "bg-primary-light text-primary"}`} title={e.title}>
-                      {e.title}
-                    </div>
-                  ))}
+                  {dayEvents.slice(0, 2).map((e, idx) => {
+                    const cls = e.type === "holiday"
+                      ? "bg-status-danger-bg text-status-danger"
+                      : e.type === "duty"
+                      ? "bg-amber-100 text-amber-800"
+                      : "bg-primary-light text-primary";
+                    return (
+                      <div key={idx} className={`text-[10px] px-1.5 py-0.5 rounded truncate ${cls}`} title={e.title}>
+                        {e.title}
+                      </div>
+                    );
+                  })}
                   {dayEvents.length > 2 && <div className="text-[10px] text-ink-muted">+{dayEvents.length - 2} more</div>}
                 </div>
               </div>
@@ -124,10 +131,14 @@ export default function CalendarPage() {
             {upcoming.map((e, i) => (
               <li key={i} className="py-3 flex items-center justify-between" data-testid={`cal-upcoming-${i}`}>
                 <div className="flex items-center gap-3">
-                  <span className={`w-2 h-2 rounded-full ${e.type === "holiday" ? "bg-status-danger" : "bg-primary"}`} />
+                  <span className={`w-2 h-2 rounded-full ${e.type === "holiday" ? "bg-status-danger" : e.type === "duty" ? "bg-amber-500" : "bg-primary"}`} />
                   <div>
                     <div className="font-medium">{e.title}</div>
-                    <div className="text-xs text-ink-muted">{e.type}{e.meta?.term ? ` · ${e.meta.term}` : ""}</div>
+                    <div className="text-xs text-ink-muted">
+                      {e.type}{e.meta?.term ? ` · ${e.meta.term}` : ""}
+                      {e.type === "duty" && e.meta?.duty_type ? ` · ${e.meta.duty_type.replace("_", " ")}` : ""}
+                      {e.type === "duty" && e.meta?.location ? ` · ${e.meta.location}` : ""}
+                    </div>
                   </div>
                 </div>
                 <div className="text-sm text-ink-soft">{e.date}{e.end_date ? ` → ${e.end_date}` : ""}</div>

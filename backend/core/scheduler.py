@@ -20,6 +20,9 @@ RENEWAL_NUDGE_COOLDOWN_HOURS = 24
 RENEWAL_NUDGE_WINDOW_DAYS = 7  # nudge when valid_until is within next 7 days
 RENEWAL_NUDGE_TEMPLATE = "subscription_renewal"
 
+OVER_CAPACITY_TEMPLATE = "over_capacity_alert"
+OVER_CAPACITY_COOLDOWN_HOURS = 24
+
 
 def is_enabled() -> bool:
     return os.environ.get("ENABLE_DIGEST_SCHEDULER", "").strip().lower() in ("1", "true", "yes")
@@ -150,6 +153,97 @@ async def _run_subscription_nudges():
     return sent_count
 
 
+# -------------- Over-capacity alert --------------
+async def _run_over_capacity_alerts():
+    """For each school whose actual active student count exceeds approved
+    children count, notify the Platform Super Admin via email + Telegram (when
+    configured). 24-hour cooldown per school to avoid spam.
+    """
+    from core.db import get_db, tenant_db
+    from core.notify import queue_notification
+    from core.audit import log_action
+
+    db = get_db()
+    now = datetime.now(timezone.utc)
+    schools = await db.schools.find({"is_active": True}, {"_id": 0}).to_list(1000)
+    breaches = []
+    for school in schools:
+        approval = school.get("subscription_approval") or {}
+        if approval.get("status") != "approved":
+            continue
+        cap = approval.get("approved_children_count") or approval.get("requested_children_count")
+        if not cap:
+            continue
+        tdb = await tenant_db(school["id"])
+        actual = await tdb.students.count_documents({"status": "active"})
+        if actual <= cap:
+            continue
+        breaches.append({
+            "school_id": school["id"],
+            "school_name": school["name"],
+            "school_code": school.get("code"),
+            "actual": actual,
+            "cap": cap,
+            "variance": actual - cap,
+        })
+
+    if not breaches:
+        log.info("[scheduler] Over-capacity check: no breaches")
+        return 0
+
+    # Cooldown — only alert if no notification fired in the last 24h
+    recent = await db.notifications.find_one({
+        "template": OVER_CAPACITY_TEMPLATE,
+        "created_at": {"$gte": now - timedelta(hours=OVER_CAPACITY_COOLDOWN_HOURS)},
+    })
+    if recent:
+        log.info("[scheduler] Over-capacity alert skipped (cooldown active)")
+        return 0
+
+    # Build the alert message
+    breaches_sorted = sorted(breaches, key=lambda b: b["variance"], reverse=True)
+    lines = [f"{b['school_name']} ({b['school_code']}): {b['actual']} / {b['cap']}  →  +{b['variance']} over"
+             for b in breaches_sorted]
+    body = (
+        f"🚨 SCMS — Over-capacity alert\n\n"
+        f"{len(breaches)} school(s) currently exceed their approved children count:\n\n"
+        + "\n".join(lines)
+        + "\n\nReview the Compliance dashboard: /platform/compliance"
+    )
+
+    platform_admin = await db.users.find_one(
+        {"role": "platform_admin", "is_active": True}, {"_id": 0},
+    )
+    if not platform_admin:
+        log.warning("[scheduler] Over-capacity: no platform admin found")
+        return 0
+
+    sent = 0
+    if platform_admin.get("telegram_chat_id"):
+        await queue_notification(
+            None, "platform_admin", platform_admin["id"],
+            platform_admin["telegram_chat_id"], "telegram",
+            OVER_CAPACITY_TEMPLATE, body,
+            context={"breach_count": len(breaches), "breaches": breaches_sorted, "source": "scheduler"},
+        )
+        sent += 1
+    if platform_admin.get("email"):
+        await queue_notification(
+            None, "platform_admin", platform_admin["id"], None,
+            "email", OVER_CAPACITY_TEMPLATE, body,
+            context={"breach_count": len(breaches), "breaches": breaches_sorted, "source": "scheduler"},
+            email=platform_admin["email"],
+            subject=f"SCMS · {len(breaches)} school(s) over capacity",
+        )
+        sent += 1
+    await log_action(
+        "system", "platform_admin", None, "over_capacity_alert", "compliance",
+        meta={"breach_count": len(breaches), "messages_sent": sent},
+    )
+    log.info("[scheduler] Over-capacity alert: %d schools, %d messages sent", len(breaches), sent)
+    return sent
+
+
 def start():
     global _scheduler
     if _scheduler is not None or not is_enabled():
@@ -165,8 +259,10 @@ def start():
     _scheduler.add_job(_run_digest_for_all_schools, CronTrigger(day=1, hour=9, minute=0), id="monthly_digest")
     # Every day at 08:00 IST → subscription renewal nudge
     _scheduler.add_job(_run_subscription_nudges, CronTrigger(hour=8, minute=0), id="subscription_nudge")
+    # Every day at 09:00 IST → over-capacity alert to platform admin
+    _scheduler.add_job(_run_over_capacity_alerts, CronTrigger(hour=9, minute=0), id="over_capacity_alert")
     _scheduler.start()
-    log.info("[scheduler] Started — monthly digest (1st @ 09:00 IST) + subscription nudge (daily @ 08:00 IST)")
+    log.info("[scheduler] Started — monthly digest (1st @ 09:00 IST) + subscription nudge (daily @ 08:00 IST) + over-capacity alert (daily @ 09:00 IST)")
 
 
 def shutdown():

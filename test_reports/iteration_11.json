@@ -1,0 +1,35 @@
+{
+  "summary": "Iter11 (v1.20 — Fee catalog → Structures link, Teacher duties on calendar, Over-capacity alert): All 3 features verified end-to-end on the deployed preview URL across all 3 roles. BACKEND: pytest /app/backend/tests/test_v20_links_and_alerts.py = 7/7 PASS (6.0s); regression v19+v18+v18.1 = 43/43 PASS (80.2s). Combined: 50/50 PASS. FRONTEND: (1) /school/fees → Fee structure modal → catalog picker (data-testid='struct-item-0-catalog') populated with 22 options including 'Books a87d19 (books) · ₹2,500'; selecting an item auto-fills type='Books a87d19' + amount='2500'; struct-item-0-type, struct-item-0-amount, struct-item-0-remove, struct-add-line, submit-structure-btn all present. (2) /platform/compliance → 'Alert me (10)' button (data-testid='run-over-capacity-alert-btn') present in header, enabled because summary.over_capacity=10; click → POST /api/subscriptions/compliance/run-alert → 200 with body {ok:true, messages_queued:0} (cooldown enforced per spec). (3) /teacher/calendar (logged in as Priya) → 18 amber-class elements rendered on day cells; visible duty events include 'Test duty 2fd46', 'Test duty 58ce3', 'Own duty 45872', 'Own duty e6d67', 'Group 099de', 'RBAC b6e06', 'RBAC daf52'. Upcoming list heading 'Upcoming events (next 60 days)' renders below the calendar with duty rows labeled 'duty · duty'.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/teacher/calendar", "issues": ["Legend in the calendar header shows only 'Holiday' and 'Exam' color swatches — no 'Duty' swatch is shown for the new amber duty events. Cosmetic only; the events themselves are visibly amber/distinct from the other event colors."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_v20_links_and_alerts.py",
+    "/app/test_reports/pytest/iter11_v20.xml"
+  ],
+  "action_items": [
+    "Optional: add a 'Duty' legend swatch on the CalendarPage header so users can decode the amber color (purely cosmetic).",
+    "Optional: the toast on /platform/compliance auto-dismisses fast; consider a slightly longer duration so the messages_queued count is more visible (no functional issue)."
+  ],
+  "critical_code_review_comments": [
+    "calendar_route.py auto-scopes duty events to teacher_id for role=teacher — verified live: Priya only sees her own duty events on /teacher/calendar (UI rendered Priya-specific duties; school_admin sees all).",
+    "subscriptions.py POST /compliance/run-alert is RBAC-gated to platform_admin (school_admin gets 403 — covered by test_run_alert_endpoint_platform_admin_only).",
+    "24-hour cooldown via notifications collection is correctly enforced: live alert click returned messages_queued=0 since alerts were previously queued for the 10 over-capacity schools — matches spec.",
+    "fees structure POST accepts the new fee_item_id field per line item without schema break (test_create_structure_with_fee_item_id_field_is_accepted PASS); round-trip persistence verified.",
+    "StructureModal catalog picker correctly auto-fills both `type` and `amount` from the selected Fee Item — UX is exactly as specified.",
+    "All required data-testids are present and functional: struct-item-0-catalog, struct-item-0-type, struct-item-0-amount, struct-item-0-remove, struct-add-line, submit-structure-btn, run-over-capacity-alert-btn."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (50/50: v20 7/7 + v19 + v18 + v18.1)", "frontend": "100% (3/3 features verified across 3 roles)"},
+  "test_credentials": "Used /app/memory/test_credentials.md verbatim — platform_admin=jagadishchandu789@gmail.com/Manasa@123, school_admin=principal@sunrise.edu/School@123, teacher=priya@sunrise.edu/Teacher@123.",
+  "seed_data_creation": "None new. The pytest suite created its own V20-prefixed schools (with cap=1 + 3 students) which contribute to the over_capacity=10 visible on /platform/compliance.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "v1.20 ships clean. Notes for next iteration: (1) Login wait_for_url('**/role/**') often times out at 10s even though navigation already succeeded — use plain wait_for_timeout(4000) after submit and inspect page.url, do not rely on wait_for_url for the post-login redirect. (2) The 'Alert me' button correctly disables when summary.over_capacity == 0 — to validate live, ensure at least one V20-prefixed over-cap school exists (pytest does this automatically). (3) StructureModal catalog dropdown options are formatted as 'Name (category) · ₹amount' — `option.value` is the fee_item_id (Mongo ObjectId string). (4) Teacher calendar duty events render with className containing 'amber'; the upcoming list shows them as a separate duty row.",
+  "rca of the issue": "No bugs. Only a minor cosmetic gap (no 'Duty' legend swatch on the teacher calendar header) — non-blocking."
+}
