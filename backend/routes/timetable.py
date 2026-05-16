@@ -6,8 +6,56 @@ from core.models import TimetableBulk
 from core.auth import require_roles, get_current_user
 from core.db import get_db, tenant_db
 from core.utils import new_id, utc_now
+from core.notify import queue_notification
 
 router = APIRouter(prefix="/timetable", tags=["timetable"])
+
+
+async def _notify_teachers_of_timetable_change(
+    school_id: str,
+    class_id: str,
+    section: str,
+    new_slots: list,
+    actor: dict,
+):
+    """Telegram-notify every distinct teacher who appears in the new schedule.
+
+    Falls back gracefully — if a teacher hasn't linked Telegram yet, the helper
+    still creates a notification row (queued with delivery_note=telegram_not_configured
+    or no_chat_id) so it shows up in the admin notifications log.
+    """
+    from core.db import get_db as _root_db
+    rdb = _root_db()
+    tdb = await tenant_db(school_id)
+    teacher_ids = sorted({s.get("teacher_id") for s in new_slots if s.get("teacher_id")})
+    if not teacher_ids:
+        return
+    cls = await tdb.classes.find_one({"id": class_id, "school_id": school_id}, {"_id": 0, "name": 1})
+    class_name = (cls or {}).get("name") or class_id
+    teachers = await rdb.users.find(
+        {"school_id": school_id, "role": "teacher", "id": {"$in": teacher_ids}},
+        {"_id": 0, "id": 1, "name": 1, "telegram_chat_id": 1, "phone": 1},
+    ).to_list(2000)
+    actor_name = actor.get("name") or actor.get("email") or "School Admin"
+    for t in teachers:
+        own_periods = sum(1 for s in new_slots if s.get("teacher_id") == t["id"])
+        msg = (
+            f"📅 Timetable updated by {actor_name}\n"
+            f"Class: {class_name} · Section {section}\n"
+            f"You have {own_periods} period(s) in this schedule.\n"
+            f"Open the app to view your weekly plan."
+        )
+        await queue_notification(
+            school_id=school_id,
+            recipient_type="teacher",
+            recipient_id=t["id"],
+            phone=t.get("phone"),
+            channel="telegram",
+            template="timetable_updated",
+            message=msg,
+            context={"class_id": class_id, "section": section, "own_periods": own_periods},
+            telegram_chat_id=t.get("telegram_chat_id"),
+        )
 
 
 @router.post("/bulk")
@@ -32,7 +80,17 @@ async def set_timetable(payload: TimetableBulk, user: dict = Depends(require_rol
         docs.append(d)
     if docs:
         await tdb.timetable.insert_many(docs)
-    return {"inserted": len(docs)}
+        # Fire-and-await Telegram notifications to affected teachers (doesn't fail the save if telegram is down).
+        try:
+            await _notify_teachers_of_timetable_change(
+                user["school_id"], payload.class_id, payload.section, docs, user,
+            )
+        except Exception as e:
+            # never block timetable save on a notification failure
+            import logging
+            logging.getLogger("scms.timetable").warning("teacher notify failed: %s", e)
+    notified = len({d["teacher_id"] for d in docs if d.get("teacher_id")})
+    return {"inserted": len(docs), "notified_teachers": notified}
 
 
 @router.get("")
@@ -154,6 +212,10 @@ class SuggestTimetableRequest(BaseModel):
     start_time: str = "09:00"  # HH:MM 24h
     period_minutes: int = Field(45, ge=15, le=120)
     subject_periods: Optional[dict] = None  # {subject_id: int} optional override
+    # --- Soft/hard constraints ---
+    lunch_break_period: Optional[int] = Field(default=None, ge=1, le=12)  # 1-indexed; that period is left blank every day
+    no_last_period_subjects: Optional[List[str]] = None  # subject ids forbidden in the last period
+    subject_day_pins: Optional[dict] = None  # {subject_id: [day, day, ...]} — restrict subject to those days only
 
 
 def _add_minutes(hhmm: str, mins: int) -> str:
@@ -166,13 +228,24 @@ def _add_minutes(hhmm: str, mins: int) -> str:
     return f"{total // 60:02d}:{total % 60:02d}"
 
 
-def _balance_subject_periods(subjects: list, total_slots: int, overrides: dict | None):
-    """Return list of subject_ids of length total_slots, balanced across subjects.
-    overrides: {subject_id: int} — explicit counts; remaining slots split evenly.
+def _compute_subject_counts(
+    subjects: list,
+    total_slots: int,
+    overrides: dict | None,
+    day_pins: dict[str, set],
+    num_days: int,
+    periods_to_fill_per_day: int,
+) -> dict[str, int]:
+    """Return {subject_id: target_count} totalling total_slots.
+
+    Honors caller-supplied `overrides` ({sid: int}) exactly; auto-balances the
+    remainder across non-overridden subjects respecting per-subject capacity caps
+    derived from day_pins (a subject pinned to N days can be scheduled at most
+    `N * periods_to_fill_per_day` times).
     """
     overrides = overrides or {}
-    fixed = 0
     counts: dict[str, int] = {}
+    fixed = 0
     for s in subjects:
         c = overrides.get(s["id"])
         if c is not None and c >= 0:
@@ -184,47 +257,49 @@ def _balance_subject_periods(subjects: list, total_slots: int, overrides: dict |
             detail=f"subject_periods sum ({fixed}) exceeds total available slots ({total_slots}).",
         )
     remaining = total_slots - fixed
+
+    def cap_for(sid: str) -> int:
+        pinned = day_pins.get(sid)
+        if pinned:
+            return len(pinned) * periods_to_fill_per_day
+        return num_days * periods_to_fill_per_day
+
     auto_subjects = [s for s in subjects if s["id"] not in counts]
-    if auto_subjects and remaining > 0:
-        base = remaining // len(auto_subjects)
-        extra = remaining - base * len(auto_subjects)
-        for i, s in enumerate(auto_subjects):
-            counts[s["id"]] = base + (1 if i < extra else 0)
-    elif remaining > 0 and not auto_subjects:
-        # Distribute leftover proportionally to existing counts (or to first subject if all zero)
+    # Iteratively distribute respecting caps to avoid impossible plans
+    pool = {s["id"]: 0 for s in auto_subjects}
+    while remaining > 0 and any(pool[sid] < cap_for(sid) for sid in pool):
+        eligible = [sid for sid in pool if pool[sid] < cap_for(sid)]
+        if not eligible:
+            break
+        # Spread one period to each eligible subject
+        for sid in eligible:
+            if remaining <= 0:
+                break
+            if pool[sid] < cap_for(sid):
+                pool[sid] += 1
+                remaining -= 1
+    counts.update(pool)
+    # If still remaining (all caps full), push leftovers into the first override-only subject
+    # that has spare capacity, or into the first subject (best-effort).
+    if remaining > 0:
         ordered = list(counts.keys()) or [s["id"] for s in subjects[:1]]
         idx = 0
-        while remaining > 0 and ordered:
-            counts[ordered[idx % len(ordered)]] = counts.get(ordered[idx % len(ordered)], 0) + 1
-            remaining -= 1
+        guard = 10000
+        while remaining > 0 and ordered and guard > 0:
+            sid = ordered[idx % len(ordered)]
+            if counts.get(sid, 0) < cap_for(sid):
+                counts[sid] = counts.get(sid, 0) + 1
+                remaining -= 1
             idx += 1
-    # Flatten into a multiset queue, interleaved to avoid back-to-back same subject.
-    queue: list[str] = []
-    pools = [(sid, counts.get(sid, 0)) for sid in counts]
-    pools = [p for p in pools if p[1] > 0]
-    # Sort by count desc so heaviest subjects spread first
-    pools.sort(key=lambda x: -x[1])
-    pools_dict = {sid: cnt for sid, cnt in pools}
-    while sum(pools_dict.values()) > 0:
-        # Round-robin pick the subject with the highest remaining count that wasn't the last one
-        last = queue[-1] if queue else None
-        candidates = sorted(pools_dict.items(), key=lambda x: -x[1])
-        picked = None
-        for sid, cnt in candidates:
-            if cnt > 0 and sid != last:
-                picked = sid
-                break
-        if picked is None:
-            # Forced to repeat last to drain
-            for sid, cnt in candidates:
-                if cnt > 0:
-                    picked = sid
-                    break
-        if picked is None:
-            break
-        queue.append(picked)
-        pools_dict[picked] -= 1
-    return queue, counts
+            guard -= 1
+        # If we couldn't fit (caps too tight), raise.
+        if remaining > 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Subject day-pins are too restrictive — no valid distribution exists. Relax day-pins or add more days/periods.",
+            )
+    return counts
+
 
 
 @router.post("/suggest")
@@ -257,9 +332,13 @@ async def suggest_timetable(
     days = payload.days or DAYS_ORDER[:5]  # default Mon–Fri
     days = [d for d in DAYS_ORDER if d in days]  # canonical order
     periods_per_day = payload.periods_per_day
-    total_slots = len(days) * periods_per_day
+    lunch = payload.lunch_break_period
+    if lunch and lunch > periods_per_day:
+        raise HTTPException(status_code=400, detail=f"lunch_break_period ({lunch}) cannot exceed periods_per_day ({periods_per_day}).")
+    periods_to_fill_per_day = periods_per_day - (1 if lunch else 0)
+    total_slots = len(days) * periods_to_fill_per_day
     if total_slots == 0:
-        raise HTTPException(status_code=400, detail="No days/periods configured")
+        raise HTTPException(status_code=400, detail="No teaching periods after configuring lunch break")
 
     subjects = await tdb.subjects.find({"school_id": user["school_id"]}, {"_id": 0}).sort("name", 1).to_list(500)
     if not subjects:
@@ -286,26 +365,103 @@ async def suggest_timetable(
             continue
         busy.add((sl["day"], sl["period"], sl.get("teacher_id")))
 
-    # Build subject queue
-    queue, counts = _balance_subject_periods(subjects, total_slots, payload.subject_periods)
-    # Pad if short (shouldn't happen, but safe)
-    while len(queue) < total_slots:
-        queue.append(subjects[0]["id"])
+    # Validate constraints reference real subjects
+    valid_sids = {s["id"] for s in subjects}
+    no_last_set = {sid for sid in (payload.no_last_period_subjects or []) if sid in valid_sids}
+    day_pins_raw = payload.subject_day_pins or {}
+    day_pins: dict[str, set] = {}
+    for sid, pinned in day_pins_raw.items():
+        if sid not in valid_sids:
+            continue
+        if not pinned:
+            continue
+        day_pins[sid] = {d for d in pinned if d in DAYS_ORDER}
+
+    # Compute target counts per subject (respecting overrides + day-pin capacity).
+    counts = _compute_subject_counts(subjects, total_slots, payload.subject_periods, day_pins, len(days), periods_to_fill_per_day)
+
+    # Build positions list (excluding lunch break) in canonical order
+    positions: list[tuple[str, int]] = []
+    for day in days:
+        for period in range(1, periods_per_day + 1):
+            if lunch and period == lunch:
+                continue
+            positions.append((day, period))
+
+    # Greedy assignment respecting constraints
+    remaining = dict(counts)
+    last_subject_per_day: dict[str, str | None] = {}
+    assignment: list[str] = []
+    warnings_set: set = set()
+    for (day, period) in positions:
+        is_last = period == periods_per_day
+        last_subj = last_subject_per_day.get(day)
+        candidates = [sid for sid, c in remaining.items() if c > 0]
+        # 1. day-pin filter
+        pinned = [sid for sid in candidates if (sid not in day_pins) or (day in day_pins[sid])]
+        cand1 = pinned if pinned else candidates
+        # 2. no-last-period filter
+        if is_last and no_last_set:
+            non_last = [sid for sid in cand1 if sid not in no_last_set]
+            cand2 = non_last if non_last else cand1
+        else:
+            cand2 = cand1
+        # 3. avoid repeating last subject in same day
+        non_repeat = [sid for sid in cand2 if sid != last_subj]
+        cand3 = non_repeat if non_repeat else cand2
+        if not cand3:
+            # Should not happen — counts sum equals positions length
+            raise HTTPException(status_code=400, detail="Constraint solver failed — relax constraints and retry.")
+        # Greedy heuristic: prioritise subjects that MUST go on this day (day-pinned and current day is in their pin set)
+        # so their limited capacity isn't wasted, then by remaining count, then stable by subject_id.
+        def _pri(sid: str) -> tuple:
+            pin = day_pins.get(sid)
+            pinned_here = 0 if (pin and day in pin) else 1  # 0 = highest priority
+            return (pinned_here, -remaining[sid], sid)
+        cand3.sort(key=_pri)
+        chosen_sid = cand3[0]
+        # Surface a warning if we had to relax day-pin
+        if chosen_sid in day_pins and day not in day_pins[chosen_sid]:
+            warnings_set.add(
+                f"Day-pin for '{next((s['name'] for s in subjects if s['id']==chosen_sid), chosen_sid)}' was relaxed to fit the grid."
+            )
+        if is_last and chosen_sid in no_last_set:
+            warnings_set.add(
+                f"'{next((s['name'] for s in subjects if s['id']==chosen_sid), chosen_sid)}' had to be placed in the last period despite the no-last-period constraint."
+            )
+        assignment.append(chosen_sid)
+        remaining[chosen_sid] -= 1
+        last_subject_per_day[day] = chosen_sid
 
     # Round-robin teacher index per subject (for load balancing)
     rr_index: dict[str, int] = {sid: 0 for sid in counts}
 
     slots = []
-    warnings_set: set = set()
-    pos = 0
+    pos_idx = 0
     for day in days:
         for period in range(1, periods_per_day + 1):
-            sid = queue[pos]
-            pos += 1
+            slot_start = _add_minutes(payload.start_time, (period - 1) * payload.period_minutes)
+            slot_end = _add_minutes(payload.start_time, period * payload.period_minutes)
+            if lunch and period == lunch:
+                # Surface lunch as a slot but mark it as break (subject_id and teacher_id empty)
+                slots.append({
+                    "day": day,
+                    "period": period,
+                    "subject_id": "",
+                    "teacher_id": "",
+                    "class_id": payload.class_id,
+                    "section": payload.section.upper(),
+                    "start_time": slot_start,
+                    "end_time": slot_end,
+                    "is_break": True,
+                    "break_label": "Lunch",
+                })
+                continue
+            sid = assignment[pos_idx]
+            pos_idx += 1
             candidates = subject_to_teachers.get(sid) or []
             chosen = None
             if candidates:
-                # Try candidates in round-robin order, pick first not busy at this (day, period)
                 n = len(candidates)
                 start = rr_index.get(sid, 0)
                 for k in range(n):
@@ -325,8 +481,6 @@ async def suggest_timetable(
                     f"No teacher assigned to '{next((s['name'] for s in subjects if s['id']==sid), sid)}' — please assign teachers first."
                 )
 
-            slot_start = _add_minutes(payload.start_time, (period - 1) * payload.period_minutes)
-            slot_end = _add_minutes(payload.start_time, period * payload.period_minutes)
             slots.append({
                 "day": day,
                 "period": period,
@@ -338,7 +492,6 @@ async def suggest_timetable(
                 "end_time": slot_end,
             })
             if chosen:
-                # Mark teacher busy in our generated grid so we don't double-book within this grid
                 busy.add((day, period, chosen["id"]))
 
     subject_distribution = {sid: counts.get(sid, 0) for sid in counts}
@@ -349,4 +502,5 @@ async def suggest_timetable(
         "days": days,
         "periods_per_day": periods_per_day,
         "total_slots": total_slots,
+        "lunch_break_period": lunch,
     }

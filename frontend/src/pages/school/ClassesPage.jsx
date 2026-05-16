@@ -666,10 +666,14 @@ function SuggestTimetableModal({ target, subjects, teachers, onClose, onSaved })
     periods_per_day: 6,
     start_time: "09:00",
     period_minutes: 45,
+    lunch_break_period: 0,            // 0 = none
+    no_last_period_subjects: [],      // [subject_id]
+    subject_day_pins: {},             // {sid: [day, day]}
   });
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   const subjectMap = Object.fromEntries((subjects || []).map((s) => [s.id, s]));
   const teacherMap = Object.fromEntries((teachers || []).map((t) => [t.id, t]));
@@ -683,14 +687,25 @@ function SuggestTimetableModal({ target, subjects, teachers, onClose, onSaved })
   const generate = async () => {
     setLoading(true);
     try {
-      const { data } = await api.post("/timetable/suggest", {
+      const body = {
         class_id: target.class_id,
         section: target.section,
         days: cfg.days,
         periods_per_day: cfg.periods_per_day,
         start_time: cfg.start_time,
         period_minutes: cfg.period_minutes,
-      });
+      };
+      if (cfg.lunch_break_period && cfg.lunch_break_period >= 1 && cfg.lunch_break_period <= cfg.periods_per_day) {
+        body.lunch_break_period = cfg.lunch_break_period;
+      }
+      if (cfg.no_last_period_subjects.length > 0) {
+        body.no_last_period_subjects = cfg.no_last_period_subjects;
+      }
+      const pins = Object.fromEntries(
+        Object.entries(cfg.subject_day_pins).filter(([, v]) => Array.isArray(v) && v.length > 0)
+      );
+      if (Object.keys(pins).length > 0) body.subject_day_pins = pins;
+      const { data } = await api.post("/timetable/suggest", body);
       setResult(data);
     } catch (err) { toast.error(formatApiError(err)); }
     finally { setLoading(false); }
@@ -715,20 +730,24 @@ function SuggestTimetableModal({ target, subjects, teachers, onClose, onSaved })
 
   const save = async () => {
     if (!result?.slots?.length) return;
-    const missingTeacher = result.slots.filter((s) => !s.teacher_id).length;
+    // Filter out break slots and slots without teacher_id (backend bulk requires teacher_id).
+    const teachingSlots = result.slots.filter((s) => !s.is_break);
+    const missingTeacher = teachingSlots.filter((s) => !s.teacher_id).length;
     if (missingTeacher > 0) {
       if (!window.confirm(`${missingTeacher} slot(s) have no teacher assigned. Save anyway? (You can fix them later on the Timetable page.)`)) return;
     }
     setSaving(true);
     try {
-      // Filter out slots without teacher_id since backend TimetableSlot requires it
-      const payloadSlots = result.slots.filter((s) => s.teacher_id);
-      await api.post("/timetable/bulk", {
+      const payloadSlots = teachingSlots.filter((s) => s.teacher_id);
+      const { data } = await api.post("/timetable/bulk", {
         class_id: target.class_id,
         section: target.section,
         slots: payloadSlots,
       });
-      toast.success(`Timetable saved (${payloadSlots.length} slots).`);
+      const notifMsg = data?.notified_teachers
+        ? ` ${data.notified_teachers} teacher(s) notified via Telegram.`
+        : "";
+      toast.success(`Timetable saved (${payloadSlots.length} slots).${notifMsg}`);
       onSaved();
     } catch (err) { toast.error(formatApiError(err)); }
     finally { setSaving(false); }
@@ -800,17 +819,121 @@ function SuggestTimetableModal({ target, subjects, teachers, onClose, onSaved })
 
         <div className="flex items-center justify-between">
           <div className="text-xs text-ink-muted">
-            {result ? `${result.total_slots} slots across ${result.days.length} days × ${result.periods_per_day} periods` : "Generating…"}
+            {result ? `${result.total_slots} teaching slots across ${result.days.length} days${result.lunch_break_period ? ` (lunch P${result.lunch_break_period})` : ""}` : "Generating…"}
           </div>
-          <button
-            className="btn-secondary"
-            onClick={generate}
-            disabled={loading || cfg.days.length === 0}
-            data-testid="suggest-tt-regenerate"
-          >
-            {loading ? "Generating…" : "Regenerate"}
-          </button>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="btn-secondary text-xs"
+              onClick={() => setShowAdvanced((x) => !x)}
+              data-testid="suggest-tt-toggle-advanced"
+            >
+              {showAdvanced ? "▾ Hide" : "▸ Show"} advanced constraints
+            </button>
+            <button
+              className="btn-secondary"
+              onClick={generate}
+              disabled={loading || cfg.days.length === 0}
+              data-testid="suggest-tt-regenerate"
+            >
+              {loading ? "Generating…" : "Regenerate"}
+            </button>
+          </div>
         </div>
+
+        {showAdvanced && (
+          <div className="p-3 border border-line rounded-md space-y-4" data-testid="suggest-tt-advanced">
+            <div>
+              <label className="label">Lunch break period</label>
+              <select
+                className="input w-auto min-w-[160px]"
+                value={cfg.lunch_break_period}
+                onChange={(e) => setCfg({ ...cfg, lunch_break_period: Number(e.target.value) })}
+                data-testid="suggest-tt-lunch"
+              >
+                <option value={0}>No lunch break</option>
+                {Array.from({ length: cfg.periods_per_day }, (_, i) => i + 1).map((p) => (
+                  <option key={p} value={p}>After Period {p - 1} (i.e. slot P{p} is lunch)</option>
+                ))}
+              </select>
+              <div className="text-xs text-ink-muted mt-1">That period will be left blank every day.</div>
+            </div>
+
+            <div>
+              <label className="label">Subjects forbidden in the LAST period</label>
+              <div className="flex flex-wrap gap-1.5" data-testid="suggest-tt-no-last">
+                {(subjects || []).map((s) => {
+                  const on = (cfg.no_last_period_subjects || []).includes(s.id);
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => setCfg((c) => ({
+                        ...c,
+                        no_last_period_subjects: on
+                          ? c.no_last_period_subjects.filter((x) => x !== s.id)
+                          : [...c.no_last_period_subjects, s.id],
+                      }))}
+                      className={on ? "badge bg-status-warning text-white cursor-pointer" : "badge-neutral cursor-pointer hover:bg-line"}
+                      data-testid={`suggest-tt-no-last-${s.id}`}
+                      aria-pressed={on}
+                    >
+                      {on ? "✕ " : "+ "}{s.name}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="text-xs text-ink-muted mt-1">Use for cognitively heavy subjects like Math you'd rather not place at end-of-day.</div>
+            </div>
+
+            <div>
+              <label className="label">Pin specific subjects to specific days</label>
+              <div className="space-y-2" data-testid="suggest-tt-pins">
+                {(subjects || []).map((s) => {
+                  const pinned = cfg.subject_day_pins[s.id] || [];
+                  return (
+                    <div key={s.id} className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm w-32 truncate" title={s.name}>{s.name}</span>
+                      {Object.entries(DAY_LABELS).map(([d, lbl]) => {
+                        if (!cfg.days.includes(d)) return null;
+                        const on = pinned.includes(d);
+                        return (
+                          <button
+                            key={d}
+                            type="button"
+                            onClick={() => setCfg((c) => {
+                              const cur = c.subject_day_pins[s.id] || [];
+                              const next = on ? cur.filter((x) => x !== d) : [...cur, d];
+                              return {
+                                ...c,
+                                subject_day_pins: { ...c.subject_day_pins, [s.id]: next },
+                              };
+                            })}
+                            className={on ? "badge bg-primary text-white cursor-pointer text-[10px]" : "badge-neutral cursor-pointer hover:bg-line text-[10px]"}
+                            data-testid={`suggest-tt-pin-${s.id}-${d}`}
+                            aria-pressed={on}
+                          >{lbl}</button>
+                        );
+                      })}
+                      {pinned.length > 0 && (
+                        <button
+                          type="button"
+                          className="text-xs text-ink-muted underline"
+                          onClick={() => setCfg((c) => ({
+                            ...c,
+                            subject_day_pins: { ...c.subject_day_pins, [s.id]: [] },
+                          }))}
+                          data-testid={`suggest-tt-pin-clear-${s.id}`}
+                        >clear</button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="text-xs text-ink-muted mt-1">Leave blank to allow any day. Pinned subjects will only be scheduled on the selected days (subject to capacity).</div>
+            </div>
+          </div>
+        )}
 
         {result?.warnings?.length > 0 && (
           <div className="border border-status-warning bg-status-warning-bg/40 rounded-md p-3" data-testid="suggest-tt-warnings">
@@ -839,6 +962,14 @@ function SuggestTimetableModal({ target, subjects, teachers, onClose, onSaved })
                     {Array.from({ length: result.periods_per_day }, (_, i) => i + 1).map((p) => {
                       const slot = grid[`${d}-${p}`];
                       if (!slot) return <td key={p} className="td">—</td>;
+                      if (slot.is_break) {
+                        return (
+                          <td key={p} className="td align-top bg-bg-subtle/60" data-testid={`suggest-cell-${d}-${p}`}>
+                            <div className="text-xs font-medium text-status-warning mb-1">🍽 {slot.break_label || "Break"}</div>
+                            <div className="text-[10px] text-ink-muted">{slot.start_time}–{slot.end_time}</div>
+                          </td>
+                        );
+                      }
                       const subj = subjectMap[slot.subject_id];
                       const candidates = teachersBySubject[slot.subject_id] || [];
                       return (

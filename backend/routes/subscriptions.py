@@ -1,8 +1,12 @@
 """Per-child subscription billing.
 
-Pricing (per active student):
-- Monthly: ₹30
-- Yearly:  ₹300 (≈ 16% discount vs ₹360)
+Pricing comes from environment variables so it stays in sync across docker-compose,
+the backend container, and every API consumer:
+    SUBSCRIPTION_PRICE_PER_CHILD_MONTHLY   (default 30)
+    SUBSCRIPTION_PRICE_PER_CHILD_YEARLY    (default 300)
+    SUBSCRIPTION_MONTHLY_DAYS              (default 30)
+    SUBSCRIPTION_YEARLY_DAYS               (default 365)
+    SUBSCRIPTION_CURRENCY                  (default INR)
 
 Workflow:
 - School Admin views quote at GET /subscriptions/my (includes student count + amounts)
@@ -13,6 +17,7 @@ Workflow:
   → school.subscription becomes "active", valid_until set
 - Platform Super Admin can reject via POST /subscriptions/payments/{id}/reject
 """
+import os
 from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -23,9 +28,28 @@ from core.audit import log_action
 
 router = APIRouter(prefix="/subscriptions", tags=["subscriptions"])
 
-# Per-child pricing (INR)
-PRICE_PER_CHILD_MONTHLY = 30
-PRICE_PER_CHILD_YEARLY = 300
+
+# Per-child pricing pulled from env at call-time so a docker-compose / .env update
+# reflects everywhere (pricing endpoint, quote calculation, validity window) without
+# requiring a code change. Defaults preserve the legacy ₹30 / ₹300 prices.
+def _monthly_price() -> int:
+    return int(os.environ.get("SUBSCRIPTION_PRICE_PER_CHILD_MONTHLY", "30"))
+
+
+def _yearly_price() -> int:
+    return int(os.environ.get("SUBSCRIPTION_PRICE_PER_CHILD_YEARLY", "300"))
+
+
+def _monthly_days() -> int:
+    return int(os.environ.get("SUBSCRIPTION_MONTHLY_DAYS", "30"))
+
+
+def _yearly_days() -> int:
+    return int(os.environ.get("SUBSCRIPTION_YEARLY_DAYS", "365"))
+
+
+def _currency() -> str:
+    return os.environ.get("SUBSCRIPTION_CURRENCY", "INR").strip() or "INR"
 
 
 class PaymentRequest(BaseModel):
@@ -49,7 +73,7 @@ class ApprovalDecide(BaseModel):
 # ----------------- pricing & quotes -----------------
 
 def _calc(student_count: int, cycle: str) -> dict:
-    rate = PRICE_PER_CHILD_MONTHLY if cycle == "monthly" else PRICE_PER_CHILD_YEARLY
+    rate = _monthly_price() if cycle == "monthly" else _yearly_price()
     amount = student_count * rate
     return {"billing_cycle": cycle, "rate_per_child": rate, "students": student_count, "amount": amount}
 
@@ -60,14 +84,15 @@ async def _quote_for_school(db, school_id: str) -> dict:
     students = await tdb.students.count_documents({"school_id": school_id, "status": "active"})
     monthly = _calc(students, "monthly")
     yearly = _calc(students, "yearly")
-    yearly_undiscounted = students * PRICE_PER_CHILD_MONTHLY * 12
+    yearly_undiscounted = students * _monthly_price() * 12
     yearly["savings_vs_monthly"] = max(yearly_undiscounted - yearly["amount"], 0)
     return {
         "school_id": school_id,
         "students_active": students,
         "pricing": {
-            "per_child_monthly": PRICE_PER_CHILD_MONTHLY,
-            "per_child_yearly": PRICE_PER_CHILD_YEARLY,
+            "per_child_monthly": _monthly_price(),
+            "per_child_yearly": _yearly_price(),
+            "currency": _currency(),
         },
         "monthly": monthly,
         "yearly": yearly,
@@ -77,9 +102,11 @@ async def _quote_for_school(db, school_id: str) -> dict:
 @router.get("/pricing")
 async def pricing(_: dict = Depends(get_current_user)):
     return {
-        "per_child_monthly": PRICE_PER_CHILD_MONTHLY,
-        "per_child_yearly": PRICE_PER_CHILD_YEARLY,
-        "currency": "INR",
+        "per_child_monthly": _monthly_price(),
+        "per_child_yearly": _yearly_price(),
+        "monthly_days": _monthly_days(),
+        "yearly_days": _yearly_days(),
+        "currency": _currency(),
     }
 
 
@@ -403,7 +430,7 @@ async def confirm_payment(payment_id: str, user: dict = Depends(require_roles("p
                 start = cur_end
         except Exception:
             start = now
-    days = 30 if pay["billing_cycle"] == "monthly" else 365
+    days = _monthly_days() if pay["billing_cycle"] == "monthly" else _yearly_days()
     valid_until = start + timedelta(days=days)
 
     sub = {
