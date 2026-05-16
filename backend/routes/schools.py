@@ -69,6 +69,14 @@ async def school_people_overview(school_id: str, user: dict = Depends(get_curren
         {"school_id": school_id, "role": "teacher", "is_active": True},
         {"_id": 0, "password_hash": 0},
     ).sort("name", 1).to_list(500)
+    accounts = await db.users.find(
+        {"school_id": school_id, "role": "accounts", "is_active": True},
+        {"_id": 0, "password_hash": 0},
+    ).sort("name", 1).to_list(500)
+    school_admins = await db.users.find(
+        {"school_id": school_id, "role": "school_admin"},
+        {"_id": 0, "password_hash": 0},
+    ).sort("created_at", 1).to_list(50)
     students = await tdb.students.find(
         {"status": "active"},
         {"_id": 0, "id": 1, "student_uid": 1, "name": 1, "class_id": 1, "section": 1, "gender": 1, "parent": 1},
@@ -80,9 +88,13 @@ async def school_people_overview(school_id: str, user: dict = Depends(get_curren
     return {
         "school": school,
         "teachers": teachers,
+        "accounts": accounts,
+        "school_admins": school_admins,
         "students": students,
         "counts": {
             "teachers": len(teachers),
+            "accounts": len(accounts),
+            "school_admins": len(school_admins),
             "students": len(students),
             "classes": len(classes),
         },

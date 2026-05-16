@@ -4,6 +4,7 @@ from core.models import UserCreate, UserUpdate
 from core.auth import require_roles, hash_password, get_current_user
 from core.db import get_db
 from core.utils import new_id, utc_now, clean_doc
+from core.audit import log_action
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -240,6 +241,93 @@ async def set_my_language(payload: LanguagePayload, user: dict = Depends(get_cur
 class ChangePasswordPayload(_BaseModel):
     current_password: str
     new_password: str
+
+
+class AdminResetPasswordPayload(_BaseModel):
+    new_password: str
+
+
+@router.post("/{user_id}/reset-password")
+async def admin_reset_user_password(
+    user_id: str,
+    payload: AdminResetPasswordPayload,
+    user: dict = Depends(get_current_user),
+):
+    """Admin-driven password reset (no current-password verification).
+
+    RBAC:
+    - `school_admin` can reset passwords for `teacher` and `accounts` users in their own school.
+    - `platform_admin` can reset passwords for `school_admin` users in any school.
+    Returns `{ok: True, email, new_password}` so the resetting admin can share the new password
+    with the user manually. The new password is shown on-screen exactly once (audit-logged but never
+    persisted in plaintext).
+    """
+    if user["role"] not in ("school_admin", "platform_admin"):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if len(payload.new_password) < 6:
+        raise HTTPException(status_code=400, detail="New password must be at least 6 characters")
+
+    db = get_db()
+    target = await db.users.find_one({"id": user_id})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    target_role = target.get("role")
+    if user["role"] == "school_admin":
+        if target.get("school_id") != user.get("school_id"):
+            raise HTTPException(status_code=403, detail="Cross-school operation forbidden")
+        if target_role not in ("teacher", "accounts"):
+            raise HTTPException(
+                status_code=403,
+                detail="School admins can only reset passwords for teachers and accounts staff. "
+                       "Contact the Platform Super Admin to reset another school admin's password.",
+            )
+    else:  # platform_admin
+        if target_role != "school_admin":
+            raise HTTPException(
+                status_code=403,
+                detail="Platform Super Admin can only reset passwords for School Super Admins via this endpoint. "
+                       "Use the school admin's panel for teacher/accounts resets.",
+            )
+
+    new_hash = hash_password(payload.new_password)
+    await db.users.update_one(
+        {"id": user_id},
+        {"$set": {
+            "password_hash": new_hash,
+            "password_changed_at": utc_now(),
+            "password_reset_by_id": user["id"],
+            "password_reset_by_role": user["role"],
+            "password_reset_at": utc_now(),
+        }},
+    )
+
+    # Mirror the new hash into the per-school DB (if applicable).
+    try:
+        from core.db import get_school_db
+        school = await db.schools.find_one({"id": target.get("school_id")}, {"_id": 0})
+        if school:
+            sdb = get_school_db(school)
+            await sdb.users.update_one(
+                {"id": user_id},
+                {"$set": {"password_hash": new_hash, "password_changed_at": utc_now()}},
+            )
+    except Exception as e:
+        print(f"[users] mirror reset password to school db failed: {e}")
+
+    await log_action(
+        user["id"], user["role"], target.get("school_id"),
+        "reset_password", "user", user_id,
+        {"target_email": target.get("email"), "target_role": target_role},
+    )
+
+    return {
+        "ok": True,
+        "email": target.get("email"),
+        "name": target.get("name"),
+        "role": target_role,
+        "new_password": payload.new_password,
+    }
 
 
 @router.post("/me/change-password")

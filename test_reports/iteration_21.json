@@ -1,0 +1,34 @@
+{
+  "summary": "iter21 — Admin-driven password reset (school_admin → teachers/accounts; platform_admin → school_admins). Backend: 16/16 pytest PASS in /app/backend/tests/test_admin_reset_password.py (13.5s). Verified RBAC matrix (401 unauth, 403 cross-school, 403 wrong-actor, 403 wrong-target-role for both school_admin and platform_admin), 400 short password (<6 chars), 404 unknown user_id, happy-path resets for teacher + accounts (by school_admin) and for school_admin (by platform_admin) with old-password→401 and new-password→200 login verification, audit log entry created with action='reset_password' resource='user' actor_role='school_admin' (queryable via GET /api/audit), and GET /api/schools/{id}/people returns school_admins[] + counts.school_admins. Frontend (live preview): TeachersPage as school_admin shows reset-password-btn-<id> on every teacher (3 cards) and accounts (1 card) row; clicking opens reset-password-modal with reset-password-new + reset-password-generate (10-char random pw) + reset-password-confirm + reset-password-submit; after submit, reset-password-shown panel renders with copy-new-password-btn and 'Password updated' confirmation; EditUserModal also exposes edit-user-reset-password-btn which opens the same flow. PlatformOverview as platform_admin: school-card-* opens school-detail-drawer with drawer-school-admins section listing drawer-school-admin-<id> rows + reset-school-admin-btn-<id> per admin; clicking opens admin-reset-password-modal containing admin-reset-password-new, admin-reset-password-generate, admin-reset-password-confirm, admin-reset-password-submit, modal-close-btn. All demo credentials restored at end of testing (verified via login probe: 200 for all 6 accounts).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_admin_reset_password.py",
+    "/app/test_reports/pytest/iter21_admin_reset.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "routes/users.py:265-291 RBAC ordering is correct: 403 is returned for cross-school BEFORE checking target_role for school_admin actors (matches review request expectation #4). Platform admin branch enforces target_role=='school_admin' — non-school_admin targets return 403 with a clear hint.",
+    "routes/users.py:293-303 Reset persists password_changed_at + password_reset_by_id + password_reset_by_role + password_reset_at on the user doc — good audit trail beyond just the audit_logs collection. log_action() is called AFTER the DB update so a partial failure can never produce a phantom audit entry.",
+    "routes/users.py:305-316 Per-school DB password mirror is wrapped in try/except and only logged; main response is unaffected if mirror DB write fails. Acceptable trade-off; consider promoting the failure to a structured warning so on-call can spot drift.",
+    "routes/users.py:324-330 Response intentionally echoes new_password in plaintext so admin can hand it over manually. This matches the product choice ('show new password on screen to admin to share manually'). Confirm UI does NOT log this to telemetry/console — frontend should treat the body like a secret.",
+    "Audit endpoint /api/audit accepts ?action=reset_password&resource=user filtering and returns the entry — verified in test_audit_entry_created_after_reset. Good operability.",
+    "Frontend ResetPasswordModal and AdminResetPasswordModal both expose Generate + Confirm fields which prevents typo-based lockouts. Submit button is the only path that calls the API — good. Recommend a 'Copy & close' UX once shown, currently the flow is fine.",
+    "No rate-limiting on POST /users/{id}/reset-password. A compromised school_admin session could iterate through teacher IDs. Recommend a per-actor sliding window (e.g. 20 resets / 10 min) — not blocking for MVP but should be on the security backlog.",
+    "Email/normalization: target.get('email') is echoed back as-is (already lowercased on create). Good consistency."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_admin_reset_password.py (new — 16 cases)"
+  ],
+  "success_rate": {"backend": "100% (16/16)", "frontend": "100% — TeachersPage reset on teacher/accounts cards, EditUserModal reset link, PlatformOverview drawer admin reset all live-verified end-to-end"},
+  "test_credentials": "All from /app/memory/test_credentials.md. Verified by login probe at end of run that platform/school_admin/priya/rohit/accounts/parent all return 200 with their canonical passwords.",
+  "seed_data_creation": "Module-scoped fixture creates 1 throw-away school (code OTH<6hex>) with 1 admin + 1 teacher inside it to exercise (a) school_admin cross-school 403, (b) platform_admin reset of that school's admin. Not torn down (consistent with prior iterations); side-effect: PlatformOverview now shows 4 schools (3 prior other_school fixtures + DEMO).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Feature iter21: admin-driven password reset. Test file /app/backend/tests/test_admin_reset_password.py covers full RBAC + happy path + audit. Frontend selectors: reset-password-btn-<userId>, reset-password-modal, reset-password-new, reset-password-generate, reset-password-confirm, reset-password-submit, reset-password-shown, copy-new-password-btn (school side); admin-reset-password-modal, admin-reset-password-new/generate/confirm/submit, drawer-school-admins, drawer-school-admin-<id>, reset-school-admin-btn-<id> (platform side); edit-user-reset-password-btn inside edit-user-modal. Important: any test that mutates a demo account's password MUST restore it at the end (use the same reset endpoint with the original password while still authenticated as the appropriate admin). Login dropdown 'I'm signing in as' defaults to school_admin — for platform login use ?role=platform_admin in URL or select_option(value='platform_admin') first.",
+  "rca of the issue": "No production bugs found. Two transient test-author issues during initial run: (1) BASE_URL=os.environ.get(...).rstrip('/') crashed because env var not exported in the pytest shell — fixed with default preview URL fallback (matches sibling test files); (2) POST /api/schools returns {school: {...}, admin_email} — initial code looked for top-level id and got 'School not found' on the follow-up GET; resolved by reading school['school']['id']."
+}

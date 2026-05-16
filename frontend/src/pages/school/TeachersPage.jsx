@@ -3,7 +3,7 @@ import { api, formatApiError } from "../../lib/api";
 import { useAuth } from "../../contexts/AuthContext";
 import { PageHeader, Section, Empty } from "../../components/Primitives";
 import { Modal } from "../../components/Modal";
-import { Plus, UserCircle, PencilSimple, Trash, ToggleRight, ToggleLeft, PaperPlaneTilt } from "@phosphor-icons/react";
+import { Plus, UserCircle, PencilSimple, Trash, ToggleRight, ToggleLeft, PaperPlaneTilt, Key, Copy, Check } from "@phosphor-icons/react";
 import toast from "react-hot-toast";
 import PhoneInput from "../../components/PhoneInput";
 
@@ -16,6 +16,7 @@ export default function TeachersPage() {
   const [staff, setStaff] = useState([]);
   const [open, setOpen] = useState(false);
   const [editUser, setEditUser] = useState(null);
+  const [resetUser, setResetUser] = useState(null);
   const [editStaff, setEditStaff] = useState(null);
   const [role, setRole] = useState("teacher"); // 'teacher' | 'accounts' | 'other_staff'
   const [subjects, setSubjects] = useState([]);
@@ -156,6 +157,12 @@ export default function TeachersPage() {
                   ><PencilSimple size={12}/> Edit</button>
                   <button
                     className="btn-secondary text-xs flex-1"
+                    onClick={() => setResetUser(u)}
+                    title="Reset this user's password"
+                    data-testid={`reset-password-btn-${u.id}`}
+                  ><Key size={12}/> Reset password</button>
+                  <button
+                    className="btn-secondary text-xs flex-1"
                     onClick={() => sendCreds(u)}
                     title="Send login over Telegram"
                     data-testid={`send-staff-creds-btn-${u.id}`}
@@ -198,6 +205,13 @@ export default function TeachersPage() {
           subjects={subjects}
           onClose={() => setEditUser(null)}
           onSaved={() => { setEditUser(null); load(); }}
+          onReset={() => { setResetUser(editUser); setEditUser(null); }}
+        />
+      )}
+      {resetUser && (
+        <ResetPasswordModal
+          target={resetUser}
+          onClose={() => setResetUser(null)}
         />
       )}
       {editStaff && (
@@ -312,7 +326,7 @@ function CreateUserModal({ role, open, subjects, onClose, onCreated }) {
   );
 }
 
-function EditUserModal({ target, subjects, onClose, onSaved }) {
+function EditUserModal({ target, subjects, onClose, onSaved, onReset }) {
   const [form, setForm] = useState({
     name: target.name || "",
     phone: target.phone || "",
@@ -403,11 +417,137 @@ function EditUserModal({ target, subjects, onClose, onSaved }) {
           />
           Account is active (can log in)
         </label>
-        <div className="md:col-span-2 flex justify-end gap-2">
-          <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn-primary" disabled={busy} data-testid="edit-user-submit">{busy ? "Saving…" : "Save changes"}</button>
+        <div className="md:col-span-2 flex justify-between items-center gap-2 pt-3 border-t border-line">
+          {onReset ? (
+            <button
+              type="button"
+              className="btn-secondary text-xs"
+              onClick={onReset}
+              data-testid="edit-user-reset-password-btn"
+            ><Key size={12}/> Reset password</button>
+          ) : <span />}
+          <div className="flex gap-2">
+            <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
+            <button type="submit" className="btn-primary" disabled={busy} data-testid="edit-user-submit">{busy ? "Saving…" : "Save changes"}</button>
+          </div>
         </div>
       </form>
+    </Modal>
+  );
+}
+
+
+function ResetPasswordModal({ target, onClose }) {
+  const [newPw, setNewPw] = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null); // { email, name, role, new_password }
+  const [copied, setCopied] = useState(false);
+
+  const generateRandom = () => {
+    const chars = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789";
+    let s = "";
+    for (let i = 0; i < 10; i++) s += chars[Math.floor(Math.random() * chars.length)];
+    setNewPw(s); setConfirmPw(s);
+  };
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (newPw.length < 6) { toast.error("Password must be at least 6 characters"); return; }
+    if (newPw !== confirmPw) { toast.error("Passwords don't match"); return; }
+    setBusy(true);
+    try {
+      const { data } = await api.post(`/users/${target.id}/reset-password`, { new_password: newPw });
+      setResult(data);
+      toast.success("Password reset");
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setBusy(false); }
+  };
+
+  const copy = async () => {
+    if (!result?.new_password) return;
+    try {
+      await navigator.clipboard.writeText(result.new_password);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch { /* ignore */ }
+  };
+
+  return (
+    <Modal open onClose={onClose} title={`Reset password — ${target.name}`} size="sm" testId="reset-password-modal">
+      {result ? (
+        <div className="space-y-4" data-testid="reset-password-result">
+          <div className="rounded-md border border-status-success/40 bg-status-success/10 p-3 text-sm">
+            <div className="font-medium text-status-success mb-1">Password updated</div>
+            <div className="text-ink-soft text-xs">Share the new password with <strong>{result.name}</strong> ({result.email}) — they can use it to log in immediately. This is the only time it will be shown.</div>
+          </div>
+          <div>
+            <label className="label">New password</label>
+            <div className="flex items-stretch gap-2">
+              <input
+                className="input font-mono"
+                readOnly
+                value={result.new_password}
+                data-testid="reset-password-shown"
+              />
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={copy}
+                data-testid="copy-new-password-btn"
+              >{copied ? <Check size={14}/> : <Copy size={14}/>} {copied ? "Copied" : "Copy"}</button>
+            </div>
+          </div>
+          <div className="flex justify-end">
+            <button type="button" className="btn-primary" onClick={onClose} data-testid="reset-password-done-btn">Done</button>
+          </div>
+        </div>
+      ) : (
+        <form onSubmit={submit} className="space-y-4">
+          <div className="text-sm text-ink-soft">
+            Set a new password for <strong>{target.name}</strong> ({target.email}). The user is not notified — share it with them manually.
+          </div>
+          <div>
+            <label className="label">New password</label>
+            <div className="flex items-stretch gap-2">
+              <input
+                className="input"
+                type="text"
+                required
+                minLength={6}
+                value={newPw}
+                onChange={(e) => setNewPw(e.target.value)}
+                placeholder="At least 6 characters"
+                data-testid="reset-password-new"
+                autoFocus
+              />
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={generateRandom}
+                data-testid="reset-password-generate"
+                title="Generate a random password"
+              >Generate</button>
+            </div>
+          </div>
+          <div>
+            <label className="label">Confirm new password</label>
+            <input
+              className="input"
+              type="text"
+              required
+              minLength={6}
+              value={confirmPw}
+              onChange={(e) => setConfirmPw(e.target.value)}
+              data-testid="reset-password-confirm"
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
+            <button type="submit" className="btn-primary" disabled={busy} data-testid="reset-password-submit">{busy ? "Resetting…" : "Reset password"}</button>
+          </div>
+        </form>
+      )}
     </Modal>
   );
 }

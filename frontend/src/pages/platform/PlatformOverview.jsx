@@ -4,7 +4,7 @@ import { PageHeader, KPI, Section, Empty } from "../../components/Primitives";
 import { Modal } from "../../components/Modal";
 import {
   Plus, BellRinging, Buildings, GraduationCap, ChalkboardTeacher,
-  Users, BookOpen, CurrencyInr, CaretRight, X,
+  Users, BookOpen, CurrencyInr, CaretRight, X, Key, Copy, Check,
 } from "@phosphor-icons/react";
 import toast from "react-hot-toast";
 import { formatDate } from "../../lib/utils";
@@ -136,10 +136,12 @@ function fmtMoney(v) {
 }
 
 function SchoolDetailDrawer({ open, detail, loading, onClose }) {
+  const [resetAdmin, setResetAdmin] = useState(null);
   if (!open) return null;
   const school = detail?.school;
   const teachers = detail?.teachers || [];
   const students = detail?.students || [];
+  const schoolAdmins = detail?.school_admins || [];
   return (
     <div className="fixed inset-0 z-40" data-testid="school-detail-drawer">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
@@ -169,6 +171,45 @@ function SchoolDetailDrawer({ open, detail, loading, onClose }) {
               </div>
 
               {school?.id && <MandatoryChannelsPanel schoolId={school.id} schoolName={school.name} />}
+
+              <Section title={`School Super Admin${schoolAdmins.length === 1 ? "" : "s"} (${schoolAdmins.length})`}>
+                {schoolAdmins.length === 0 ? (
+                  <Empty title="No school admin" message="This school doesn't have a Super Admin account yet." />
+                ) : (
+                  <div className="border border-line rounded-md overflow-hidden" data-testid="drawer-school-admins">
+                    <table className="w-full text-sm">
+                      <thead className="bg-bg-subtle text-ink-muted text-xs uppercase tracking-wider">
+                        <tr>
+                          <th className="text-left p-2.5">Name</th>
+                          <th className="text-left p-2.5">Email</th>
+                          <th className="text-left p-2.5">Status</th>
+                          <th className="text-right p-2.5">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {schoolAdmins.map((a) => (
+                          <tr key={a.id} className="border-t border-line/60" data-testid={`drawer-school-admin-${a.id}`}>
+                            <td className="p-2.5 font-medium">{a.name}</td>
+                            <td className="p-2.5 text-ink-soft">{a.email}</td>
+                            <td className="p-2.5">
+                              {a.is_active !== false
+                                ? <span className="badge-success">Active</span>
+                                : <span className="badge-neutral">Inactive</span>}
+                            </td>
+                            <td className="p-2.5 text-right">
+                              <button
+                                className="btn-secondary text-xs"
+                                onClick={() => setResetAdmin(a)}
+                                data-testid={`reset-school-admin-btn-${a.id}`}
+                              ><Key size={12}/> Reset password</button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </Section>
 
               <Section title={`Teachers (${teachers.length})`}>
                 {teachers.length === 0 ? (
@@ -229,7 +270,104 @@ function SchoolDetailDrawer({ open, detail, loading, onClose }) {
           )}
         </div>
       </div>
+      {resetAdmin && (
+        <AdminResetPasswordModal
+          target={resetAdmin}
+          onClose={() => setResetAdmin(null)}
+        />
+      )}
     </div>
+  );
+}
+
+function AdminResetPasswordModal({ target, onClose }) {
+  const [newPw, setNewPw] = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const [copied, setCopied] = useState(false);
+
+  const generateRandom = () => {
+    const chars = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789";
+    let s = "";
+    for (let i = 0; i < 10; i++) s += chars[Math.floor(Math.random() * chars.length)];
+    setNewPw(s); setConfirmPw(s);
+  };
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (newPw.length < 6) { toast.error("Password must be at least 6 characters"); return; }
+    if (newPw !== confirmPw) { toast.error("Passwords don't match"); return; }
+    setBusy(true);
+    try {
+      const { data } = await api.post(`/users/${target.id}/reset-password`, { new_password: newPw });
+      setResult(data);
+      toast.success("School admin password reset");
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setBusy(false); }
+  };
+
+  const copy = async () => {
+    if (!result?.new_password) return;
+    try {
+      await navigator.clipboard.writeText(result.new_password);
+      setCopied(true); setTimeout(() => setCopied(false), 2000);
+    } catch { /* ignore */ }
+  };
+
+  return (
+    <Modal open onClose={onClose} title={`Reset School Admin password — ${target.name}`} size="sm" testId="admin-reset-password-modal">
+      {result ? (
+        <div className="space-y-4" data-testid="admin-reset-password-result">
+          <div className="rounded-md border border-status-success/40 bg-status-success/10 p-3 text-sm">
+            <div className="font-medium text-status-success mb-1">Password updated</div>
+            <div className="text-ink-soft text-xs">Share the new password with <strong>{result.name}</strong> ({result.email}) — they can log in immediately. This is the only time it will be shown.</div>
+          </div>
+          <div>
+            <label className="label">New password</label>
+            <div className="flex items-stretch gap-2">
+              <input className="input font-mono" readOnly value={result.new_password} data-testid="admin-reset-password-shown" />
+              <button type="button" className="btn-secondary" onClick={copy} data-testid="admin-copy-new-password-btn">
+                {copied ? <Check size={14}/> : <Copy size={14}/>} {copied ? "Copied" : "Copy"}
+              </button>
+            </div>
+          </div>
+          <div className="flex justify-end">
+            <button type="button" className="btn-primary" onClick={onClose} data-testid="admin-reset-password-done-btn">Done</button>
+          </div>
+        </div>
+      ) : (
+        <form onSubmit={submit} className="space-y-4">
+          <div className="text-sm text-ink-soft">
+            Set a new password for <strong>{target.name}</strong> ({target.email}). The admin is not notified — share it with them manually.
+          </div>
+          <div>
+            <label className="label">New password</label>
+            <div className="flex items-stretch gap-2">
+              <input
+                className="input" type="text" required minLength={6}
+                value={newPw} onChange={(e) => setNewPw(e.target.value)}
+                placeholder="At least 6 characters"
+                data-testid="admin-reset-password-new" autoFocus
+              />
+              <button type="button" className="btn-secondary" onClick={generateRandom} data-testid="admin-reset-password-generate" title="Generate a random password">Generate</button>
+            </div>
+          </div>
+          <div>
+            <label className="label">Confirm new password</label>
+            <input
+              className="input" type="text" required minLength={6}
+              value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)}
+              data-testid="admin-reset-password-confirm"
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
+            <button type="submit" className="btn-primary" disabled={busy} data-testid="admin-reset-password-submit">{busy ? "Resetting…" : "Reset password"}</button>
+          </div>
+        </form>
+      )}
+    </Modal>
   );
 }
 
