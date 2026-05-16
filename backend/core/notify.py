@@ -95,6 +95,16 @@ async def queue_notification(
     telegram_chat_id: int | str | None = None,
 ):
     db = get_db()
+    # Auto-resolve telegram_chat_id from the recipient's user record if not supplied.
+    # This lets callers (e.g. fee_invoice / attendance / exam) trigger fallback
+    # delivery via Telegram without each call-site having to look it up.
+    if not telegram_chat_id and recipient_id:
+        try:
+            u = await db.users.find_one({"id": recipient_id}, {"_id": 0, "telegram_chat_id": 1})
+            if u and u.get("telegram_chat_id"):
+                telegram_chat_id = u["telegram_chat_id"]
+        except Exception:
+            pass
     doc = {
         "id": new_id(),
         "school_id": school_id,
@@ -112,7 +122,7 @@ async def queue_notification(
         "created_at": utc_now(),
     }
 
-    # WhatsApp — Meta → Twilio → queued
+    # WhatsApp — Meta → Twilio → queued; falls back to Telegram if recipient is linked.
     if channel == "whatsapp" and phone:
         sent, sid_or_err, provider = send_whatsapp(phone, message)
         if sent:
@@ -127,6 +137,46 @@ async def queue_notification(
             doc["status"] = "failed"
             doc["provider"] = provider
             doc["delivery_error"] = sid_or_err
+        # Fallback: if WhatsApp didn't actually send and the recipient has a
+        # linked Telegram chat, deliver the same message via Telegram so the
+        # parent/teacher still gets a real-time alert.
+        if doc["status"] != "sent" and telegram_chat_id:
+            ok, tg_sid_or_err = tg.send_telegram(telegram_chat_id, message)
+            if ok:
+                doc["status"] = "sent"
+                doc["provider"] = "telegram_fallback"
+                doc["provider_sid"] = tg_sid_or_err
+                doc["sent_at"] = utc_now()
+                doc["delivery_note"] = "delivered_via_telegram_fallback"
+
+    # SMS — Twilio (also tries Telegram fallback if recipient is linked)
+    elif channel == "sms" and phone:
+        ok = False
+        client = _twilio()
+        sender = os.environ.get("TWILIO_SMS_FROM", "").strip()
+        if client and sender:
+            try:
+                msg = client.messages.create(from_=sender, body=message, to=phone if phone.startswith("+") else f"+{phone}")
+                doc["status"] = "sent"
+                doc["provider"] = "twilio_sms"
+                doc["provider_sid"] = msg.sid
+                doc["sent_at"] = utc_now()
+                ok = True
+            except Exception as e:
+                doc["status"] = "failed"
+                doc["delivery_error"] = str(e)
+                doc["provider"] = "twilio_sms"
+        else:
+            doc["status"] = "queued"
+            doc["delivery_note"] = "sms_not_configured"
+        if not ok and telegram_chat_id:
+            tok, tg_sid_or_err = tg.send_telegram(telegram_chat_id, message)
+            if tok:
+                doc["status"] = "sent"
+                doc["provider"] = "telegram_fallback"
+                doc["provider_sid"] = tg_sid_or_err
+                doc["sent_at"] = utc_now()
+                doc["delivery_note"] = "delivered_via_telegram_fallback"
 
     # Email — SMTP
     elif channel == "email" and email:

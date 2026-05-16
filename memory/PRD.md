@@ -15,6 +15,11 @@ Multi-school management platform with strict role-based visibility (Platform Adm
 ## Personas
 Platform Admin (SaaS operator), School Principal, Teacher / Class Teacher, Accounts staff, Parent.
 
+## Implemented v1.30 (2026-05-16) — Telegram live + smart fallback
+- Live `TELEGRAM_BOT_TOKEN` configured (@jacks999bot, id 8748483995). Webhook registered against `/api/webhooks/telegram`. Parent linking via `t.me/jacks999bot?start=STU-XXXXX` proven end-to-end (chat_id 6154293089 captured for the test parent in DEMO school).
+- **Smart Telegram fallback** in `core/notify.py`: if the requested channel is `whatsapp` (Meta/Twilio) or `sms` (Twilio) and the send fails OR the provider is unconfigured, the helper now automatically delivers the same message via Telegram when the recipient has a linked `telegram_chat_id`. The notification row records `provider=telegram_fallback` and `delivery_note=delivered_via_telegram_fallback`. Also auto-resolves `telegram_chat_id` from the user record so callers don't have to thread it through every queue_notification call.
+- End-to-end live test on phone +52 5591394174 (chat_id 6154293089): all five notification types delivered to Telegram — `parent_credentials` (Test 1), credential redux (Test 2), `fee_invoice` (Test 3b — fallback), `attendance_absent` (Test 4b — fallback), `exam_schedule_published` (Test 5b — fallback). `timetable_updated` to teachers queues correctly when teachers aren't yet Telegram-linked.
+
 ## Implemented v1.29 (2026-05-16) — QR-pre-fill credential slip + country-code phone input
 - **QR code on credential-slip PDF** — `GET /api/students/{id}/credential-slip` now embeds a QR code (qrcode + reportlab `ImageReader`) on the right of the credentials block. The QR encodes the deep-link `https://<public-host>/login?role=parent&email=<urlencoded-parent-email>` so parents who scan only need to type their password. URL is built from `X-Forwarded-Host` + `X-Forwarded-Proto` (with `Host` fallback and request.url.netloc fallback); `PUBLIC_APP_URL` env override available for cross-host setups. Email is `urllib.parse.quote`-d for safety.
 - **Login pre-fill from URL params** — `pages/Login.jsx` now reads `?role=` and `?email=` (via `useSearchParams`) and prefills the role dropdown + email field on mount. Unknown roles are silently ignored. Used by the QR scan flow above.
