@@ -14,6 +14,7 @@ export default function ClassesPage() {
   const [teachers, setTeachers] = useState([]);
   const [maps, setMaps] = useState([]);
   const [coverage, setCoverage] = useState(null);
+  const [classCoverage, setClassCoverage] = useState(null);
   const [bulkSubject, setBulkSubject] = useState(null);
   const [newClass, setNewClass] = useState({ name: "", sections: "A,B" });
   const [newSub, setNewSub] = useState({ name: "", code: "" });
@@ -38,6 +39,10 @@ export default function ClassesPage() {
       try {
         const cov = await api.get("/academic/subjects/coverage").then((r) => r.data);
         setCoverage(cov);
+      } catch (err) { /* swallow */ }
+      try {
+        const cc = await api.get("/timetable/class-subject-coverage").then((r) => r.data);
+        setClassCoverage(cc);
       } catch (err) { /* swallow */ }
     }
   };
@@ -281,6 +286,12 @@ export default function ClassesPage() {
         </div>
       )}
 
+      {canDelete && (
+        <div className="mt-6">
+          <ClassSubjectMatrix data={classCoverage} />
+        </div>
+      )}
+
       {bulkSubject && (
         <BulkAssignModal
           subject={bulkSubject}
@@ -488,3 +499,132 @@ function BulkAssignModal({ subject, teachers, onClose, onDone }) {
     </Modal>
   );
 }
+
+function ClassSubjectMatrix({ data }) {
+  const [filterClass, setFilterClass] = useState("");
+  const [hideEmpty, setHideEmpty] = useState(false);
+  if (!data) return null;
+  const rows = (data.matrix || []).filter((r) => {
+    if (filterClass && r.class_id !== filterClass) return false;
+    if (hideEmpty && !r.has_timetable) return false;
+    return true;
+  });
+  const distinctClasses = [];
+  const seen = new Set();
+  for (const r of (data.matrix || [])) {
+    if (!seen.has(r.class_id)) {
+      distinctClasses.push({ id: r.class_id, name: r.class_name });
+      seen.add(r.class_id);
+    }
+  }
+  const sectionsWithoutTimetable = (data.sections_total || 0) - (data.sections_with_timetable || 0);
+  return (
+    <Section
+      title="Class ⇄ subject coverage"
+      subtitle={`${data.sections_with_timetable}/${data.sections_total} sections have a timetable · ${data.unscheduled_subjects?.length || 0} unscheduled subject(s) school-wide.`}
+    >
+      <div className="flex flex-wrap items-center gap-3 mb-4" data-testid="class-cov-controls">
+        <select
+          className="input w-auto min-w-[180px]"
+          value={filterClass}
+          onChange={(e) => setFilterClass(e.target.value)}
+          data-testid="class-cov-class-filter"
+        >
+          <option value="">All classes</option>
+          {distinctClasses.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+        <label className="inline-flex items-center gap-2 text-sm cursor-pointer">
+          <input
+            type="checkbox"
+            checked={hideEmpty}
+            onChange={(e) => setHideEmpty(e.target.checked)}
+            data-testid="class-cov-hide-empty"
+          />
+          Hide sections without a timetable
+        </label>
+        {(data.unscheduled_subjects || []).length > 0 && (
+          <div className="ml-auto text-xs text-status-warning inline-flex flex-wrap items-center gap-1" data-testid="class-cov-unscheduled">
+            <Warning size={12} weight="fill" />
+            Unscheduled school-wide:
+            {data.unscheduled_subjects.map((s) => (
+              <span key={s.subject_id} className="badge-warning" data-testid={`class-cov-unscheduled-${s.subject_id}`}>{s.subject_name}</span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {rows.length === 0 ? <Empty title="No matching classes" /> : (
+        <div className="overflow-x-auto" data-testid="class-subject-matrix">
+          <table className="table">
+            <thead>
+              <tr>
+                <th className="th">Class · Section</th>
+                <th className="th">Scheduled subjects (periods/week)</th>
+                <th className="th">Missing subjects</th>
+                <th className="th text-right">Total periods/week</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                const key = `${r.class_id}-${r.section}`;
+                return (
+                  <tr key={key} className="table-row" data-testid={`class-cov-row-${key}`}>
+                    <td className="td">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">{r.class_name} · {r.section}</span>
+                        {!r.has_timetable && (
+                          <span className="badge-warning inline-flex items-center gap-1" data-testid={`class-cov-no-tt-${key}`}>
+                            <Warning size={12} weight="fill" /> No timetable
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="td">
+                      {r.subject_coverage.length === 0 ? (
+                        <span className="text-xs text-status-warning">Nothing scheduled</span>
+                      ) : (
+                        <div className="flex flex-wrap gap-1.5" data-testid={`class-cov-subjects-${key}`}>
+                          {r.subject_coverage.map((sc) => (
+                            <span
+                              key={sc.subject_id}
+                              className="badge-success inline-flex items-center gap-1"
+                              title={sc.teachers.map((t) => t.name).join(", ")}
+                              data-testid={`class-cov-sub-${key}-${sc.subject_id}`}
+                            >
+                              {sc.subject_name}
+                              <span className="opacity-70">×{sc.period_count}</span>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </td>
+                    <td className="td">
+                      {r.missing_subjects.length === 0 ? (
+                        <span className="text-xs text-status-success">All subjects scheduled</span>
+                      ) : (
+                        <div className="flex flex-wrap gap-1.5" data-testid={`class-cov-missing-${key}`}>
+                          {r.missing_subjects.map((m) => (
+                            <span key={m.subject_id} className="badge-warning" data-testid={`class-cov-miss-${key}-${m.subject_id}`}>
+                              {m.subject_name}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </td>
+                    <td className="td text-right font-display" data-testid={`class-cov-total-${key}`}>{r.total_periods}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {sectionsWithoutTimetable > 0 && (
+        <div className="text-xs text-ink-muted mt-3" data-testid="class-cov-footer-hint">
+          Tip: {sectionsWithoutTimetable} section(s) have no timetable yet. Set them up from the Timetable page.
+        </div>
+      )}
+    </Section>
+  );
+}
+
