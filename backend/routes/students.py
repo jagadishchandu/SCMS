@@ -42,6 +42,29 @@ async def _teacher_class_filter(tdb, user: dict) -> dict | None:
     return {"$or": [{"class_id": c, "section": s} for c, s in classes]}
 
 
+def _teacher_can_access_student(tflt: dict | None, student: dict, teacher_id: str) -> bool:
+    """Return True if the teacher should be allowed to view/edit this student.
+    Access path 1: student is in one of the teacher's assigned (class, section) pairs.
+    Access path 2: teacher created the student themselves (created_by_id match).
+    """
+    if student.get("created_by_id") == teacher_id:
+        return True
+    if tflt and not tflt.get("_blocked_"):
+        allowed = {(c["class_id"], c["section"]) for c in tflt.get("$or", [])}
+        if (student.get("class_id"), student.get("section")) in allowed:
+            return True
+    return False
+
+
+async def _enforce_teacher_access(tdb, user: dict, student: dict) -> None:
+    """Raise 403 if a teacher cannot access this student. No-op for other roles."""
+    if user["role"] != "teacher":
+        return
+    tflt = await _teacher_class_filter(tdb, user)
+    if not _teacher_can_access_student(tflt, student, user["id"]):
+        raise HTTPException(status_code=403, detail="Not your class")
+
+
 @router.get("")
 async def list_students(
     class_id: str | None = None,
@@ -76,19 +99,29 @@ async def list_students(
     flt = {"school_id": user["school_id"]}
     if user["role"] == "teacher":
         tflt = await _teacher_class_filter(tdb, user)
-        if tflt and tflt.get("_blocked_"):
-            return []
-        if tflt:
-            flt.update(tflt)
+        # Build the visible set: either (class, section) is in an assigned pair,
+        # OR the teacher created the student themselves. Without the second
+        # clause, a teacher with no formal class assignment couldn't see any
+        # students they had added.
+        or_clauses: list[dict] = []
+        if tflt and not tflt.get("_blocked_") and tflt.get("$or"):
+            or_clauses.extend(tflt["$or"])
+        or_clauses.append({"created_by_id": user["id"]})
+        flt["$or"] = or_clauses
     if class_id:
         flt["class_id"] = class_id
     if section:
         flt["section"] = section
     if q:
-        flt["$or"] = [
+        q_or = [
             {"name": {"$regex": q, "$options": "i"}},
             {"student_uid": {"$regex": q, "$options": "i"}},
         ]
+        # Preserve any existing $or (teacher visibility) by combining via $and.
+        if "$or" in flt:
+            flt["$and"] = [{"$or": flt.pop("$or")}, {"$or": q_or}]
+        else:
+            flt["$or"] = q_or
     students = await tdb.students.find(flt, {"_id": 0}).to_list(5000)
 
     # Enrich each row with parent_telegram_linked so admins can see who's
@@ -192,6 +225,8 @@ async def create_student(payload: StudentCreate, user: dict = Depends(require_ro
         "status": "active",
         "photo": None,
         "created_at": utc_now(),
+        "created_by_id": user["id"],
+        "created_by_role": user["role"],
     }
     await tdb.students.insert_one(doc)
     await log_action(user["id"], user["role"], user["school_id"], "create", "student", doc["id"], {"uid": uid})
@@ -216,13 +251,7 @@ async def get_parent_login(student_id: str, user: dict = Depends(require_roles("
     if not s:
         raise HTTPException(status_code=404, detail="Student not found")
     # Teacher visibility constraint
-    if user["role"] == "teacher":
-        tflt = await _teacher_class_filter(tdb, user)
-        if not tflt or tflt.get("_blocked_"):
-            raise HTTPException(status_code=403, detail="Forbidden")
-        allowed = {(c["class_id"], c["section"]) for c in tflt.get("$or", [])}
-        if (s["class_id"], s["section"]) not in allowed:
-            raise HTTPException(status_code=403, detail="Not your class")
+    await _enforce_teacher_access(tdb, user, s)
     db = get_db()
     parent = await db.users.find_one(
         {"id": s.get("parent_user_id")},
@@ -252,13 +281,7 @@ async def reset_parent_password(student_id: str, user: dict = Depends(require_ro
     s = await tdb.students.find_one({"id": student_id, "school_id": user["school_id"]}, {"_id": 0})
     if not s:
         raise HTTPException(status_code=404, detail="Student not found")
-    if user["role"] == "teacher":
-        tflt = await _teacher_class_filter(tdb, user)
-        if not tflt or tflt.get("_blocked_"):
-            raise HTTPException(status_code=403, detail="Forbidden")
-        allowed = {(c["class_id"], c["section"]) for c in tflt.get("$or", [])}
-        if (s["class_id"], s["section"]) not in allowed:
-            raise HTTPException(status_code=403, detail="Not your class")
+    await _enforce_teacher_access(tdb, user, s)
     if not s.get("parent_user_id"):
         raise HTTPException(status_code=400, detail="Student has no linked parent account")
     from core.auth import hash_password
@@ -304,13 +327,7 @@ async def credential_slip_pdf(student_id: str, request: Request, user: dict = De
     s = await tdb.students.find_one({"id": student_id, "school_id": user["school_id"]}, {"_id": 0})
     if not s:
         raise HTTPException(status_code=404, detail="Student not found")
-    if user["role"] == "teacher":
-        tflt = await _teacher_class_filter(tdb, user)
-        if not tflt or tflt.get("_blocked_"):
-            raise HTTPException(status_code=403, detail="Forbidden")
-        allowed = {(c["class_id"], c["section"]) for c in tflt.get("$or", [])}
-        if (s["class_id"], s["section"]) not in allowed:
-            raise HTTPException(status_code=403, detail="Not your class")
+    await _enforce_teacher_access(tdb, user, s)
     db = get_db()
     parent = await db.users.find_one({"id": s.get("parent_user_id")}, {"_id": 0, "email": 1}) or {}
     parent_email = parent.get("email") or (s.get("parent") or {}).get("email")
@@ -424,13 +441,7 @@ async def send_parent_credentials(
     s = await tdb.students.find_one({"id": student_id, "school_id": user["school_id"]}, {"_id": 0})
     if not s:
         raise HTTPException(status_code=404, detail="Student not found")
-    if user["role"] == "teacher":
-        tflt = await _teacher_class_filter(tdb, user)
-        if not tflt or tflt.get("_blocked_"):
-            raise HTTPException(status_code=403, detail="Forbidden")
-        allowed = {(c["class_id"], c["section"]) for c in tflt.get("$or", [])}
-        if (s["class_id"], s["section"]) not in allowed:
-            raise HTTPException(status_code=403, detail="Not your class")
+    await _enforce_teacher_access(tdb, user, s)
     if not s.get("parent_user_id"):
         raise HTTPException(status_code=400, detail="Student has no linked parent account")
 
@@ -492,10 +503,7 @@ async def upload_photo(student_id: str, file: UploadFile = File(...), user: dict
         raise HTTPException(status_code=403, detail="Forbidden")
     if user["role"] == "parent" and s.get("parent_user_id") != user["id"]:
         raise HTTPException(status_code=403, detail="Forbidden")
-    if user["role"] == "teacher":
-        tflt = await _teacher_class_filter(tdb, user)
-        if tflt and tflt.get("_blocked_"):
-            raise HTTPException(status_code=403, detail="Not your class")
+    await _enforce_teacher_access(tdb, user, s)
 
     data = await file.read()
     if len(data) > 2 * 1024 * 1024:
@@ -522,12 +530,8 @@ async def get_student_by_uid(student_uid: str, user: dict = Depends(get_current_
         raise HTTPException(status_code=404, detail="Student not found")
     if user["role"] == "teacher":
         tflt = await _teacher_class_filter(tdb, user)
-        if tflt and tflt.get("_blocked_"):
+        if not _teacher_can_access_student(tflt, s, user["id"]):
             raise HTTPException(status_code=403, detail="Not your class")
-        if tflt:
-            ok = any((c.get("class_id") == s["class_id"] and c.get("section") == s["section"]) for c in tflt.get("$or", []))
-            if not ok:
-                raise HTTPException(status_code=403, detail="Not your class")
     return s
 
 
@@ -554,18 +558,18 @@ async def update_student(student_id: str, payload: StudentUpdate, user: dict = D
     # Teacher can only edit students in their assigned (class, section). They can
     # also MOVE a student to another (class, section) of theirs — but not into a
     # class they don't teach.
-    if user["role"] == "teacher":
-        tflt = await _teacher_class_filter(tdb, user)
-        if not tflt or tflt.get("_blocked_"):
-            raise HTTPException(status_code=403, detail="Forbidden")
-        allowed = {(c["class_id"], c["section"]) for c in tflt.get("$or", [])}
-        if (s["class_id"], s["section"]) not in allowed:
-            raise HTTPException(status_code=403, detail="Not your class")
+    await _enforce_teacher_access(tdb, user, s)
     update = {k: (v.model_dump() if hasattr(v, "model_dump") else v) for k, v in payload.model_dump(exclude_unset=True).items()}
-    # If teacher tries to move to a class they don't teach, reject.
+    # If a teacher tries to move the student to a class they don't teach, reject.
+    # (Students they created themselves can also stay accessible after a move
+    # because the move target still has to be one they teach.)
     if user["role"] == "teacher" and ("class_id" in update or "section" in update):
+        tflt = await _teacher_class_filter(tdb, user)
         target = (update.get("class_id") or s["class_id"], update.get("section") or s["section"])
-        if target not in allowed:
+        allowed_move = set()
+        if tflt and not tflt.get("_blocked_") and tflt.get("$or"):
+            allowed_move = {(c["class_id"], c["section"]) for c in tflt["$or"]}
+        if target not in allowed_move:
             raise HTTPException(status_code=403, detail="You can only move students to classes you teach")
     if not update:
         return {"ok": True}
@@ -582,13 +586,7 @@ async def delete_student(student_id: str, user: dict = Depends(require_roles("sc
     s = await tdb.students.find_one({"id": student_id, "school_id": user["school_id"]}, {"_id": 0})
     if not s:
         raise HTTPException(status_code=404, detail="Not found")
-    if user["role"] == "teacher":
-        tflt = await _teacher_class_filter(tdb, user)
-        if not tflt or tflt.get("_blocked_"):
-            raise HTTPException(status_code=403, detail="Forbidden")
-        allowed = {(c["class_id"], c["section"]) for c in tflt.get("$or", [])}
-        if (s["class_id"], s["section"]) not in allowed:
-            raise HTTPException(status_code=403, detail="Not your class")
+    await _enforce_teacher_access(tdb, user, s)
     await tdb.students.update_one({"id": student_id, "school_id": user["school_id"]}, {"$set": {"status": "inactive"}})
     await log_action(user["id"], user["role"], user["school_id"], "deactivate", "student", student_id)
     return {"ok": True}

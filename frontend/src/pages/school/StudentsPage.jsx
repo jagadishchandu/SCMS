@@ -481,14 +481,35 @@ function CreateStudentModal({ classes, open, onClose, onCreated }) {
     name: "", class_id: "", section: "A", roll_number: "", gender: "M", dob: "",
     parent: { name: "", relationship: "father", phone: "", whatsapp: "", email: "" },
   });
+  const [activities, setActivities] = useState([]);
+  const [selectedActivities, setSelectedActivities] = useState([]);
   const [busy, setBusy] = useState(false);
   const [createdCreds, setCreatedCreds] = useState(null);
+
+  useEffect(() => {
+    if (!open) return;
+    api.get("/activities").then((r) => setActivities(r.data || [])).catch(() => setActivities([]));
+  }, [open]);
+
+  const toggleActivity = (aid) => {
+    setSelectedActivities((cur) => cur.includes(aid) ? cur.filter((x) => x !== aid) : [...cur, aid]);
+  };
 
   const submit = async (e) => {
     e.preventDefault();
     setBusy(true);
     try {
       const { data } = await api.post("/students", form);
+      // Optional: enroll in selected activities (failure is non-blocking)
+      if (selectedActivities.length > 0) {
+        for (const aid of selectedActivities) {
+          try {
+            await api.post(`/activities/${aid}/enroll`, { student_ids: [data.id] });
+          } catch (e) { /* report below */ }
+        }
+        const names = activities.filter((a) => selectedActivities.includes(a.id)).map((a) => a.name).join(", ");
+        toast.success(`Enrolled in ${selectedActivities.length} activity(ies): ${names}`);
+      }
       toast.success("Student added");
       const pl = data.parent_login;
       if (pl && pl.is_new_account && pl.default_password) {
@@ -497,6 +518,7 @@ function CreateStudentModal({ classes, open, onClose, onCreated }) {
         onCreated();
         setForm({ name: "", class_id: "", section: "A", roll_number: "", gender: "M", dob: "",
           parent: { name: "", relationship: "father", phone: "", whatsapp: "", email: "" } });
+        setSelectedActivities([]);
       }
     } catch (err) { toast.error(formatApiError(err)); }
     finally { setBusy(false); }
@@ -508,6 +530,7 @@ function CreateStudentModal({ classes, open, onClose, onCreated }) {
     onCreated();
     setForm({ name: "", class_id: "", section: "A", roll_number: "", gender: "M", dob: "",
       parent: { name: "", relationship: "father", phone: "", whatsapp: "", email: "" } });
+    setSelectedActivities([]);
   };
 
   if (createdCreds) {
@@ -570,6 +593,31 @@ function CreateStudentModal({ classes, open, onClose, onCreated }) {
         <div><label className="label">Phone</label><PhoneInput required value={form.parent.phone} onChange={(v) => setForm({ ...form, parent: { ...form.parent, phone: v } })} testId="new-parent-phone" /></div>
         <div><label className="label">WhatsApp</label><PhoneInput value={form.parent.whatsapp} onChange={(v) => setForm({ ...form, parent: { ...form.parent, whatsapp: v } })} testId="new-parent-whatsapp" /></div>
         <div className="md:col-span-2"><label className="label">Email (optional — leave blank to auto-generate a login email)</label><input className="input" type="email" value={form.parent.email} onChange={(e) => setForm({ ...form, parent: { ...form.parent, email: e.target.value } })} data-testid="new-parent-email" /></div>
+        <div className="md:col-span-2 pt-2 border-t border-line">
+          <div className="overline">Extra-curricular activities <span className="text-ink-muted normal-case font-normal">· optional</span></div>
+          <div className="text-xs text-ink-muted mt-0.5 mb-2">Tap any activity to enroll this student. Shown in their stats dashboard.</div>
+          {activities.length === 0 ? (
+            <div className="text-xs text-ink-muted italic">No activities created yet for this school. Ask admin to add some on the Activities page.</div>
+          ) : (
+            <div className="flex flex-wrap gap-2" data-testid="new-student-activities">
+              {activities.map((a) => {
+                const sel = selectedActivities.includes(a.id);
+                return (
+                  <button
+                    key={a.id} type="button" onClick={() => toggleActivity(a.id)}
+                    className={sel ? "badge bg-primary text-white cursor-pointer" : "badge-neutral cursor-pointer hover:bg-line"}
+                    data-testid={`activity-chip-${a.id}`}
+                  >
+                    {a.name} <span className="opacity-70 text-[10px] ml-1 capitalize">· {a.category}</span>
+                  </button>
+                );
+              })}
+              {selectedActivities.length > 0 && (
+                <span className="text-xs text-primary self-center">{selectedActivities.length} selected</span>
+              )}
+            </div>
+          )}
+        </div>
         <div className="md:col-span-2 flex justify-end gap-2 pt-2">
           <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
           <button type="submit" className="btn-primary" disabled={busy} data-testid="submit-student-btn">{busy ? "Adding…" : "Add student"}</button>

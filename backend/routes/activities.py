@@ -43,7 +43,7 @@ async def list_activities(category: str | None = None, user: dict = Depends(get_
 
 
 @router.post("")
-async def create_activity(payload: ActivityCreate, user: dict = Depends(require_roles("school_admin"))):
+async def create_activity(payload: ActivityCreate, user: dict = Depends(require_roles("school_admin", "teacher"))):
     tdb = await tenant_db(user["school_id"])
     doc = {
         "id": new_id(),
@@ -83,11 +83,24 @@ async def enroll(activity_id: str, payload: EnrollRequest, user: dict = Depends(
     act = await tdb.activities.find_one({"id": activity_id, "school_id": user["school_id"]})
     if not act:
         raise HTTPException(status_code=404, detail="Activity not found")
+    # Teachers can only enroll students they have access to (their assigned
+    # classes/sections OR students they created themselves).
+    teacher_tflt = None
+    if user["role"] == "teacher":
+        from routes.students import _teacher_class_filter, _teacher_can_access_student
+        teacher_tflt = await _teacher_class_filter(tdb, user)
     added = 0
+    skipped = 0
     for sid in payload.student_ids:
         s = await tdb.students.find_one({"id": sid, "school_id": user["school_id"]})
         if not s:
+            skipped += 1
             continue
+        if user["role"] == "teacher":
+            from routes.students import _teacher_can_access_student
+            if not _teacher_can_access_student(teacher_tflt, s, user["id"]):
+                skipped += 1
+                continue
         try:
             await tdb.activity_enrollments.insert_one({
                 "id": new_id(),
@@ -95,16 +108,26 @@ async def enroll(activity_id: str, payload: EnrollRequest, user: dict = Depends(
                 "activity_id": activity_id,
                 "student_id": sid,
                 "created_at": utc_now(),
+                "enrolled_by_id": user["id"],
+                "enrolled_by_role": user["role"],
             })
             added += 1
         except Exception:
-            pass
-    return {"enrolled": added}
+            skipped += 1
+    return {"enrolled": added, "skipped": skipped}
 
 
 @router.delete("/{activity_id}/enroll/{student_id}")
 async def unenroll(activity_id: str, student_id: str, user: dict = Depends(require_roles("school_admin", "teacher"))):
     tdb = await tenant_db(user["school_id"])
+    if user["role"] == "teacher":
+        s = await tdb.students.find_one({"id": student_id, "school_id": user["school_id"]})
+        if not s:
+            raise HTTPException(status_code=404, detail="Student not found")
+        from routes.students import _teacher_class_filter, _teacher_can_access_student
+        tflt = await _teacher_class_filter(tdb, user)
+        if not _teacher_can_access_student(tflt, s, user["id"]):
+            raise HTTPException(status_code=403, detail="Not your student")
     res = await tdb.activity_enrollments.delete_one({
         "school_id": user["school_id"], "activity_id": activity_id, "student_id": student_id,
     })
@@ -120,6 +143,50 @@ async def roster(activity_id: str, user: dict = Depends(get_current_user)):
     sids = [r["student_id"] for r in rows]
     students = await tdb.students.find({"id": {"$in": sids}}, {"_id": 0}).to_list(2000)
     return students
+
+
+@router.get("/student/{student_id}")
+async def list_student_activities(student_id: str, user: dict = Depends(get_current_user)):
+    """List every activity a student is enrolled in. Visible to the student's
+    parent, any school staff, and (via tenant scope) the platform admin."""
+    tdb = await tenant_db(user["school_id"])
+    s = await tdb.students.find_one({"id": student_id, "school_id": user.get("school_id")}, {"_id": 0})
+    if not s:
+        raise HTTPException(status_code=404, detail="Student not found")
+    if user["role"] == "parent" and s.get("parent_user_id") != user["id"]:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if user["role"] == "teacher":
+        from routes.students import _teacher_class_filter, _teacher_can_access_student
+        tflt = await _teacher_class_filter(tdb, user)
+        if not _teacher_can_access_student(tflt, s, user["id"]):
+            raise HTTPException(status_code=403, detail="Not your class")
+    rows = await tdb.activity_enrollments.find(
+        {"school_id": user["school_id"], "student_id": student_id}, {"_id": 0},
+    ).to_list(200)
+    if not rows:
+        return []
+    aids = [r["activity_id"] for r in rows]
+    acts = await tdb.activities.find(
+        {"school_id": user["school_id"], "id": {"$in": aids}}, {"_id": 0},
+    ).to_list(200)
+    by_aid = {a["id"]: a for a in acts}
+    out = []
+    for r in rows:
+        a = by_aid.get(r["activity_id"])
+        if not a:
+            continue
+        out.append({
+            "enrollment_id": r["id"],
+            "activity_id": a["id"],
+            "name": a.get("name"),
+            "category": a.get("category", "other"),
+            "coach": a.get("coach"),
+            "schedule": a.get("schedule"),
+            "is_active": a.get("is_active", True),
+            "enrolled_at": r.get("created_at"),
+        })
+    out.sort(key=lambda x: x["name"] or "")
+    return out
 
 
 @router.get("/stats/summary")

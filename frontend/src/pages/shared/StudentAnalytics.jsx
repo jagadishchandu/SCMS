@@ -52,7 +52,7 @@ export default function StudentAnalytics() {
 }
 
 function DashView({ dash, onRefresh }) {
-  const { student, attendance, academics, fees, insights } = dash;
+  const { student, attendance, academics, fees, insights, activities } = dash;
   const { user } = useAuth();
 
   const downloadReport = async () => {
@@ -209,6 +209,38 @@ function DashView({ dash, onRefresh }) {
             </div>}
         </Section>
       </div>
+
+      <Section title={`Extra-curricular activities${activities?.total_enrolled ? ` · ${activities.total_enrolled}` : ""}`}>
+        {!activities || activities.total_enrolled === 0 ? (
+          <Empty title="No activities yet" message="This student isn't enrolled in any extra-curricular activity." />
+        ) : (
+          <div className="space-y-3" data-testid="student-activities-section">
+            <div className="flex flex-wrap gap-2">
+              {activities.by_category.map((c) => (
+                <span key={c.category} className="badge bg-primary-light text-primary capitalize" data-testid={`activity-cat-${c.category}`}>
+                  {c.category}: {c.count}
+                </span>
+              ))}
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {activities.enrolled.map((a) => (
+                <div
+                  key={a.activity_id}
+                  className="p-3 rounded-md border border-line/70 bg-bg-subtle"
+                  data-testid={`activity-card-${a.activity_id}`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="font-medium text-ink">{a.name}</div>
+                    <span className="badge-neutral capitalize text-xs">{a.category}</span>
+                  </div>
+                  {a.coach && <div className="text-xs text-ink-muted mt-1">Coach: {a.coach}</div>}
+                  {a.schedule && <div className="text-xs text-ink-muted">{a.schedule}</div>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </Section>
 
       <Section title="Monthly attendance">
         {attendance.monthly.length === 0 ? <Empty title="No data" /> :

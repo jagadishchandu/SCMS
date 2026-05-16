@@ -1,5 +1,16 @@
 # SCMS — School Child Monitoring System (PRD)
 
+## Implemented v1.32.3 (2026-05-16) — Teacher visibility fix + Extra-curricular activities in student creation
+- **P1 bug fix — teachers can now see students they create**:
+  - Root cause: `list_students` returned `[]` when a teacher had no formal `class_teacher_map` or timetable assignment.
+  - Fix: students are now tagged with `created_by_id` + `created_by_role` on insert (`POST /students` + bulk Excel upload). A new helper `_teacher_can_access_student` allows access via *either* (class, section) match *or* `created_by_id == teacher.id`. Applied across 7 student routes (list, get-by-uid, parent-login, parent-password-reset, credential-slip, send-creds, update, delete, upload-photo) by consolidating duplicated RBAC boilerplate into `_enforce_teacher_access`.
+- **NEW — Extra-curricular activities in student creation flow**:
+  - Backend: `POST /api/activities` now allows `teacher` role (was admin-only). `POST /activities/{id}/enroll` & `DELETE /enroll/{sid}` now teacher-scoped — only their accessible students can be enrolled/unenrolled (others returned as `skipped`). New `GET /activities/student/{id}` lists every activity a student is enrolled in. Enrollment rows now record `enrolled_by_id` + `enrolled_by_role` for audit.
+  - Student analytics dashboard (`/analytics/student/{uid}`) now returns `activities: {total_enrolled, by_category, enrolled[]}` plus an insight pill (e.g. "Enrolled in 2 extra-curricular activity(ies) — art, music").
+  - Frontend: `CreateStudentModal` shows a chip grid of school activities (optional) — selecting any auto-enrolls the new student after creation. `StudentAnalytics` page renders an Activities section with category badges + per-activity cards (coach + schedule).
+- **Tests**: `test_v32_teacher_add_student.py` expanded to 13 cases (+4 visibility + 1 update) — all pass. Broader regression: **75/75 tests** across e2e school flow, mandatory channels, bulk creds, fee templates — zero regressions.
+- **Verified live**: Priya created a student → enrolled in Painting (1 enrolled / 0 skipped) → visible immediately in `/activities/student/{id}` and `/analytics/student/{uid}`.
+
 ## Implemented v1.32.2 (2026-05-16) — P1 bug fix: teacher add-student no longer 403s without class assignment
 - **Bug**: A teacher created with `subjects[]` but no `class_teacher_map` row and no timetable slot received `HTTP 403 — "You are not assigned to any class yet"` when adding a student via `POST /api/students`. Subject teachers commonly do data-entry before being formally assigned to a class, so this was blocking real workflows.
 - **Fix** (`routes/students.py::create_student` + `routes/uploads.py::upload_students`): teachers with no formal assignment can now add students to **any class/section in their own school**. Teachers *with* formal assignment remain tightly scoped to their assigned classes/sections (existing behaviour preserved). Class & section validity is verified up-front, returning `400` with the list of available sections.

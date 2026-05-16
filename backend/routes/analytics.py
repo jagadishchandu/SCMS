@@ -84,6 +84,29 @@ async def student_dashboard(student_uid: str, user: dict = Depends(get_current_u
     fee_due = sum(f["due"] for f in fees)
     overdue = sum(f["due"] for f in fees if f.get("status") in ("pending", "partial"))
 
+    # Extra-curricular activities — every activity this student is enrolled in
+    enroll_rows = await tdb.activity_enrollments.find(
+        {"school_id": s["school_id"], "student_id": s["id"]}, {"_id": 0},
+    ).to_list(200)
+    activity_ids = [e["activity_id"] for e in enroll_rows]
+    activities_enrolled = []
+    activities_by_category: dict[str, int] = {}
+    if activity_ids:
+        acts = await tdb.activities.find(
+            {"school_id": s["school_id"], "id": {"$in": activity_ids}}, {"_id": 0},
+        ).to_list(200)
+        for a in acts:
+            activities_enrolled.append({
+                "activity_id": a["id"],
+                "name": a.get("name"),
+                "category": a.get("category", "other"),
+                "coach": a.get("coach"),
+                "schedule": a.get("schedule"),
+                "is_active": a.get("is_active", True),
+            })
+            activities_by_category[a.get("category", "other")] = activities_by_category.get(a.get("category", "other"), 0) + 1
+        activities_enrolled.sort(key=lambda x: x["name"] or "")
+
     # Insights
     insights = []
     if att_pct < 75 and total > 5:
@@ -100,6 +123,9 @@ async def student_dashboard(student_uid: str, user: dict = Depends(get_current_u
         insights.append({"type": "warning", "text": f"High sick leave count ({counts['sick']})."})
     if fee_due > 0:
         insights.append({"type": "danger", "text": f"Fee outstanding: {fee_due}."})
+    if activities_enrolled:
+        cats = ", ".join(sorted({a["category"] for a in activities_enrolled}))
+        insights.append({"type": "success", "text": f"Enrolled in {len(activities_enrolled)} extra-curricular activity(ies) — {cats}."})
 
     return {
         "student": s,
@@ -120,6 +146,11 @@ async def student_dashboard(student_uid: str, user: dict = Depends(get_current_u
         },
         "fees": {
             "total": fee_total, "paid": fee_paid, "due": fee_due, "overdue": overdue,
+        },
+        "activities": {
+            "total_enrolled": len(activities_enrolled),
+            "by_category": [{"category": k, "count": v} for k, v in sorted(activities_by_category.items())],
+            "enrolled": activities_enrolled,
         },
         "insights": insights,
     }

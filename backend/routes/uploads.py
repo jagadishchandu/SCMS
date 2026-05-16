@@ -161,6 +161,8 @@ async def upload_students(file: UploadFile = File(...), user: dict = Depends(req
                 "parent_user_id": parent_user_id,
                 "status": "active",
                 "created_at": utc_now(),
+                "created_by_id": user["id"],
+                "created_by_role": user["role"],
             })
             credentials.append({
                 "row": idx,

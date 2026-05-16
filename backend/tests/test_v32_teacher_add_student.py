@@ -97,6 +97,37 @@ class TestUnassignedTeacherCanAdd:
         assert body["class_id"] == ctx["class_a"]["id"]
         # Parent auto-created
         assert body["parent_login"]["is_new_account"] is True
+        # Track for the visibility test below
+        ctx["created_id"] = body["id"]
+        ctx["created_uid"] = body["student_uid"]
+
+    def test_created_student_appears_in_teachers_list(self, ctx):
+        """v1.32.3 — a teacher must immediately see students they added, even
+        without any class assignment. Tagged via `created_by_id` on the doc."""
+        r = ctx["unassigned_teacher"].get(f"{API}/students", timeout=15)
+        assert r.status_code == 200, r.text
+        students = r.json()
+        ids = [s["id"] for s in students]
+        assert ctx.get("created_id") in ids, f"created student missing from teacher list: {ids}"
+        own = next(s for s in students if s["id"] == ctx["created_id"])
+        assert own.get("created_by_id"), "students must be tagged with created_by_id"
+        assert own["created_by_role"] == "teacher"
+
+    def test_created_student_accessible_via_get_by_uid(self, ctx):
+        r = ctx["unassigned_teacher"].get(f"{API}/students/by-uid/{ctx['created_uid']}", timeout=15)
+        assert r.status_code == 200, r.text
+
+    def test_created_student_accessible_for_parent_login(self, ctx):
+        r = ctx["unassigned_teacher"].get(f"{API}/students/{ctx['created_id']}/parent-login", timeout=15)
+        assert r.status_code == 200, r.text
+
+    def test_created_student_can_be_updated_by_creator(self, ctx):
+        r = ctx["unassigned_teacher"].patch(
+            f"{API}/students/{ctx['created_id']}",
+            json={"medical_notes": "Allergies updated by teacher"},
+            timeout=15,
+        )
+        assert r.status_code == 200, r.text
 
     def test_unassigned_teacher_can_add_to_any_section(self, ctx):
         r = ctx["unassigned_teacher"].post(f"{API}/students", json={
