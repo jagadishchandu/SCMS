@@ -38,3 +38,12 @@ docker run hello-world
 docker --version
 docker compose version
 git --version
+
+git config --global credential.helper 'cache --timeout=3600'
+git clone https://github.com/jagadishchandu/SCMS.git cloud
+Username = jagadishchandu
+Password = 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
+cd SCMS
+docker compose up --build
+docker compose up -d
+docker compose up -d --build
