@@ -3,7 +3,7 @@ import { api, formatApiError } from "../../lib/api";
 import { PageHeader, Section, KPI } from "../../components/Primitives";
 import { Modal } from "../../components/Modal";
 import { currency, formatDate } from "../../lib/utils";
-import { CheckCircle, Clock, XCircle, Package, Users, CalendarBlank, Receipt, ShieldCheck, Warning } from "@phosphor-icons/react";
+import { CheckCircle, Clock, XCircle, Package, Users, CalendarBlank, Receipt, ShieldCheck, Warning, Sparkle } from "@phosphor-icons/react";
 import { useAuth } from "../../contexts/AuthContext";
 import toast from "react-hot-toast";
 
@@ -31,6 +31,21 @@ export default function SchoolSubscription() {
   const pending = data.pending_payment;
   const approval = data.subscription_approval || { status: "not_started" };
   const isApproved = approval.status === "approved";
+
+  // Yearly-upgrade nudge: show when (a) school is approved, (b) no payment is
+  // pending, (c) billed children >= threshold from /pricing, AND (d) school is
+  // either on monthly or not yet subscribed. Saves billed_children × (12×monthly − yearly).
+  const yearlyThreshold = q.pricing?.yearly_nudge_threshold ?? 50;
+  const billedChildren = q.billed_children ?? q.students_active ?? 0;
+  const annualSavings = Math.max(
+    billedChildren * (q.pricing.per_child_monthly * 12 - q.pricing.per_child_yearly),
+    0,
+  );
+  const showYearlyNudge =
+    isApproved &&
+    !pending &&
+    billedChildren >= yearlyThreshold &&
+    (sub.status !== "active" || sub.billing_cycle === "monthly");
 
   return (
     <div data-testid="school-subscription-page">
@@ -89,7 +104,37 @@ export default function SchoolSubscription() {
         </div>
       )}
 
-        <Section title="Choose your plan">
+        {showYearlyNudge && (
+        <div
+          className="relative overflow-hidden rounded-xl border border-primary/30 bg-gradient-to-br from-primary/10 via-bg-surface to-status-success/10 p-5 mb-6"
+          data-testid="yearly-upgrade-banner"
+        >
+          <div className="flex items-start gap-4 flex-wrap">
+            <div className="w-11 h-11 rounded-lg bg-primary/15 text-primary grid place-items-center shrink-0">
+              <Sparkle size={22} weight="duotone" />
+            </div>
+            <div className="flex-1 min-w-[260px]">
+              <div className="font-display text-lg font-medium">
+                Switch to yearly and save {currency(annualSavings)} this year
+              </div>
+              <div className="text-sm text-ink-soft mt-1">
+                You're billed for <span className="font-semibold">{billedChildren}</span> children.
+                At {currency(q.pricing.per_child_monthly)}/child/month vs {currency(q.pricing.per_child_yearly)}/child/year,
+                yearly billing locks in {currency(annualSavings)} of savings (≈ {currency(q.pricing.per_child_monthly * 12 - q.pricing.per_child_yearly)}/child).
+              </div>
+            </div>
+            <button
+              className="btn-primary whitespace-nowrap"
+              onClick={() => { setCycle("yearly"); setOpen(true); }}
+              data-testid="switch-to-yearly-btn"
+            >
+              <Sparkle size={16} /> Switch to yearly · {currency(q.yearly.amount)}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <Section title="Choose your plan">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <PlanCard
             title="Monthly"

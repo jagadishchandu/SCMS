@@ -73,8 +73,9 @@ async def _run_digest_for_all_schools():
 # -------------- Subscription renewal nudge --------------
 async def _run_subscription_nudges():
     """Find schools whose subscription.valid_until is in the next RENEWAL_NUDGE_WINDOW_DAYS,
-    and send a renewal nudge to the school admin via WhatsApp + Email (when available).
-    Skips schools that received a nudge within RENEWAL_NUDGE_COOLDOWN_HOURS."""
+    and send a renewal nudge to the school admin via WhatsApp + Email (when available)
+    AND always via in-app notification. Specifically targets the T-7 and T-1 checkpoints
+    with per-checkpoint cooldown so a school admin gets one nudge at each milestone."""
     from core.db import get_db
     from core.notify import queue_notification
     from core.i18n import render
@@ -82,7 +83,6 @@ async def _run_subscription_nudges():
 
     db = get_db()
     now = datetime.now(timezone.utc)
-    cutoff = now + timedelta(days=RENEWAL_NUDGE_WINDOW_DAYS)
 
     schools = await db.schools.find({"is_active": True}, {"_id": 0}).to_list(500)
     sent_count = 0
@@ -99,13 +99,24 @@ async def _run_subscription_nudges():
                 vu_dt = vu_dt.replace(tzinfo=timezone.utc)
         except Exception:
             continue
-        if vu_dt < now or vu_dt > cutoff:
-            continue  # not in 0..7 day window
+        days_left = (vu_dt.date() - now.date()).days
+        # Specifically fire at T-7 and T-1 checkpoints (plus 0..7 fallback window).
+        checkpoint = None
+        if days_left == 7:
+            checkpoint = "t7"
+        elif days_left == 1:
+            checkpoint = "t1"
+        elif 0 <= days_left <= 7:
+            checkpoint = "window"
+        else:
+            continue
 
-        # Cooldown check
+        template_key = f"subscription_renewal_{checkpoint}" if checkpoint in ("t7", "t1") else RENEWAL_NUDGE_TEMPLATE
+
+        # Cooldown — don't repeat the same checkpoint within 24h
         recent = await db.notifications.find_one({
             "school_id": school["id"],
-            "template": RENEWAL_NUDGE_TEMPLATE,
+            "template": template_key,
             "created_at": {"$gte": now - timedelta(hours=RENEWAL_NUDGE_COOLDOWN_HOURS)},
         })
         if recent:
@@ -120,35 +131,43 @@ async def _run_subscription_nudges():
             continue
 
         lang = admin.get("language") or school.get("language") or "en"
-        days_left = max(0, (vu_dt.date() - now.date()).days)
         renew_url = (os.environ.get("FRONTEND_URL", "").rstrip("/") + "/school/subscription") or "/school/subscription"
         msg = render(
             RENEWAL_NUDGE_TEMPLATE, lang,
             school_name=school["name"],
             valid_until=vu_dt.date().isoformat(),
-            days_left=days_left,
+            days_left=max(days_left, 0),
             renew_url=renew_url,
         )
+        ctx = {"valid_until": vu_dt.isoformat(), "days_left": days_left, "language": lang,
+               "checkpoint": checkpoint, "source": "scheduler"}
+
+        # In-app — always; this is the channel the user wired up for renewal nudges.
+        await queue_notification(
+            school["id"], "school_admin", admin["id"], None,
+            "in_app", template_key, msg, context=ctx,
+        )
+        sent_count += 1
+
+        # Best-effort additional channels (only fire if configured)
         phone = admin.get("phone")
         email = admin.get("email")
         if phone:
             await queue_notification(
                 school["id"], "school_admin", admin["id"], phone,
-                "whatsapp", RENEWAL_NUDGE_TEMPLATE, msg,
-                context={"valid_until": vu_dt.isoformat(), "days_left": days_left, "language": lang, "source": "scheduler"},
+                "whatsapp", template_key, msg, context=ctx,
             )
             sent_count += 1
         if email:
             await queue_notification(
                 school["id"], "school_admin", admin["id"], None,
-                "email", RENEWAL_NUDGE_TEMPLATE, msg,
-                context={"valid_until": vu_dt.isoformat(), "days_left": days_left, "language": lang, "source": "scheduler"},
-                email=email, subject=f"Your SCMS subscription expires in {days_left} day(s)",
+                "email", template_key, msg, context=ctx,
+                email=email, subject=f"Your SCMS subscription expires in {max(days_left,0)} day(s)",
             )
             sent_count += 1
         await log_action("system", "platform_admin", school["id"], "subscription_renewal_nudge",
                          "subscription", school["id"],
-                         meta={"days_left": days_left, "valid_until": vu_dt.isoformat()})
+                         meta={"days_left": days_left, "valid_until": vu_dt.isoformat(), "checkpoint": checkpoint})
     log.info("[scheduler] Subscription nudge sent %d messages", sent_count)
     return sent_count
 

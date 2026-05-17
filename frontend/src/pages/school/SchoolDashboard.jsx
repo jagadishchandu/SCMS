@@ -4,7 +4,7 @@ import { useAuth } from "../../contexts/AuthContext";
 import { PageHeader, KPI, Section, Empty } from "../../components/Primitives";
 import { formatDate, currency, CHART_COLORS } from "../../lib/utils";
 import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip } from "recharts";
-import { PaperPlaneTilt, Warning, UserCircle, Users, X, Buildings } from "@phosphor-icons/react";
+import { PaperPlaneTilt, Warning, UserCircle, Users, X, Buildings, Receipt, CalendarBlank } from "@phosphor-icons/react";
 import { Link } from "react-router-dom";
 import toast from "react-hot-toast";
 
@@ -12,6 +12,7 @@ export default function SchoolDashboard() {
   const { user } = useAuth();
   const [data, setData] = useState(null);
   const [risks, setRisks] = useState([]);
+  const [subInfo, setSubInfo] = useState(null);
   const [sendingDigest, setSendingDigest] = useState(false);
   const [rosterOpen, setRosterOpen] = useState(false);
   const [roster, setRoster] = useState(null);
@@ -20,6 +21,7 @@ export default function SchoolDashboard() {
   const load = () => Promise.all([
     api.get("/analytics/school").then((r) => setData(r.data)),
     api.get("/analytics/risk-students", { params: { limit: 5 } }).then((r) => setRisks(r.data)).catch(() => setRisks([])),
+    api.get("/subscriptions/my").then((r) => setSubInfo(r.data)).catch(() => setSubInfo(null)),
   ]);
   useEffect(() => { load(); }, []);
 
@@ -84,6 +86,47 @@ export default function SchoolDashboard() {
         <KPI label="Fees outstanding" value={currency(k.fees_outstanding)} accent={k.fees_outstanding > 0 ? "danger" : "success"} testId="kpi-fees-outstanding" />
         <KPI label="Notifications sent" value={k.notifications_sent} accent="info" testId="kpi-notifications-sent" />
       </div>
+
+      {subInfo && subInfo.quote && (
+        <div
+          className="rounded-xl border border-line bg-bg-surface p-5 mb-6 flex flex-col md:flex-row gap-4 md:items-center md:justify-between"
+          data-testid="next-bill-widget"
+        >
+          <div className="flex items-start gap-3 min-w-0">
+            <div className="w-11 h-11 rounded-lg bg-primary/10 text-primary grid place-items-center shrink-0">
+              <Receipt size={22} weight="duotone" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-xs uppercase tracking-wider text-ink-muted">Next bill estimate</div>
+              <div className="font-display text-2xl font-medium mt-0.5" data-testid="next-bill-amount">
+                {currency(
+                  subInfo.subscription?.billing_cycle === "yearly"
+                    ? subInfo.quote.yearly.amount
+                    : subInfo.quote.monthly.amount,
+                )}
+                <span className="text-sm text-ink-muted ml-2 font-sans">
+                  / {subInfo.subscription?.billing_cycle === "yearly" ? "year" : "month"}
+                </span>
+              </div>
+              <div className="text-xs text-ink-soft mt-1">
+                Billed for <span className="font-medium">{subInfo.quote.billed_children ?? subInfo.quote.students_active}</span> children
+                {" · "}
+                {subInfo.subscription?.status === "active" && subInfo.subscription?.valid_until ? (
+                  <span data-testid="next-bill-valid-until">
+                    <CalendarBlank size={12} className="inline mr-0.5" />
+                    Renews on {formatDate(subInfo.subscription.valid_until)}
+                  </span>
+                ) : (
+                  <span className="text-status-danger">No active subscription · pay now to unlock features</span>
+                )}
+              </div>
+            </div>
+          </div>
+          <Link to="/school/subscription" className="btn-secondary whitespace-nowrap" data-testid="next-bill-cta">
+            <Receipt size={14} /> Manage subscription
+          </Link>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
         <div className="lg:col-span-2">

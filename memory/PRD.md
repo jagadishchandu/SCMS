@@ -16,7 +16,35 @@
 - School Super Admin (per school)
 - Accounts / Teacher / Parent
 
-## Iteration — 2026-01 (current session)
+## Iteration — 2026-01 (current session, part 2)
+**Yearly upgrade nudge** (env-tunable threshold, default 50 children)
+- `GET /api/subscriptions/pricing` now returns `yearly_nudge_threshold` from
+  `SUBSCRIPTION_YEARLY_NUDGE_THRESHOLD` (default 50).
+- `SchoolSubscription.jsx` shows a one-click upgrade banner whenever the
+  school is approved, has no pending payment, billed_children ≥ threshold,
+  and is currently on monthly / not subscribed. Banner CTA opens the existing
+  PayModal pre-set to yearly.
+
+**Next-bill widget on school dashboard**
+- `SchoolDashboard.jsx` now fetches `/api/subscriptions/my` and renders a
+  prominent "Next bill estimate" card showing the live amount (monthly or
+  yearly based on current cycle), child count, and renewal date.
+
+**Platform admin — Active Subscriptions tab + in-app reminders**
+- New backend endpoint `GET /api/subscriptions/active` — every school's
+  cycle, amount, last renewed, valid_until, days_left, last_nudge timestamp.
+- New backend endpoint `POST /api/subscriptions/notify/{school_id}` — sends
+  an in-app reminder (auto-generated body based on days_left, or custom).
+  Adds a row in `db.notifications` with `channel="in_app"` so the school
+  admin sees it on their notifications page.
+- `core/notify.py`: added explicit `in_app` channel branch (logs row as `sent`).
+- `core/scheduler.py`: daily 08:00 IST job now fires at **T-7** and **T-1**
+  with per-checkpoint cooldown (24h) and always queues an `in_app`
+  notification in addition to any configured WhatsApp/Email channels.
+- `SubscriptionsPage.jsx` (platform admin) gains an "Active subscriptions"
+  tab with a "Notify school" button per row.
+
+## Iteration — 2026-01 (current session, part 1)
 **Bug fix — subscription charge stuck at ₹0**
 - `_quote_for_school` (backend/routes/subscriptions.py) now bills the *greater of*
   `approved_children_count`, `requested_children_count` and live `students_active`.

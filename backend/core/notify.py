@@ -210,5 +210,13 @@ async def queue_notification(
             doc["provider"] = "telegram"
             doc["delivery_error"] = sid_or_err
 
+    # In-app — no external send; the row itself is the delivery (visible at
+    # /api/notifications for the recipient). Marked "sent" immediately so the
+    # platform admin can see it landed.
+    elif channel == "in_app":
+        doc["status"] = "sent"
+        doc["provider"] = "in_app"
+        doc["sent_at"] = utc_now()
+
     await db.notifications.insert_one(doc)
     return doc

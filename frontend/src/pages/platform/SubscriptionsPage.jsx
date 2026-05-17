@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { api, formatApiError } from "../../lib/api";
 import { PageHeader, Section, Empty, KPI } from "../../components/Primitives";
 import { currency, formatDate } from "../../lib/utils";
-import { CheckCircle, XCircle, Receipt, Clock, ShieldCheck } from "@phosphor-icons/react";
+import { CheckCircle, XCircle, Receipt, Clock, ShieldCheck, Bell, CalendarBlank, Warning } from "@phosphor-icons/react";
 import toast from "react-hot-toast";
 
 const STATUS_BADGE = {
@@ -15,18 +15,21 @@ export default function SubscriptionsPage() {
   const [payments, setPayments] = useState([]);
   const [approvalReqs, setApprovalReqs] = useState([]);
   const [pricing, setPricing] = useState({ per_child_monthly: 30, per_child_yearly: 300, currency: "INR" });
+  const [active, setActive] = useState({ rows: [], summary: {}, total: 0 });
   const [busy, setBusy] = useState(null);
   const [tab, setTab] = useState("approval_requests");
 
   const load = async () => {
-    const [p, pr, ar] = await Promise.all([
+    const [p, pr, ar, av] = await Promise.all([
       api.get("/subscriptions/payments").then((r) => r.data),
       api.get("/subscriptions/pricing").then((r) => r.data),
       api.get("/subscriptions/approval-requests").then((r) => r.data).catch(() => []),
+      api.get("/subscriptions/active").then((r) => r.data).catch(() => ({ rows: [], summary: {}, total: 0 })),
     ]);
     setPayments(p);
     setPricing(pr);
     setApprovalReqs(ar);
+    setActive(av);
   };
   useEffect(() => { load(); }, []);
 
@@ -62,6 +65,23 @@ export default function SubscriptionsPage() {
     finally { setBusy(null); }
   };
 
+  const notifySchool = async (row) => {
+    const customMsg = window.prompt(
+      `Send an in-app reminder to ${row.school_name}.\nLeave blank for the auto-generated reminder.`,
+      "",
+    );
+    if (customMsg === null) return;
+    setBusy(row.school_id);
+    try {
+      const { data: res } = await api.post(`/subscriptions/notify/${row.school_id}`, {
+        message: customMsg || null,
+      });
+      toast.success(`Notified ${res.notified} admin(s) at ${row.school_name}`);
+      load();
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setBusy(null); }
+  };
+
   const filtered = payments.filter((p) => p.status === tab);
   const counts = {
     pending_confirmation: payments.filter((p) => p.status === "pending_confirmation").length,
@@ -75,16 +95,18 @@ export default function SubscriptionsPage() {
       <PageHeader eyebrow="Billing" title="Subscriptions & payments"
         subtitle={`Per-child pricing: ${currency(pricing.per_child_monthly)}/child/month or ${currency(pricing.per_child_yearly)}/child/year. Approve subscription requests and confirm payments raised by schools.`} />
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-4 mb-8">
         <KPI label="Approval requests" value={approvalCount} accent="danger" testId="kpi-approval-requests" />
         <KPI label="Pending payments" value={counts.pending_confirmation} accent="warning" testId="kpi-pending" />
-        <KPI label="Confirmed" value={counts.confirmed} accent="success" testId="kpi-confirmed" />
-        <KPI label="Rejected" value={counts.rejected} accent="danger" testId="kpi-rejected" />
+        <KPI label="Active subscriptions" value={active.summary?.active || 0} accent="success" testId="kpi-active-subs" />
+        <KPI label="Expiring ≤ 7 days" value={active.summary?.expiring_soon || 0} accent="warning" testId="kpi-expiring" />
+        <KPI label="Expired" value={active.summary?.expired || 0} accent="danger" testId="kpi-expired" />
       </div>
 
       <div className="flex flex-wrap gap-2 mb-4" role="tablist">
         {[
           ["approval_requests", `Approval requests (${approvalCount})`],
+          ["active", `Active subscriptions (${active.summary?.active || 0})`],
           ["pending_confirmation", `Pending payments (${counts.pending_confirmation})`],
           ["confirmed", `Confirmed (${counts.confirmed})`],
           ["rejected", `Rejected (${counts.rejected})`],
@@ -141,6 +163,87 @@ export default function SubscriptionsPage() {
                       </td>
                     </tr>
                   ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Section>
+      ) : tab === "active" ? (
+        <Section title="Active subscriptions"
+                 subtitle="Every school's billing cycle, last renewal date, and how many days remain before they expire. Use the bell icon to send an in-app reminder.">
+          {(active.rows || []).length === 0 ? (
+            <Empty title="No subscription records yet"
+                   message="Once schools have at least one confirmed payment, they will appear here." />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="table">
+                <thead><tr>
+                  <th className="th">School</th>
+                  <th className="th">Status</th>
+                  <th className="th">Cycle</th>
+                  <th className="th">Last renewed</th>
+                  <th className="th">Valid until</th>
+                  <th className="th">Days left</th>
+                  <th className="th">Last reminder</th>
+                  <th className="th">Action</th>
+                </tr></thead>
+                <tbody>
+                  {(active.rows || []).map((r) => {
+                    const isActive = r.status === "active" && !r.is_expired;
+                    const isExpiring = isActive && r.days_left !== null && r.days_left <= 7;
+                    return (
+                    <tr key={r.school_id} className="table-row" data-testid={`active-row-${r.school_id}`}>
+                      <td className="td">
+                        <div className="font-medium">{r.school_name}</div>
+                        <div className="text-xs text-ink-muted font-mono">{r.school_code}</div>
+                      </td>
+                      <td className="td">
+                        {r.is_expired ? (
+                          <span className="badge-danger"><Warning size={12}/> expired</span>
+                        ) : isActive ? (
+                          <span className={isExpiring ? "badge-warning" : "badge-success"}>
+                            {isExpiring ? <Clock size={12}/> : <CheckCircle size={12}/>}{" "}active
+                          </span>
+                        ) : (
+                          <span className="badge-neutral">none</span>
+                        )}
+                      </td>
+                      <td className="td capitalize">{r.billing_cycle || "—"}</td>
+                      <td className="td text-xs text-ink-muted">{r.valid_from ? formatDate(r.valid_from) : "—"}</td>
+                      <td className="td text-xs" data-testid={`valid-until-${r.school_id}`}>
+                        <CalendarBlank size={12} className="inline mr-1 text-ink-muted"/>
+                        {r.valid_until ? formatDate(r.valid_until) : "—"}
+                      </td>
+                      <td className="td">
+                        {r.days_left === null ? "—" : (
+                          <span className={r.is_expired ? "text-status-danger font-semibold"
+                                          : isExpiring ? "text-amber-700 font-semibold"
+                                          : "text-ink"} data-testid={`days-left-${r.school_id}`}>
+                            {r.is_expired ? `${Math.abs(r.days_left)}d ago` : `${r.days_left}d`}
+                          </span>
+                        )}
+                      </td>
+                      <td className="td text-xs text-ink-muted">
+                        {r.last_nudge?.created_at ? (
+                          <>
+                            <div>{formatDate(r.last_nudge.created_at)}</div>
+                            <div className="font-mono text-[10px]">{r.last_nudge.channel}</div>
+                          </>
+                        ) : "—"}
+                      </td>
+                      <td className="td">
+                        <button
+                          className="btn-secondary text-xs px-3 py-1.5"
+                          disabled={busy === r.school_id || r.status !== "active"}
+                          onClick={() => notifySchool(r)}
+                          data-testid={`notify-school-${r.school_id}`}
+                          title={r.status !== "active" ? "No active subscription to remind about" : "Send in-app reminder"}
+                        >
+                          <Bell size={14}/> {busy === r.school_id ? "Sending…" : "Notify school"}
+                        </button>
+                      </td>
+                    </tr>
+                  )})}
                 </tbody>
               </table>
             </div>

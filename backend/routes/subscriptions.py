@@ -52,6 +52,14 @@ def _currency() -> str:
     return os.environ.get("SUBSCRIPTION_CURRENCY", "INR").strip() or "INR"
 
 
+def _yearly_nudge_threshold() -> int:
+    """Min billed-children count at which we suggest switching from monthly to yearly."""
+    try:
+        return int(os.environ.get("SUBSCRIPTION_YEARLY_NUDGE_THRESHOLD", "50"))
+    except ValueError:
+        return 50
+
+
 class PaymentRequest(BaseModel):
     billing_cycle: str = Field(..., pattern="^(monthly|yearly)$")
     payment_reference: str | None = None  # UPI/UTR/bank ref
@@ -126,6 +134,7 @@ async def pricing(_: dict = Depends(get_current_user)):
         "monthly_days": _monthly_days(),
         "yearly_days": _yearly_days(),
         "currency": _currency(),
+        "yearly_nudge_threshold": _yearly_nudge_threshold(),
     }
 
 
@@ -529,6 +538,152 @@ async def admin_set_valid_until(payload: AdminSetValidUntil, user: dict = Depend
                      "subscription", payload.school_id,
                      meta={"valid_until": vu.isoformat(), "reason": payload.reason})
     return {"ok": True, "school_id": payload.school_id, "valid_until": vu.isoformat()}
+
+
+# ----------------- usage stats (used by older overview cards) -----------------
+
+@router.get("/active")
+async def list_active_subscriptions(user: dict = Depends(require_roles("platform_admin"))):
+    """Platform admin overview of every school's active subscription:
+    school identity, cycle, amount, valid_until, days_left, and the timestamp
+    of the most recent renewal nudge (so the admin can see who's been notified)."""
+    from datetime import datetime as _dt
+    db = get_db()
+    schools = await db.schools.find({}, {"_id": 0}).sort("name", 1).to_list(2000)
+    now = utc_now()
+    rows = []
+    for s in schools:
+        sub = s.get("subscription") or {}
+        vu = sub.get("valid_until")
+        days_left = None
+        valid_until_iso = None
+        is_expired = False
+        if vu:
+            try:
+                vu_dt = vu if isinstance(vu, _dt) else _dt.fromisoformat(str(vu).replace("Z", "+00:00"))
+                if vu_dt.tzinfo is None:
+                    from datetime import timezone as _tz
+                    vu_dt = vu_dt.replace(tzinfo=_tz.utc)
+                days_left = (vu_dt.date() - now.date()).days
+                is_expired = vu_dt < now
+                valid_until_iso = vu_dt.isoformat()
+            except Exception:
+                pass
+        # last nudge sent for this school (any in-app or out-of-band renewal nudge)
+        last_nudge = await db.notifications.find_one(
+            {"school_id": s["id"], "template": {"$in": [
+                "subscription_renewal", "subscription_renewal_manual",
+                "subscription_renewal_t7", "subscription_renewal_t1",
+            ]}},
+            {"_id": 0, "created_at": 1, "channel": 1, "template": 1},
+            sort=[("created_at", -1)],
+        )
+        rows.append({
+            "school_id": s["id"],
+            "school_name": s["name"],
+            "school_code": s.get("code"),
+            "status": sub.get("status") or "none",
+            "billing_cycle": sub.get("billing_cycle"),
+            "amount": sub.get("amount"),
+            "students_count": sub.get("students_count"),
+            "valid_from": (sub.get("valid_from").isoformat() if isinstance(sub.get("valid_from"), _dt) else sub.get("valid_from")),
+            "valid_until": valid_until_iso,
+            "days_left": days_left,
+            "is_expired": is_expired,
+            "last_nudge": last_nudge,
+        })
+    # Summary
+    summary = {
+        "active": sum(1 for r in rows if r["status"] == "active" and not r["is_expired"]),
+        "expiring_soon": sum(1 for r in rows if r["status"] == "active" and r["days_left"] is not None and 0 <= r["days_left"] <= 7),
+        "expired": sum(1 for r in rows if r["is_expired"]),
+        "no_subscription": sum(1 for r in rows if r["status"] != "active"),
+    }
+    return {"rows": rows, "summary": summary, "total": len(rows)}
+
+
+class NotifySchoolPayload(BaseModel):
+    message: str | None = None  # optional custom message; default is auto-generated from days_left
+
+
+@router.post("/notify/{school_id}")
+async def notify_school_renewal(school_id: str, payload: NotifySchoolPayload,
+                                 user: dict = Depends(require_roles("platform_admin"))):
+    """Platform Super Admin → in-app nudge to the school's admin. The notification
+    appears in the school admin's `/school/notifications` page (channel='in_app').
+    """
+    from datetime import datetime as _dt
+    from core.notify import queue_notification
+
+    db = get_db()
+    school = await db.schools.find_one({"id": school_id})
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+
+    sub = school.get("subscription") or {}
+    vu = sub.get("valid_until")
+    days_left = None
+    valid_until_str = "—"
+    if vu:
+        try:
+            vu_dt = vu if isinstance(vu, _dt) else _dt.fromisoformat(str(vu).replace("Z", "+00:00"))
+            from datetime import timezone as _tz
+            if vu_dt.tzinfo is None:
+                vu_dt = vu_dt.replace(tzinfo=_tz.utc)
+            days_left = (vu_dt.date() - utc_now().date()).days
+            valid_until_str = vu_dt.date().isoformat()
+        except Exception:
+            pass
+
+    if payload.message:
+        body = payload.message
+    elif days_left is None:
+        body = "Reminder from SCMS: your school subscription is not active. Please submit a payment to keep features enabled."
+    elif days_left < 0:
+        body = (
+            f"Reminder from SCMS: your subscription expired on {valid_until_str} "
+            f"({abs(days_left)} day(s) ago). Please renew immediately to avoid feature lockout."
+        )
+    else:
+        body = (
+            f"Reminder from SCMS: your subscription expires in {days_left} day(s) "
+            f"(on {valid_until_str}). Please renew to keep features active."
+        )
+
+    # Notify every active school admin for this school (usually one, but supports many).
+    admins = await db.users.find(
+        {"school_id": school_id, "role": "school_admin", "is_active": True},
+        {"_id": 0},
+    ).to_list(50)
+    if not admins:
+        raise HTTPException(status_code=400, detail="No active school admin to notify")
+
+    notified = 0
+    for admin in admins:
+        await queue_notification(
+            school_id=school_id,
+            recipient_type="school_admin",
+            recipient_id=admin["id"],
+            phone=None,
+            channel="in_app",
+            template="subscription_renewal_manual",
+            message=body,
+            context={
+                "valid_until": valid_until_str,
+                "days_left": days_left,
+                "source": "platform_admin_manual",
+                "sent_by": user["email"],
+            },
+        )
+        notified += 1
+
+    await log_action(
+        user["id"], user["role"], school_id, "notify_school_renewal",
+        "subscription", school_id,
+        meta={"days_left": days_left, "valid_until": valid_until_str, "notified": notified},
+    )
+    return {"ok": True, "notified": notified, "message": body, "days_left": days_left,
+            "valid_until": valid_until_str}
 
 
 # ----------------- usage stats (used by older overview cards) -----------------
