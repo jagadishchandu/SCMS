@@ -1,10 +1,11 @@
 """Educational trips management.
 
 Admins create/manage trips. Teachers and parents view them (read-only).
+Parents RSVP for their child(ren); school_admin / teacher see the RSVP roster.
 """
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Literal
 
 from core.auth import require_roles, get_current_user
 from core.db import get_db, tenant_db
@@ -163,3 +164,174 @@ async def delete_trip(trip_id: str, user: dict = Depends(require_roles("school_a
         raise HTTPException(status_code=404, detail="Trip not found")
     await log_action(user["id"], user["role"], user["school_id"], "delete", "trip", trip_id, {})
     return {"ok": True}
+
+
+
+# --------- RSVP (parent confirms attendance for their child) ---------
+
+class RSVPSubmit(BaseModel):
+    student_id: str
+    status: Literal["confirmed", "declined"]
+    note: Optional[str] = None
+
+
+async def _ensure_trip(tdb, school_id: str, trip_id: str) -> dict:
+    trip = await tdb.trips.find_one({"id": trip_id, "school_id": school_id}, {"_id": 0})
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    return trip
+
+
+@router.post("/{trip_id}/rsvp")
+async def submit_rsvp(trip_id: str, payload: RSVPSubmit, user: dict = Depends(require_roles("parent"))):
+    """Parent confirms or declines attendance for one of their children."""
+    tdb = await tenant_db(user["school_id"])
+    trip = await _ensure_trip(tdb, user["school_id"], trip_id)
+    if trip.get("status") == "cancelled":
+        raise HTTPException(status_code=400, detail="Trip is cancelled — RSVP not allowed.")
+
+    student = await tdb.students.find_one(
+        {"id": payload.student_id, "school_id": user["school_id"]}, {"_id": 0},
+    )
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    if student.get("parent_user_id") != user["id"]:
+        raise HTTPException(status_code=403, detail="Not your child")
+
+    # If trip is restricted to specific classes, refuse if child isn't in scope.
+    if trip.get("class_ids") and student.get("class_id") not in trip["class_ids"]:
+        raise HTTPException(status_code=400, detail="This trip is not open to your child's class.")
+
+    now = utc_now()
+    existing = await tdb.trip_rsvps.find_one(
+        {"trip_id": trip_id, "student_id": payload.student_id, "school_id": user["school_id"]},
+        {"_id": 0},
+    )
+    if existing:
+        await tdb.trip_rsvps.update_one(
+            {"id": existing["id"]},
+            {"$set": {"status": payload.status, "note": payload.note, "updated_at": now}},
+        )
+        doc = {**existing, "status": payload.status, "note": payload.note, "updated_at": now}
+    else:
+        doc = {
+            "id": new_id(),
+            "school_id": user["school_id"],
+            "trip_id": trip_id,
+            "student_id": payload.student_id,
+            "student_name": student.get("name"),
+            "student_uid": student.get("student_uid"),
+            "class_id": student.get("class_id"),
+            "section": student.get("section"),
+            "parent_user_id": user["id"],
+            "parent_name": user.get("name"),
+            "status": payload.status,
+            "note": payload.note,
+            "created_at": now,
+            "updated_at": now,
+        }
+        await tdb.trip_rsvps.insert_one(doc)
+
+    await log_action(
+        user["id"], user["role"], user["school_id"],
+        "rsvp", "trip", trip_id,
+        {"student_id": payload.student_id, "status": payload.status},
+    )
+    return {k: v for k, v in doc.items() if k != "_id"}
+
+
+@router.get("/{trip_id}/my-rsvps")
+async def my_rsvps(trip_id: str, user: dict = Depends(require_roles("parent"))):
+    """Parent: list the RSVP status for each of their children for this trip,
+    plus the children that haven't responded yet."""
+    tdb = await tenant_db(user["school_id"])
+    trip = await _ensure_trip(tdb, user["school_id"], trip_id)
+    children = await tdb.students.find(
+        {"school_id": user["school_id"], "parent_user_id": user["id"]}, {"_id": 0},
+    ).to_list(50)
+    # Filter to children eligible for this trip (if it's class-scoped)
+    if trip.get("class_ids"):
+        children = [c for c in children if c.get("class_id") in trip["class_ids"]]
+    rsvps = await tdb.trip_rsvps.find(
+        {"trip_id": trip_id, "school_id": user["school_id"], "parent_user_id": user["id"]},
+        {"_id": 0},
+    ).to_list(100)
+    by_student = {r["student_id"]: r for r in rsvps}
+    out = []
+    for c in children:
+        r = by_student.get(c["id"])
+        out.append({
+            "student_id": c["id"],
+            "student_name": c.get("name"),
+            "student_uid": c.get("student_uid"),
+            "class_id": c.get("class_id"),
+            "section": c.get("section"),
+            "status": (r or {}).get("status", "pending"),
+            "note": (r or {}).get("note"),
+            "updated_at": (r or {}).get("updated_at"),
+        })
+    return out
+
+
+@router.get("/{trip_id}/rsvps")
+async def trip_rsvps(trip_id: str, user: dict = Depends(get_current_user)):
+    """School admin / teacher: full RSVP roster for a trip.
+
+    Returns: { summary: {confirmed, declined, pending, total_eligible}, rows: [...] }
+    Rows include students who haven't responded (status='pending').
+    """
+    if user["role"] not in ("school_admin", "teacher", "accounts", "platform_admin"):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    tdb = await tenant_db(user["school_id"])
+    trip = await _ensure_trip(tdb, user["school_id"], trip_id)
+
+    # Eligible students = all students in school, or restricted to class_ids.
+    student_q: dict = {"school_id": user["school_id"]}
+    if trip.get("class_ids"):
+        student_q["class_id"] = {"$in": trip["class_ids"]}
+    students = await tdb.students.find(student_q, {"_id": 0}).to_list(5000)
+
+    # Teachers see only students in their own classes
+    if user["role"] == "teacher":
+        from routes.students import _teacher_class_filter, _teacher_can_access_student
+        tflt = await _teacher_class_filter(tdb, user)
+        students = [s for s in students if _teacher_can_access_student(tflt, s, user["id"])]
+
+    rsvps = await tdb.trip_rsvps.find(
+        {"trip_id": trip_id, "school_id": user["school_id"]}, {"_id": 0},
+    ).to_list(5000)
+    by_student = {r["student_id"]: r for r in rsvps}
+
+    rows = []
+    counts = {"confirmed": 0, "declined": 0, "pending": 0}
+    for s in students:
+        r = by_student.get(s["id"])
+        status = (r or {}).get("status", "pending")
+        counts[status] = counts.get(status, 0) + 1
+        rows.append({
+            "student_id": s["id"],
+            "student_name": s.get("name"),
+            "student_uid": s.get("student_uid"),
+            "class_id": s.get("class_id"),
+            "section": s.get("section"),
+            "parent_name": (r or {}).get("parent_name") or s.get("parent", {}).get("name"),
+            "parent_phone": s.get("parent", {}).get("phone"),
+            "status": status,
+            "note": (r or {}).get("note"),
+            "updated_at": (r or {}).get("updated_at"),
+        })
+    # Sort: confirmed first, then declined, then pending; then by name.
+    order = {"confirmed": 0, "declined": 1, "pending": 2}
+    rows.sort(key=lambda x: (order.get(x["status"], 3), x["student_name"] or ""))
+
+    return {
+        "trip_id": trip_id,
+        "trip_title": trip.get("title"),
+        "summary": {
+            "confirmed": counts["confirmed"],
+            "declined": counts["declined"],
+            "pending": counts["pending"],
+            "total_eligible": len(students),
+        },
+        "rows": rows,
+    }

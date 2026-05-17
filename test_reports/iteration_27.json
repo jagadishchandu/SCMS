@@ -1,0 +1,30 @@
+{
+  "summary": "Backend + frontend testing for Trip RSVP feature. Wrote 11 pytest cases in /app/backend/tests/test_trip_rsvp.py covering parent submit (confirm/decline), upsert behaviour, cross-child 403, role guard on POST (admin/teacher get 403), cancelled-trip 400, parent /my-rsvps row-per-eligible-child, admin roster summary+sorted rows, teacher class-scoped roster, parent 403 on /rsvps. All 11 PASS. Frontend Playwright runs verified all three role flows on the live preview URL: Parent (parent.stu-00001) clicked rsvp-confirm-STU-00001 -> status badge changed to 'confirmed', then rsvp-decline-STU-00001 -> status changed to 'declined'. School admin (principal@sunrise.edu) opened RSVP modal via view-rsvps-{id}, saw summary counters (0/1/7/8), all 4 filter pills (all/confirmed/declined/pending), 8 roster rows with student name + parent name/phone + status, and filter 'confirmed' correctly reduced rows to 0. Teacher (priya@sunrise.edu) opened tab-rsvp-{id}, saw read-only summary + 8 rows and ZERO rsvp-confirm/rsvp-decline buttons - read-only behaviour verified.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_trip_rsvp.py",
+    "/app/test_reports/pytest/iter27_rsvp.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "routes/trips.py submit_rsvp: payload.student_id is the internal UUID (students.id) not the human-readable STU-XXXXX. Frontend correctly passes student.id but external API consumers may expect student_uid. Consider accepting either form or document this clearly.",
+    "routes/trips.py trip_rsvps: counts dict initialised with only confirmed/declined/pending; any unexpected status value would still be counted via counts.get(status,0)+1 but would not appear in summary. Low risk because RSVPSubmit validates via Literal.",
+    "routes/trips.py imports inside trip_rsvps (from routes.students import ...) - acceptable to avoid circulars but could be moved to module-top with TYPE_CHECKING.",
+    "TripsViewPage.jsx ParentRSVPTab: the optional note textarea state is local per render of the tab; verify that switching tabs and back does not lose an unsent note (minor UX nitpick, not a bug).",
+    "RSVPRosterModal (TripsPage.jsx): Refresh button issues a fresh GET each click - fine; consider polling/auto-refresh on trip status change events later."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_trip_rsvp.py (new)"
+  ],
+  "success_rate": {"backend": "100% (11/11)", "frontend": "100% (parent confirm+decline, admin summary+filter+roster, teacher read-only all verified)"},
+  "test_credentials": "principal@sunrise.edu/School@123, priya@sunrise.edu/Teacher@123, parent.stu-00001@sunrise.edu/Parent@123, parent.stu-00002@sunrise.edu/Parent@123",
+  "seed_data_creation": "Two TEST_ trips created and torn down within pytest fixtures (TEST_RSVP Science Museum, TEST_RSVP Cancelled Trip). RSVP for STU-00001 ended in 'declined' state after frontend test on UI_TEST_Trip Heritage Walk - safe and intentional (overwritten by upsert each run).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "RSVP backend endpoints (POST /api/trips/{id}/rsvp, GET /{id}/my-rsvps, GET /{id}/rsvps) are stable and fully covered by /app/backend/tests/test_trip_rsvp.py. IMPORTANT: when calling POST /rsvp, the student_id field is the internal UUID (students.id), NOT the human STU-XXXXX uid - use _find_student_id helper or GET /api/students to translate. Frontend testIDs: parent uses rsvp-confirm-{student_uid} / rsvp-decline-{student_uid} (those keep STU-XXXXX in the testid even though payload uses UUID). Admin RSVPRosterModal opens via view-rsvps-{trip_id} button; teacher view uses tab-rsvp-{trip_id} inside trip details modal and is read-only (no buttons). Login form is a native <select> for role - select option label 'Parent' / 'Teacher' / 'School Super Admin' before filling email/password."
+}

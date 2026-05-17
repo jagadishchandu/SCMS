@@ -4,7 +4,7 @@ import { PageHeader, Section, KPI, Empty } from "../../components/Primitives";
 import { Modal } from "../../components/Modal";
 import {
   Plus, Trash, PencilSimple, MapPin, Calendar as CalendarIcon,
-  Bus, CurrencyInr, Users, Phone,
+  Bus, CurrencyInr, Users, Phone, ListChecks,
 } from "@phosphor-icons/react";
 import { formatDate, currency } from "../../lib/utils";
 import toast from "react-hot-toast";
@@ -35,6 +35,7 @@ export default function TripsPage() {
   const [trips, setTrips] = useState(null);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [roster, setRoster] = useState(null);
 
   const load = async () => {
     const { data } = await api.get("/trips");
@@ -105,6 +106,7 @@ export default function TripsPage() {
                 trip={t}
                 onEdit={() => { setEditing(t); setOpen(true); }}
                 onDelete={() => remove(t.id)}
+                onViewRSVPs={() => setRoster(t)}
               />
             ))}
           </div>
@@ -117,11 +119,15 @@ export default function TripsPage() {
         onClose={() => { setOpen(false); setEditing(null); }}
         onSaved={() => { setOpen(false); setEditing(null); load(); }}
       />
+
+      {roster && (
+        <RSVPRosterModal trip={roster} onClose={() => setRoster(null)} />
+      )}
     </div>
   );
 }
 
-function TripCard({ trip, onEdit, onDelete }) {
+function TripCard({ trip, onEdit, onDelete, onViewRSVPs }) {
   return (
     <div
       className="border border-line rounded-lg p-5 flex flex-col gap-3"
@@ -182,10 +188,17 @@ function TripCard({ trip, onEdit, onDelete }) {
       <div className="flex gap-2 pt-1 mt-auto">
         <button
           className="btn-secondary flex-1"
+          onClick={onViewRSVPs}
+          data-testid={`view-rsvps-${trip.id}`}
+        >
+          <ListChecks size={14} /> RSVPs
+        </button>
+        <button
+          className="btn-ghost p-2"
           onClick={onEdit}
           data-testid={`edit-trip-${trip.id}`}
         >
-          <PencilSimple size={14} /> Edit
+          <PencilSimple size={14} />
         </button>
         <button
           className="btn-ghost p-2 text-status-danger"
@@ -420,5 +433,131 @@ function TripFormModal({ open, trip, onClose, onSaved }) {
         </div>
       </form>
     </Modal>
+  );
+}
+
+function RSVPRosterModal({ trip, onClose }) {
+  const [data, setData] = useState(null);
+  const [filter, setFilter] = useState("all");
+
+  useEffect(() => {
+    api.get(`/trips/${trip.id}/rsvps`).then((r) => setData(r.data));
+  }, [trip.id]);
+
+  const refresh = () =>
+    api.get(`/trips/${trip.id}/rsvps`).then((r) => setData(r.data));
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`RSVPs · ${trip.title}`}
+      size="lg"
+      testId={`rsvp-roster-${trip.id}`}
+    >
+      {!data ? (
+        <div className="skeleton h-20 w-full" />
+      ) : (
+        <div className="space-y-4">
+          <div className="grid grid-cols-4 gap-3">
+            <Counter label="Attending" value={data.summary.confirmed} tone="success" />
+            <Counter label="Not attending" value={data.summary.declined} tone="danger" />
+            <Counter label="Awaiting" value={data.summary.pending} tone="warning" />
+            <Counter label="Eligible" value={data.summary.total_eligible} tone="info" />
+          </div>
+
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2">
+              {[
+                { v: "all", label: `All (${data.rows.length})` },
+                { v: "confirmed", label: `Attending (${data.summary.confirmed})` },
+                { v: "declined", label: `Not attending (${data.summary.declined})` },
+                { v: "pending", label: `Awaiting (${data.summary.pending})` },
+              ].map((b) => (
+                <button
+                  key={b.v}
+                  className={`text-xs px-3 py-1.5 rounded-full border transition ${
+                    filter === b.v
+                      ? "border-primary text-primary bg-primary-light"
+                      : "border-line text-ink-soft hover:bg-bg-subtle"
+                  }`}
+                  onClick={() => setFilter(b.v)}
+                  data-testid={`rsvp-filter-${b.v}`}
+                >
+                  {b.label}
+                </button>
+              ))}
+            </div>
+            <button
+              className="btn-ghost text-xs"
+              onClick={refresh}
+              data-testid="rsvp-refresh"
+            >
+              Refresh
+            </button>
+          </div>
+
+          <div className="border border-line rounded-lg overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-bg-subtle text-ink-muted">
+                <tr className="text-left">
+                  <th className="px-3 py-2">Student</th>
+                  <th className="px-3 py-2">Parent</th>
+                  <th className="px-3 py-2">Status</th>
+                  <th className="px-3 py-2 hidden md:table-cell">Note</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-line">
+                {(filter === "all"
+                  ? data.rows
+                  : data.rows.filter((r) => r.status === filter)
+                ).map((r) => (
+                  <tr key={r.student_id} data-testid={`rsvp-row-${r.student_uid}`}>
+                    <td className="px-3 py-2">
+                      <div className="font-medium">{r.student_name}</div>
+                      <div className="text-[11px] text-ink-muted">{r.student_uid} · Section {r.section}</div>
+                    </td>
+                    <td className="px-3 py-2 text-ink-soft">
+                      <div>{r.parent_name || "—"}</div>
+                      {r.parent_phone ? <div className="text-[11px] text-ink-muted">{r.parent_phone}</div> : null}
+                    </td>
+                    <td className="px-3 py-2"><StatusPill status={r.status} /></td>
+                    <td className="px-3 py-2 text-ink-soft hidden md:table-cell">{r.note || "—"}</td>
+                  </tr>
+                ))}
+                {data.rows.length === 0 && (
+                  <tr><td className="px-3 py-6 text-center text-ink-muted" colSpan={4}>No eligible students for this trip yet.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function StatusPill({ status }) {
+  const map = {
+    confirmed: { cls: "badge-success", label: "Attending" },
+    declined: { cls: "badge-danger", label: "Not attending" },
+    pending: { cls: "badge-neutral", label: "Awaiting" },
+  };
+  const m = map[status] || map.pending;
+  return <span className={m.cls} data-testid={`rsvp-status-${status}`}>{m.label}</span>;
+}
+
+function Counter({ label, value, tone }) {
+  const toneMap = {
+    success: "text-status-success",
+    danger: "text-status-danger",
+    warning: "text-status-warning",
+    info: "text-status-info",
+  };
+  return (
+    <div className="border border-line rounded-lg p-3 text-center">
+      <div className={`font-display text-2xl font-medium ${toneMap[tone] || ""}`}>{value}</div>
+      <div className="text-[10px] uppercase tracking-widest text-ink-muted mt-1">{label}</div>
+    </div>
   );
 }
