@@ -51,3 +51,32 @@ docker compose up -d
 docker compose up -d --build
 
 git clone --branch cloud --single-branch https://jagadishchandu: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@github.com/jagadishchandu/SCMS.git
+
+
+
+sudo apt update && sudo apt install -y nginx
+
+sudo tee /etc/nginx/sites-available/default >/dev/null <<'EOF'
+server {
+    listen 80 default_server;
+    server_name _;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+EOF
+
+sudo nginx -t && sudo systemctl restart nginx && sudo systemctl enable nginx
+
+
+sudo ufw allow 80/tcp
+
+
