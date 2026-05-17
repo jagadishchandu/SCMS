@@ -1,0 +1,118 @@
+Before you start
+Make sure you have:
+
+your Azure VM running
+the VM’s public IP address
+a domain you already purchased
+access to your domain registrar account
+
+
+Step 1: Make sure your Azure VM public IP is Static
+This matters because if the IP changes later, your domain will stop working. 3 4
+
+Sign in to Azure Portal
+Open Virtual machines
+Click your VM
+In the left menu, click Networking 3 5
+Click the Network Interface
+Click IP configurations
+Click the IP config, usually ipconfig1
+Under Public IP address, click the linked public IP resource
+Check Assignment
+If it says Dynamic, change it to Static
+Click Save 3 4
+
+Also note down the actual public IP value. You will need it later.
+
+Step 2: Create an Azure DNS Zone
+This is where Azure will manage your domain records. 1 6
+
+In Azure Portal search for DNS zones
+Open DNS zones
+Click + Create
+Select:
+
+Subscription
+Resource group
+
+
+In Name, enter your domain name, for example:
+
+mydomain.com
+
+
+Click Review + create
+Click Create 1 2
+
+
+Step 3: Copy the Azure name servers
+After the DNS zone is created:
+
+Open the new DNS zone
+On the Overview page, find the Name servers
+Copy all the Azure name servers shown there 2 6
+
+You will update these at your domain registrar in a later step.
+
+Step 4: Add an A record pointing to your VM public IP
+This connects the domain to your VM. 4 7
+
+Inside your Azure DNS zone, click + Record set
+Fill in the fields:
+
+Name:
+
+use @ for the root domain like mydomain.com
+use www if you want www.mydomain.com
+
+
+Type: A
+TTL: leave default or set 1 hour
+IP address: enter your VM’s static public IP
+
+
+Click OK or Add 1 8
+
+Recommended setup:
+
+one A record for @
+one A record for www
+Both can point to the same public IP.
+
+
+Step 5: Update the name servers at your domain registrar
+This is the step many people miss. If you do not do this, Azure DNS will not control the domain. 2 6
+
+Log in to the website where you bought the domain
+Open the domain’s DNS or Name Server settings
+Replace the current name servers with the Azure DNS name servers you copied earlier
+Save the changes 4 2
+
+Usually you must enter all Azure name servers shown in the zone.
+
+Step 6: Wait for DNS propagation
+DNS changes are not always instant.
+
+It can take some time to update globally
+In some cases it may take up to 48 hours, though often it is faster 2
+
+After propagation, browsing to your domain should open your application.
+
+Step 7: Test the site
+Once propagation finishes:
+
+Open a browser
+Try:
+
+http://yourdomain.com
+http://www.yourdomain.com
+
+
+Confirm it opens your Azure-hosted app
+
+If it does not load, usually the problem is one of these:
+
+public IP is still dynamic
+A record has wrong IP
+registrar name servers were not updated
+your VM/network security group is not allowing port 80 or 443
