@@ -78,7 +78,7 @@ sudo nginx -t && sudo systemctl restart nginx && sudo systemctl enable nginx
 
 
 sudo ufw allow 80/tcp
-
+#------------------------------------------------------------ secure setup----------------------------------
 sudo ss -tulpn | grep :3000
 #If nothing shows, start your app first.
 
