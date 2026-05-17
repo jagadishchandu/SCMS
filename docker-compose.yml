@@ -31,7 +31,7 @@ services:
     restart: unless-stopped
     environment:
       # --- Database (uses docker service name `mongo`) ---
-      MONGO_URL: "mongodb+srv://jagadish:Chandu%40123@scms.global.mongocluster.cosmos.azure.com/?tls=true&authMechanism=SCRAM-SHA-256&retryWrites=false&maxIdleTimeMS=120000"
+      MONGO_URL: "mongodb+srv://jagadish:Chandu123@ssms.global.mongocluster.cosmos.azure.com/?tls=true&authMechanism=SCRAM-SHA-256&retrywrites=false&maxIdleTimeMS=120000"
       DB_NAME: "${DB_NAME:-scms_db}"
 
       # --- Auth ---
