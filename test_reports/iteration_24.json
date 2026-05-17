@@ -1,0 +1,36 @@
+{
+  "summary": "Tested v1.20 sick-leave approval workflow end-to-end. Backend: 13 passed / 1 skipped (no failures) covering working-days helper, parent short auto-approval + attendance marking, parent long pending workflow, teacher+admin double approval, attendance only marked after final approval, pending-count for teacher/admin/parent (0), reject blocking, double-decision guard (400), and teacher/admin self-recorded auto-approval. Frontend: parent created a >3-workday leave (approval-needed banner visible, 'Submit for approval' button), teacher saw badge=2 and 2 pending cards, approve modal opened (reason field rendered), teacher approval recorded; admin saw badge=2, both 'Sick leave list for today' and 'Pending approval requests' sections, first card showed 'Teacher: approved' step badge after teacher action, admin rejection flow worked. Sidebar testids nav-badge-school-sick-leaves and nav-badge-teacher-sick-leaves both render correctly.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_v120_sick_leave_approval.py",
+    "/app/test_reports/pytest/v120_sick_leave.xml"
+  ],
+  "action_items": [
+    "Optional: parent's own pending leave list still shows status badges (working in UI). Consider adding a parent-facing 'Awaiting approval' KPI label distinct from 'Pending your approval' — already implemented as kpi-parent-pending.",
+    "Minor cleanup hygiene: prior test runs may leave residual STU-00003 'Long trip' pending leaves in DB. Not a product bug, but a periodic test-data prune would keep dashboards clean."
+  ],
+  "critical_code_review_comments": [
+    "routes/sick_leaves.py is 444 lines — close to but under the 700-line threshold; OK for now.",
+    "_normalize_status correctly backfills legacy docs to 'approved' so existing list view stays backward-compatible.",
+    "Attendance auto-mark only triggers when overall status flips to 'approved' (both in create_leave and _record_decision) — correct.",
+    "Working-days helper excludes Sundays (weekday()==6) while attendance marking uses weekday()<5 (Mon-Fri). Intentional and documented in module docstring; verified both behaviours via tests.",
+    "Approval endpoints correctly enforce: (a) leave must be pending, (b) same role cannot decide twice, (c) reject by either side terminates workflow.",
+    "useSickLeavePending hook returns 0 for non-approver roles and polls every 30s + on focus — sensible.",
+    "Sidebar data-testid pattern nav-badge-{path-with-dashes} matches the expected test selectors."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_v120_sick_leave_approval.py (new — 14 tests, uses cookie-based session login)"
+  ],
+  "success_rate": {"backend": "100% (13/13 executed, 1 skipped because today's date wasn't in chosen future window)", "frontend": "100% (all required UI elements present and interactive)"},
+  "test_credentials": "Used principal@sunrise.edu / School@123, priya@sunrise.edu / Teacher@123, parent.stu-00001@sunrise.edu / Parent@123, parent.stu-00003@sunrise.edu / Parent@123 (all confirmed working).",
+  "seed_data_creation": "Test fixtures create temporary sick-leave docs with future dates and clean them up. UI test left an approved + a rejected leave in DB for parent STU-00001 and STU-00003 respectively (future dates, no current-day impact).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "v1.20 sick-leave approval workflow is fully functional. Endpoints: POST /api/sick-leaves (auto-approve <=3 workdays or any teacher/admin record; pending if parent + >3 workdays), GET /api/sick-leaves/today, GET /api/sick-leaves/pending-approvals, GET /api/sick-leaves/pending-count, POST /api/sick-leaves/{id}/approve, POST /api/sick-leaves/{id}/reject. UI: /school/sick-leaves and /teacher/sick-leaves both show 'Sick leave list for today (N)' and 'Pending approval requests (N)' sections; Sidebar has red badge via useSickLeavePending hook. Auth uses cookie-based sessions (requests.Session) — token is in s.cookies['access_token']. Login payload requires role field.",
+  "rca of the issue": "No bugs found. The single test failure encountered during development (test_attendance_not_marked_yet) was a test-data overlap (short-leave fixture marked the same Monday as sick before the long-leave test asserted absence). Fixed by shifting the long-leave fixture +28 days, not a product issue."
+}

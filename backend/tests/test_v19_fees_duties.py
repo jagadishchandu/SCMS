@@ -7,7 +7,7 @@ import requests
 
 BASE_URL = os.environ.get(
     "REACT_APP_BACKEND_URL",
-    "https://admin-reset-tool-2.preview.emergentagent.com",
+    "https://school-health-portal-2.preview.emergentagent.com",
 ).rstrip("/")
 API = f"{BASE_URL}/api"
 

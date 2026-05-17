@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { ROLE_LABELS } from "../lib/utils";
+import { useSickLeavePending } from "../hooks/useSickLeavePending";
 import {
   House, Buildings, GraduationCap, ClipboardText, ChartLineUp,
   Calendar, BookOpen, Receipt, BellRinging, UploadSimple,
@@ -81,7 +82,7 @@ const NAV_BY_ROLE = {
   ],
 };
 
-function NavList({ items, onItemClick }) {
+function NavList({ items, onItemClick, badges = {} }) {
   return (
     <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-1" data-testid="sidebar-nav">
       {items.map(({ to, label, icon: Icon, end }) => (
@@ -100,7 +101,15 @@ function NavList({ items, onItemClick }) {
           }
         >
           <Icon size={18} weight="regular" />
-          <span>{label}</span>
+          <span className="flex-1">{label}</span>
+          {badges[to] > 0 ? (
+            <span
+              className="ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-semibold bg-status-danger text-white"
+              data-testid={`nav-badge-${to.replace(/\//g, "-").replace(/^-+/, "")}`}
+            >
+              {badges[to] > 99 ? "99+" : badges[to]}
+            </span>
+          ) : null}
         </NavLink>
       ))}
     </nav>
@@ -143,6 +152,7 @@ function Footer() {
 
 export default function Sidebar({ mobileOpen, onCloseMobile }) {
   const { user } = useAuth();
+  const sickPending = useSickLeavePending();
   if (!user) return null;
   let items = NAV_BY_ROLE[user.role] || [];
 
@@ -153,12 +163,17 @@ export default function Sidebar({ mobileOpen, onCloseMobile }) {
     items = items.filter((it) => it.to === "/school" || it.to === "/school/subscription");
   }
 
+  const badges = {
+    "/school/sick-leaves": user.role === "school_admin" ? sickPending : 0,
+    "/teacher/sick-leaves": user.role === "teacher" ? sickPending : 0,
+  };
+
   return (
     <>
       {/* Desktop sidebar */}
       <aside className="hidden lg:flex flex-col w-60 shrink-0 bg-bg border-r border-line h-screen sticky top-0" data-testid="app-sidebar">
         <Header />
-        <NavList items={items} />
+        <NavList items={items} badges={badges} />
         <Footer />
       </aside>
 
@@ -169,7 +184,7 @@ export default function Sidebar({ mobileOpen, onCloseMobile }) {
           <aside className="relative w-72 max-w-[85vw] h-full bg-bg border-r border-line flex flex-col">
             <button onClick={onCloseMobile} className="absolute top-3 right-3 btn-ghost p-1.5" data-testid="mobile-drawer-close"><X size={16} /></button>
             <Header />
-            <NavList items={items} onItemClick={onCloseMobile} />
+            <NavList items={items} onItemClick={onCloseMobile} badges={badges} />
             <Footer />
           </aside>
         </div>
