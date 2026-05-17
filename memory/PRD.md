@@ -1,5 +1,26 @@
 # SCMS — School Child Monitoring System (PRD)
 
+## Implemented v1.36 (2026-05-17) — Sick-leave approval workflow
+
+### 🏥 Parent-submitted sick leaves now flow through teacher + admin approval
+- **Backend** (`/app/backend/routes/sick_leaves.py`):
+  - `POST /api/sick-leaves` (parent / teacher / school_admin): now computes `working_days` excluding **Sundays**. If parent submits AND `working_days > 3` → `status="pending"` with `teacher_approval={status:"pending"}` and `admin_approval={status:"pending"}`. Otherwise auto-approved. Attendance is only marked `sick` (Mon-Fri) when status becomes `approved`.
+  - `GET /api/sick-leaves/today` — approved leaves whose `[start_date, end_date]` covers today; scoped per role (teacher → own classes, admin → whole school). Enriched with `student_name`, class, section.
+  - `GET /api/sick-leaves/pending-approvals` — leaves still awaiting the **current user's** role-specific decision. Includes `student_name`, `parent_name`, both approval-step states, and the parent's full `reason`.
+  - `GET /api/sick-leaves/pending-count` — `{count}` for badge polling; returns 0 for non-approvers.
+  - `POST /api/sick-leaves/{id}/approve` and `/reject` — teacher or school_admin only. Records `{status, by, by_name, by_role, note, decided_at}` on the role-specific approval object. Final status flips to `"approved"` only when BOTH approvers have approved; a single reject terminates with `"rejected"`. Same-role re-decision blocked (400). Decision on a non-pending leave blocked (400).
+  - `_normalize_status` backfills old (pre-v1.36) leaves with `status="approved"` so the existing list view stays backward-compatible.
+- **Frontend**:
+  - `pages/shared/SickLeavesPage.jsx` — adds two new sections for approvers: **"Sick leave list for today (N)"** (table with student, dates, reason, who logged, certificate) and **"Pending approval requests (N)"** (card grid with student, working-days, parent name, full reason from parent, both step-badges, Approve/Reject buttons). DecisionModal shows parent's reason and accepts an optional note. New status badges on the main table (`approved` / `pending` / `rejected`).
+  - CreateLeaveModal: shows live `working_days` count and a warning banner (`approval-needed-banner`) when the parent's selection will require approval. Reason field is required for parents.
+  - `components/Sidebar.jsx` — red pending-count badge next to "Sick Leaves" for teachers (`nav-badge-teacher-sick-leaves`) and school admins (`nav-badge-school-sick-leaves`).
+  - New hook `hooks/useSickLeavePending.js` polls `/sick-leaves/pending-count` every 30s and on window focus.
+
+### Verified (iter24)
+- Backend: **13/13 pytest** in `tests/test_v120_sick_leave_approval.py` — working-days helper, parent short auto-approval + attendance marking, parent long pending workflow, teacher+admin double approval, attendance only marked after final approval, pending-count for teacher/admin/parent, reject blocking, double-decision guard (400), teacher/admin self-recorded auto-approval.
+- Frontend: parent created >3-workday leave (banner + "Submit for approval" button visible), teacher saw badge + 2 pending cards with parent reason, approve modal opened, teacher approval recorded, admin saw badge + both sections, admin rejection flow worked. Sidebar badges render correctly for both roles.
+
+
 ## Implemented v1.35 (2026-05-16) — Marks totals row + per-row save · Platform bulk-delete students
 
 ### 📊 Marks grid — Total column + Out-of footer + per-row save
