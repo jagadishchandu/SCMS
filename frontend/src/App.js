@@ -45,6 +45,8 @@ import SchoolSubscription from "./pages/school/SchoolSubscription";
 import FeeItemsPage from "./pages/school/FeeItemsPage";
 import FeeTrackerPage from "./pages/school/FeeTrackerPage";
 import TeacherDutiesPage from "./pages/school/TeacherDutiesPage";
+import TripsPage from "./pages/school/TripsPage";
+import TripsViewPage from "./pages/shared/TripsViewPage";
 
 // Teacher
 import TeacherDashboard from "./pages/teacher/TeacherDashboard";
@@ -119,6 +121,7 @@ export default function App() {
       <Route path="/school/settings" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(SchoolSettings)}</ProtectedRoute>} />
       <Route path="/school/subscription" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(SchoolSubscription)}</ProtectedRoute>} />
       <Route path="/school/sick-leaves" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(SickLeavesPage)}</ProtectedRoute>} />
+      <Route path="/school/trips" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(TripsPage)}</ProtectedRoute>} />
 
       {/* Teacher */}
       <Route path="/teacher" element={<ProtectedRoute allow={["teacher"]}>{withLayout(TeacherDashboard)}</ProtectedRoute>} />
@@ -132,10 +135,12 @@ export default function App() {
       <Route path="/teacher/duties" element={<ProtectedRoute allow={["teacher"]}>{withLayout(() => <TeacherDutiesPage readOnly />)}</ProtectedRoute>} />
       <Route path="/teacher/uploads" element={<ProtectedRoute allow={["teacher"]}>{withLayout(UploadsPage)}</ProtectedRoute>} />
       <Route path="/teacher/sick-leaves" element={<ProtectedRoute allow={["teacher"]}>{withLayout(SickLeavesPage)}</ProtectedRoute>} />
+      <Route path="/teacher/trips" element={<ProtectedRoute allow={["teacher"]}>{withLayout(TripsViewPage)}</ProtectedRoute>} />
 
       {/* Parent extras */}
       <Route path="/parent/calendar" element={<ProtectedRoute allow={["parent"]}>{withLayout(CalendarPage)}</ProtectedRoute>} />
       <Route path="/parent/sick-leaves" element={<ProtectedRoute allow={["parent"]}>{withLayout(SickLeavesPage)}</ProtectedRoute>} />
+      <Route path="/parent/trips" element={<ProtectedRoute allow={["parent"]}>{withLayout(TripsViewPage)}</ProtectedRoute>} />
 
       {/* Accounts */}
       <Route path="/accounts" element={<ProtectedRoute allow={["accounts"]}>{withLayout(AccountsDashboard)}</ProtectedRoute>} />

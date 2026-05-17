@@ -41,6 +41,7 @@ from routes.staff import router as staff_router
 from routes.expenses import router as expenses_router
 from routes.fee_items import router as fee_items_router
 from routes.teacher_duties import router as teacher_duties_router
+from routes.trips import router as trips_router
 from core import scheduler as digest_scheduler
 
 
@@ -509,5 +510,6 @@ api.include_router(staff_router)
 api.include_router(expenses_router)
 api.include_router(fee_items_router)
 api.include_router(teacher_duties_router)
+api.include_router(trips_router)
 
 app.include_router(api)

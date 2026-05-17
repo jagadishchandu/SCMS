@@ -113,6 +113,7 @@ TENANT_OPERATIONAL_COLLECTIONS = (
     "timetable", "activities", "activity_enrollments",
     "sick_leaves", "notifications", "bulk_uploads", "receipts",
     "audit_logs", "staff", "expenses", "fee_items", "teacher_duties",
+    "trips",
 )
 
 
@@ -320,6 +321,11 @@ async def init_school_db(school: dict):
     await sdb.teacher_duties.create_index([("teacher_id", 1), ("start_at", 1)])
     await sdb.teacher_duties.create_index("start_at")
     await sdb.teacher_duties.create_index("type")
+
+    # ---- Educational trips ----
+    await sdb.trips.create_index("departure_date")
+    await sdb.trips.create_index("status")
+    await sdb.trips.create_index("title")
 
     # ---- Meta marker (lists which version provisioned the schema) ----
     await sdb.meta.update_one(

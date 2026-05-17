@@ -1,6 +1,6 @@
 # SCMS Test Credentials
 
-Login URL: <https://school-health-portal-2.preview.emergentagent.com/login>
+Login URL: <https://school-journey-app.preview.emergentagent.com/login>
 
 All non-admin accounts are seeded automatically on backend startup (idempotent).
 The Platform Super Admin is provisioned from Docker env vars (`ADMIN_EMAIL` / `ADMIN_PASSWORD`).
