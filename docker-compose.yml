@@ -23,35 +23,15 @@
 #     include the frontend origin in that case.
 
 services:
-  mongo:
-    image: mongo:7
-    container_name: scms_mongo
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    volumes:
-      - mongo_data:/data/db
-    networks:
-      - scms_net
-    # Uncomment if you want to connect to Mongo from your host machine (e.g. Compass).
-    # ports:
-    #   - "27017:27017"
 
   backend:
     build:
       context: ./backend
     container_name: scms_backend
     restart: unless-stopped
-    depends_on:
-      mongo:
-        condition: service_healthy
     environment:
       # --- Database (uses docker service name `mongo`) ---
-      MONGO_URL: "mongodb://mongo:27017"
+      MONGO_URL: "mongodb+srv://jagadish:Chandu%40123@scms.global.mongocluster.cosmos.azure.com/?tls=true&authMechanism=SCRAM-SHA-256&retryWrites=false&maxIdleTimeMS=120000"
       DB_NAME: "${DB_NAME:-scms_db}"
 
       # --- Auth ---
