@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json.schemastore.org/staticwebapp.config.json",
+  "//": "Azure Static Web Apps config — read by SWA at deploy time. Two responsibilities:",
+  "//  1. Reverse-proxy /api/* to the backend Container App so frontend + backend share one origin (no CORS).": "",
+  "//  2. SPA fallback so React Router routes (e.g. /school/dashboard) don't 404.": "",
+  "//": "After deploy, the React bundle can use a RELATIVE base URL (`/api`) — set REACT_APP_BACKEND_URL='' in SWA app settings.",
+
+  "routes": [
+    {
+      "route": "/api/*",
+      "rewrite": "https://REPLACE-WITH-BACKEND-FQDN.azurecontainerapps.io/api/*"
+    }
+  ],
+
+  "navigationFallback": {
+    "rewrite": "/index.html",
+    "exclude": [
+      "/static/*",
+      "/assets/*",
+      "/*.{js,css,map,json,txt,xml,ico,png,jpg,jpeg,svg,gif,webp,woff,woff2,ttf,otf,eot}"
+    ]
+  },
+
+  "globalHeaders": {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin"
+  },
+
+  "mimeTypes": {
+    ".json": "application/json"
+  },
+
+  "responseOverrides": {
+    "404": {
+      "rewrite": "/index.html",
+      "statusCode": 200
+    }
+  }
+}
