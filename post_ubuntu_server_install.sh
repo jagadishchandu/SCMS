@@ -44,7 +44,7 @@ git clone https://github.com/jagadishchandu/SCMS.git cloud
 Username = jagadishchandu
 Password = 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
 
-git clone https://jagadishchandu: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@github.com/jagadishchandu/SCMS.git cloud
+git clone https://jagadishchandu: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@github.com/jagadishchandu/SCMS.git cloud
 cd SCMS
 docker compose up --build
 docker compose up -d
