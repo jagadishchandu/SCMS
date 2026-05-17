@@ -49,3 +49,5 @@ cd SCMS
 docker compose up --build
 docker compose up -d
 docker compose up -d --build
+
+git clone --branch cloud --single-branch https://jagadishchandu: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@github.com/jagadishchandu/SCMS.git
