@@ -79,4 +79,58 @@ sudo nginx -t && sudo systemctl restart nginx && sudo systemctl enable nginx
 
 sudo ufw allow 80/tcp
 
+sudo ss -tulpn | grep :3000
+#If nothing shows, start your app first.
+
+sudo apt update
+sudo apt install -y nginx
+sudo systemctl enable nginx
+sudo systemctl start nginx
+
+cat <<'EOF' | sudo tee /etc/nginx/conf.d/websocket_map.conf
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+EOF
+
+cat <<'EOF' | sudo tee /etc/nginx/sites-available/app3000
+server {
+    listen 80;
+    listen [::]:80;
+    server_name _;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_connect_timeout 75s;
+        proxy_send_timeout 75s;
+        proxy_read_timeout 3600s;
+
+        # Uncomment if you see websocket lag/issues
+        # proxy_buffering off;
+    }
+}
+EOF
+
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo ln -s /etc/nginx/sites-available/app3000 /etc/nginx/sites-enabled/app3000
+
+sudo nginx -t
+sudo systemctl reload nginx
+
+Quick troubleshooting
+sudo systemctl status nginx --no-pager
+sudo tail -n 50 /var/log/nginx/error.log
+sudo ss -tulpn | grep -E ':80|:3000'
+
 
