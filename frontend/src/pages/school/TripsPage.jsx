@@ -4,7 +4,7 @@ import { PageHeader, Section, KPI, Empty } from "../../components/Primitives";
 import { Modal } from "../../components/Modal";
 import {
   Plus, Trash, PencilSimple, MapPin, Calendar as CalendarIcon,
-  Bus, CurrencyInr, Users, Phone, Path,
+  Bus, CurrencyInr, Users, Phone,
 } from "@phosphor-icons/react";
 import { formatDate, currency } from "../../lib/utils";
 import toast from "react-hot-toast";

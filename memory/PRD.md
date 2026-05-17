@@ -897,3 +897,20 @@ Whenever a user is created (school admin via school creation, teachers/parents/a
 - **22/22 new pytest pass** (7 v181 + 15 v18 regression). Frontend Playwright by testing agent: 100% — Compliance page with all KPIs + filters + 325 rows verified; school admin edited count 500 → 777 with status preserved.
 
 
+
+---
+
+## v1.20 — Educational Trips (Jan 2026)
+**Problem**: School admin needs a sidebar section to add educational trip details (cost, location, etc.) that teachers and parents can view.
+
+**Implemented**:
+- Backend: `routes/trips.py` — tenant-scoped CRUD; `school_admin` write, `school_admin/teacher/parent/accounts/platform_admin` read.
+- Trip fields: title, destination, departure_date, return_date, cost, transport_mode, itinerary, description, max_students, contact_person, contact_phone, permission_slip_url, class_ids, status (open/closed/cancelled).
+- Indexes added in `core/db.init_school_db` for trips collection (departure_date, status, title).
+- Notifications: parents + teachers are queued WhatsApp/Telegram on trip creation (best-effort, non-blocking).
+- Frontend:
+  - `/school/trips` (TripsPage.jsx) — admin CRUD with create/edit modal, KPI cards, trip grid.
+  - `/teacher/trips` and `/parent/trips` (TripsViewPage.jsx) — read-only upcoming + past sections, tap card → details modal with itinerary, tel: contact, permission slip link.
+  - Sidebar nav entries added for school_admin, teacher, parent.
+
+**Tested**: 12/12 pytest cases pass (CRUD + RBAC). Frontend verified for all 3 roles.
