@@ -44,6 +44,7 @@ export default function SchoolSubscription() {
       {!isApproved && (
         <ApprovalPanel
           approval={approval}
+          pricing={q.pricing}
           onSubmitted={async () => { await load(); await refresh(); }}
         />
       )}
@@ -52,6 +53,7 @@ export default function SchoolSubscription() {
         <ApprovedEditPanel
           approval={approval}
           actualCount={q.students_active}
+          pricing={q.pricing}
           onSubmitted={async () => { await load(); await refresh(); }}
         />
       )}
@@ -87,14 +89,14 @@ export default function SchoolSubscription() {
         </div>
       )}
 
-      <Section title="Choose your plan">
+        <Section title="Choose your plan">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <PlanCard
             title="Monthly"
             badge={null}
             rate={q.pricing.per_child_monthly}
             amount={q.monthly.amount}
-            students={q.students_active}
+            students={q.monthly.students}
             disabled={!!pending}
             onPay={() => { setCycle("monthly"); setOpen(true); }}
             testId="plan-card-monthly"
@@ -104,7 +106,7 @@ export default function SchoolSubscription() {
             badge="Save more"
             rate={q.pricing.per_child_yearly}
             amount={q.yearly.amount}
-            students={q.students_active}
+            students={q.yearly.students}
             disabled={!!pending}
             savings={q.yearly.savings_vs_monthly}
             onPay={() => { setCycle("yearly"); setOpen(true); }}
@@ -156,7 +158,7 @@ export default function SchoolSubscription() {
   );
 }
 
-function ApprovedEditPanel({ approval, actualCount, onSubmitted }) {
+function ApprovedEditPanel({ approval, actualCount, pricing, onSubmitted }) {
   const cap = approval.approved_children_count ?? approval.requested_children_count;
   const [editing, setEditing] = useState(false);
   const [count, setCount] = useState(approval.requested_children_count || cap || "");
@@ -164,6 +166,11 @@ function ApprovedEditPanel({ approval, actualCount, onSubmitted }) {
   const [busy, setBusy] = useState(false);
 
   const overCapacity = cap != null && actualCount > cap;
+
+  // Live price preview based on whatever the admin currently types.
+  const previewBilled = Math.max(Number(count) || 0, actualCount || 0);
+  const previewMonthly = previewBilled * (pricing?.per_child_monthly || 0);
+  const previewYearly = previewBilled * (pricing?.per_child_yearly || 0);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -224,6 +231,18 @@ function ApprovedEditPanel({ approval, actualCount, onSubmitted }) {
               data-testid="edit-approval-note-input"
             />
           </div>
+          <div className="md:col-span-3 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+            <div className="rounded-md border border-line bg-bg-subtle p-3" data-testid="edit-preview-monthly">
+              <div className="text-ink-soft">Estimated monthly bill</div>
+              <div className="font-display text-lg mt-1">{currency(previewMonthly)}</div>
+              <div className="text-ink-muted mt-1">{previewBilled} children × {currency(pricing?.per_child_monthly || 0)}</div>
+            </div>
+            <div className="rounded-md border border-line bg-bg-subtle p-3" data-testid="edit-preview-yearly">
+              <div className="text-ink-soft">Estimated yearly bill</div>
+              <div className="font-display text-lg mt-1">{currency(previewYearly)}</div>
+              <div className="text-ink-muted mt-1">{previewBilled} children × {currency(pricing?.per_child_yearly || 0)}</div>
+            </div>
+          </div>
           <div className="md:col-span-3 flex justify-end gap-2">
             <button type="button" className="btn-secondary" onClick={() => { setEditing(false); setCount(approval.requested_children_count || cap || ""); }}>
               Cancel
@@ -239,10 +258,16 @@ function ApprovedEditPanel({ approval, actualCount, onSubmitted }) {
 }
 
 
-function ApprovalPanel({ approval, onSubmitted }) {
+function ApprovalPanel({ approval, pricing, onSubmitted }) {
   const [count, setCount] = useState(approval.requested_children_count || "");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+
+  // Live price preview based on whatever the admin currently types — fixes the
+  // bug where the cost stayed at ₹0 until students were physically onboarded.
+  const previewCount = Number(count) || 0;
+  const previewMonthly = previewCount * (pricing?.per_child_monthly || 0);
+  const previewYearly = previewCount * (pricing?.per_child_yearly || 0);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -326,6 +351,18 @@ function ApprovalPanel({ approval, onSubmitted }) {
             data-testid="approval-note-input"
           />
         </div>
+        <div className="md:col-span-3 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+          <div className="rounded-md border border-line bg-bg-subtle p-3" data-testid="approval-preview-monthly">
+            <div className="text-ink-soft">Estimated monthly bill</div>
+            <div className="font-display text-lg mt-1">{currency(previewMonthly)}</div>
+            <div className="text-ink-muted mt-1">{previewCount} children × {currency(pricing?.per_child_monthly || 0)}</div>
+          </div>
+          <div className="rounded-md border border-line bg-bg-subtle p-3" data-testid="approval-preview-yearly">
+            <div className="text-ink-soft">Estimated yearly bill</div>
+            <div className="font-display text-lg mt-1">{currency(previewYearly)}</div>
+            <div className="text-ink-muted mt-1">{previewCount} children × {currency(pricing?.per_child_yearly || 0)}</div>
+          </div>
+        </div>
         <div className="md:col-span-3 flex justify-end">
           <button type="submit" className="btn-primary" disabled={busy} data-testid="submit-approval-btn">
             {busy ? "Submitting…" : "Submit approval request"}
@@ -345,7 +382,7 @@ function PlanCard({ title, badge, rate, amount, students, savings, disabled, onP
         {badge && <span className="badge-success">{badge}</span>}
       </div>
       <div className="text-4xl font-display font-medium">{currency(rate)}<span className="text-sm text-ink-muted ml-1">/child{title === "Yearly" ? "/year" : "/month"}</span></div>
-      <div className="text-xs text-ink-muted mt-1">For {students} active student{students === 1 ? "" : "s"} in your school today.</div>
+      <div className="text-xs text-ink-muted mt-1">Billed for {students} child{students === 1 ? "" : "ren"} (greater of your requested count and current active students).</div>
 
       <div className="mt-5 border-t border-line pt-4 space-y-1.5 text-sm">
         <div className="flex justify-between"><span className="text-ink-soft"><Users size={14} className="inline mr-1" /> Children</span><span className="font-medium">{students}</span></div>

@@ -44,9 +44,17 @@ _db = None
 def get_client() -> AsyncIOMotorClient:
     global _client
     if _client is None:
-        _client = AsyncIOMotorClient(os.environ["MONGO_URL"],
-            tls=True,
-            tlsCAFile=certifi.where(),)
+        url = os.environ["MONGO_URL"]
+        # Only force TLS for managed connection strings (Cosmos / Atlas / `+srv`).
+        # Plain `mongodb://localhost` deployments (local dev, container-to-container
+        # on the same network) speak unencrypted and would otherwise fail with
+        # "SSL handshake failed".
+        use_tls = url.startswith("mongodb+srv://") or "tls=true" in url.lower() or "ssl=true" in url.lower()
+        kwargs = {}
+        if use_tls:
+            kwargs["tls"] = True
+            kwargs["tlsCAFile"] = certifi.where()
+        _client = AsyncIOMotorClient(url, **kwargs)
     return _client
 
 

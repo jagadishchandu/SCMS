@@ -79,16 +79,35 @@ def _calc(student_count: int, cycle: str) -> dict:
 
 
 async def _quote_for_school(db, school_id: str) -> dict:
+    """Build the live quote for a school.
+
+    Billing basis: `billed_children = max(approved_children_count,
+    requested_children_count, actual_active_students)`. This way, the moment a
+    school admin enters their planned children count (via the approval-request
+    form) the charge updates — even before any students are added to the system.
+    """
     from core.db import tenant_db
     tdb = await tenant_db(school_id)
     students = await tdb.students.count_documents({"school_id": school_id, "status": "active"})
-    monthly = _calc(students, "monthly")
-    yearly = _calc(students, "yearly")
-    yearly_undiscounted = students * _monthly_price() * 12
+
+    # Pull approval doc so we can use the requested/approved count as the billable count.
+    school_doc = await db.schools.find_one({"id": school_id}, {"_id": 0, "subscription_approval": 1})
+    approval = (school_doc or {}).get("subscription_approval") or {}
+    approved_count = approval.get("approved_children_count")
+    requested_count = approval.get("requested_children_count")
+    capacity = approved_count or requested_count or 0
+    billed_children = max(int(capacity or 0), int(students or 0))
+
+    monthly = _calc(billed_children, "monthly")
+    yearly = _calc(billed_children, "yearly")
+    yearly_undiscounted = billed_children * _monthly_price() * 12
     yearly["savings_vs_monthly"] = max(yearly_undiscounted - yearly["amount"], 0)
     return {
         "school_id": school_id,
         "students_active": students,
+        "requested_children_count": requested_count,
+        "approved_children_count": approved_count,
+        "billed_children": billed_children,
         "pricing": {
             "per_child_monthly": _monthly_price(),
             "per_child_yearly": _yearly_price(),

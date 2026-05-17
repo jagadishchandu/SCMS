@@ -449,9 +449,17 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="SCMS API", version="1.0.0", lifespan=lifespan)
 
-# CORS
+# CORS — origins from CORS_ORIGINS (comma-separated) plus FRONTEND_URL if set.
+# This makes the "frontend & backend in separate containers" setup work with just
+# `FRONTEND_URL=https://my-frontend.example.com` on the backend container.
 cors_origins = os.environ.get("CORS_ORIGINS", "*")
-origins = [o.strip() for o in cors_origins.split(",")] if cors_origins != "*" else ["*"]
+frontend_url = (os.environ.get("FRONTEND_URL") or "").strip().rstrip("/")
+if cors_origins == "*":
+    origins = ["*"]
+else:
+    origins = [o.strip().rstrip("/") for o in cors_origins.split(",") if o.strip()]
+if frontend_url and frontend_url not in origins and "*" not in origins:
+    origins.append(frontend_url)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,

@@ -28,7 +28,16 @@ FROM nginx:alpine
 RUN apk add --no-cache wget
 
 COPY --from=build /app/build /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Use nginx's built-in env templating: any file in /etc/nginx/templates/*.template
+# is rendered with envsubst at container start. We expose BACKEND_UPSTREAM (default
+# `backend:8001`) so the /api/* reverse proxy can target a different host:port when
+# this container is run standalone (outside docker-compose).
+COPY nginx.conf /etc/nginx/templates/default.conf.template
+ENV BACKEND_UPSTREAM=backend:8001
+# Only substitute the variables we actually use — keeps standard `$host`, `$uri`
+# and friends literal in the rendered config.
+ENV NGINX_ENVSUBST_TEMPLATE_SUFFIX=.template
+ENV NGINX_ENVSUBST_FILTER='^BACKEND_UPSTREAM$'
 
 EXPOSE 3000
 

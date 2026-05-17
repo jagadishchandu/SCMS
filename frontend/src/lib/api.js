@@ -9,7 +9,7 @@ const baseURL = RAW ? `${RAW.replace(/\/$/, "")}/api` : "/api";
 export const api = axios.create({
   baseURL,
   withCredentials: true,
-  timeout: 30000,
+  timeout: 400000,
 });
 
 // Global 402 handler: when the subscription guard blocks a write, redirect school admins
