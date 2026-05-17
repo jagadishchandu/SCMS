@@ -1,0 +1,50 @@
+{
+  "summary": "Iter 28: Excel template data-validations + 'Open in Google Sheets' workflow tested end-to-end. 13/13 backend tests passed and the full frontend flow (3 cards, 3 buttons each, CSV download + new tab to docs.google.com/spreadsheets/create) works correctly.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter28_upload_templates.py",
+    "/app/test_reports/pytest/iter28_uploads.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "uploads.py line 132: DataValidation formula1 wraps the range in '=' (formula1=f\"={ref_range}\"). Excel/openpyxl accepts both but Google Sheets sometimes does not honour list validations from a named range — acceptable here since the dropdown is only authoritative when the file is opened in Excel.",
+    "_read_excel hint-skip relies on the first cell starting with 'e.g.'. Students template hints[4] is 'M / F / Other' (no e.g. prefix) — if a user reorders columns so the gender hint becomes column A, the hint row would not be skipped. Low-risk but worth noting.",
+    "upload_students: count_documents-based UID generation (`STU-{count+1}`) is race-prone for concurrent uploads; consider an atomic counter."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter28_upload_templates.py"
+  ],
+  "success_rate": {"backend": "100% (13/13)", "frontend": "100%"},
+  "test_credentials": "principal@sunrise.edu/School@123, priya@sunrise.edu/Teacher@123, parent.stu-00001@sunrise.edu/Parent@123",
+  "seed_data_creation": "1 holiday created via test (TEST_iter28_holiday, 2099-12-25) — visible on dashboard 'Upcoming holidays' panel.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter28_uploads.xml is the regression baseline. xlsx tests use openpyxl to inspect data_validations.dataValidation, wb.sheetnames, and reference rows. Frontend Sheets-button test captures new tabs via page.context.on('page', ...) — Google redirects to accounts.google.com/v3/signin but URL contains docs.google.com/spreadsheets in the continue= param so we match on 'docs.google.com' substring after page settles.",
+  "verified": {
+    "backend": [
+      "GET /api/uploads/template/students — Upload+References sheets, DataValidation on class_id (col B) pointing to References sheet, Grade 5 + Grade 6 listed",
+      "GET /api/uploads/template/attendance — DVs on student_uid (A) + status (C), 8 students STU-00001..STU-00008 + 6 statuses listed",
+      "GET /api/uploads/template/marks — 3 DVs (cols A/B/C), references include all 8 students",
+      "GET /api/uploads/template/holidays — DV on type column, 4 holiday types listed",
+      "GET /api/uploads/template-csv/{kind} for all 4 kinds: 200, text/csv, headers+hint row",
+      "RBAC: parent → 403, teacher → 200, unknown kind → 404",
+      "Upload fresh xlsx (headers + hint only) → inserted=0, errors=0 (hint row skipped via 'e.g.' check)",
+      "Upload xlsx with hint row + 1 real holiday row → inserted=1, errors=0"
+    ],
+    "frontend": [
+      "/school/uploads loads cards for Students, Attendance, Holidays",
+      "Each card shows 3 buttons in order: download-{kind}-template → open-sheets-{kind} → upload-{kind}-input-label",
+      "Clicking 'Open in Google Sheets' triggers CSV download (students_template.csv / holidays_template.csv) AND opens new tab → https://docs.google.com/spreadsheets/create (redirects to Google sign-in, target URL preserved)",
+      "Success toast appears: 'CSV downloaded · In the new Sheets tab: File → Import → Upload → pick the file'",
+      "'Download Excel template' button correctly downloads .xlsx file"
+    ]
+  }
+}

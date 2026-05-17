@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api, formatApiError } from "../../lib/api";
 import { PageHeader, Section, Empty } from "../../components/Primitives";
-import { UploadSimple, DownloadSimple } from "@phosphor-icons/react";
+import { UploadSimple, DownloadSimple, GoogleLogo } from "@phosphor-icons/react";
 import toast from "react-hot-toast";
 import { formatDate } from "../../lib/utils";
 
@@ -30,6 +30,25 @@ export default function UploadsPage() {
     } catch (err) { toast.error(formatApiError(err)); }
   };
 
+  const openInSheets = async (kind) => {
+    try {
+      const res = await api.get(`/uploads/template-csv/${kind}`, { responseType: "blob" });
+      const url = URL.createObjectURL(res.data);
+      // Auto-download the CSV so the user can pick it up in Sheets's import dialog.
+      const a = document.createElement("a");
+      a.href = url; a.download = `${kind}_template.csv`; a.click();
+      URL.revokeObjectURL(url);
+      // Open Google Sheets fresh-doc + Import dialog in a new tab.
+      window.open("https://docs.google.com/spreadsheets/create", "_blank", "noopener,noreferrer");
+      toast.success(
+        "CSV downloaded · In the new Sheets tab: File → Import → Upload → pick the file",
+        { duration: 6000 },
+      );
+    } catch (err) {
+      toast.error(formatApiError(err));
+    }
+  };
+
   const upload = async (kind, file, extras = {}) => {
     setBusy(true);
     try {
@@ -53,7 +72,15 @@ export default function UploadsPage() {
             <div className="overline mb-2">{k.kind}</div>
             <div className="font-display text-lg font-medium mb-3">{k.label}</div>
             <button className="btn-secondary mb-2 w-full" onClick={() => downloadTemplate(k.kind)} data-testid={`download-${k.kind}-template`}>
-              <DownloadSimple size={14}/> Download template
+              <DownloadSimple size={14}/> Download Excel template
+            </button>
+            <button
+              className="btn-ghost mb-2 w-full text-xs"
+              onClick={() => openInSheets(k.kind)}
+              data-testid={`open-sheets-${k.kind}`}
+              title="Downloads a CSV and opens a fresh Google Sheet — use File → Import → Upload"
+            >
+              <GoogleLogo size={14}/> Open in Google Sheets
             </button>
             {k.needsClass ? <ClassSectionUpload classes={classes} kind={k.kind} busy={busy} onUpload={upload} />
               : <SimpleUpload kind={k.kind} busy={busy} onUpload={upload} />}

@@ -1,11 +1,14 @@
 """Excel bulk upload endpoints — supports students, attendance, marks, holidays."""
+import csv
 import io
 import openpyxl
 from openpyxl.comments import Comment
 from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.datavalidation import DataValidation
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
-from core.auth import require_roles
+from core.auth import require_roles, get_current_user
 from core.db import get_db, tenant_db
 from core.utils import new_id, utc_now
 
@@ -32,11 +35,27 @@ def _read_excel(file_bytes: bytes) -> list[dict]:
     return out
 
 
-def _write_excel(headers: list[str], rows: list[list], hints: list[str] | None = None) -> bytes:
+def _write_excel(
+    headers: list[str],
+    rows: list[list],
+    hints: list[str] | None = None,
+    references: dict[str, list[tuple[str, str]]] | None = None,
+    column_validations: dict[str, str] | None = None,
+) -> bytes:
     """Write an .xlsx with bolded headers, an optional italic-grey hint row, and
-    cell comments on each header explaining the expected format."""
+    cell comments on each header explaining the expected format.
+
+    Args:
+        references: optional {section_label: [(id, name), ...]} written to a
+            hidden 'References' sheet so users can find the right ID. Also used
+            as the source range for column_validations.
+        column_validations: optional {column_header: reference_section_label}
+            mapping that attaches a dropdown to that column populated with the
+            IDs from the matching reference section.
+    """
     wb = openpyxl.Workbook()
     ws = wb.active
+    ws.title = "Upload"
 
     header_font = Font(bold=True, color="FFFFFF")
     header_fill = PatternFill(start_color="4E5B3A", end_color="4E5B3A", fill_type="solid")
@@ -49,7 +68,6 @@ def _write_excel(headers: list[str], rows: list[list], hints: list[str] | None =
         c.font = header_font
         c.fill = header_fill
         c.alignment = centre
-        # Auto-width approx
         ws.column_dimensions[c.column_letter].width = max(14, len(str(h)) + 4)
 
     if hints:
@@ -58,15 +76,69 @@ def _write_excel(headers: list[str], rows: list[list], hints: list[str] | None =
             c = ws.cell(row=2, column=col_idx)
             c.font = hint_font
             c.alignment = centre
-            # Attach the hint also as a tooltip-style comment on the header cell.
             header_cell = ws.cell(row=1, column=col_idx)
             if hint:
                 header_cell.comment = Comment(hint, "SCMS")
 
-    ws.freeze_panes = "A2"  # keep header visible when scrolling
+    ws.freeze_panes = "A2"
 
     for r in rows:
         ws.append(r)
+
+    # Reference sheet — visible so users can see name ↔ id mapping.
+    ref_ranges: dict[str, str] = {}
+    if references:
+        rsheet = wb.create_sheet("References")
+        rsheet.sheet_properties.tabColor = "B7A77A"
+        row_cursor = 1
+        title_font = Font(bold=True, color="4E5B3A", size=12)
+        sub_header_font = Font(bold=True, color="FFFFFF")
+        sub_header_fill = PatternFill(start_color="8F9C82", end_color="8F9C82", fill_type="solid")
+
+        for section_label, items in references.items():
+            tcell = rsheet.cell(row=row_cursor, column=1, value=section_label)
+            tcell.font = title_font
+            rsheet.merge_cells(
+                start_row=row_cursor, start_column=1, end_row=row_cursor, end_column=2,
+            )
+            row_cursor += 1
+            for ci, h in enumerate(["ID", "Name"], start=1):
+                c = rsheet.cell(row=row_cursor, column=ci, value=h)
+                c.font = sub_header_font
+                c.fill = sub_header_fill
+            row_cursor += 1
+            start = row_cursor
+            for (rid, rname) in items:
+                rsheet.cell(row=row_cursor, column=1, value=rid)
+                rsheet.cell(row=row_cursor, column=2, value=rname)
+                row_cursor += 1
+            end = row_cursor - 1
+            if items:
+                ref_ranges[section_label] = f"References!${get_column_letter(1)}${start}:${get_column_letter(1)}${end}"
+            row_cursor += 1  # blank spacer
+
+        rsheet.column_dimensions["A"].width = 30
+        rsheet.column_dimensions["B"].width = 36
+
+    if column_validations and ref_ranges:
+        for col_header, ref_section in column_validations.items():
+            ref_range = ref_ranges.get(ref_section)
+            if not ref_range:
+                continue
+            try:
+                col_idx = headers.index(col_header) + 1
+            except ValueError:
+                continue
+            dv = DataValidation(type="list", formula1=f"={ref_range}", allow_blank=True)
+            dv.error = f"Please pick a valid {col_header} from the dropdown."
+            dv.errorTitle = "Invalid value"
+            dv.prompt = f"Select a {col_header} from the References sheet."
+            dv.promptTitle = col_header
+            ws.add_data_validation(dv)
+            # Apply to rows 3..1000 (skip header row + hint row)
+            col_letter = get_column_letter(col_idx)
+            dv.add(f"{col_letter}3:{col_letter}1000")
+
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
@@ -111,37 +183,124 @@ TEMPLATE_HINTS: dict[str, list[str]] = {
 }
 
 
+TEMPLATE_SPECS: dict[str, dict] = {
+    "students": {
+        "headers": ["name", "class_id", "section", "roll_number", "gender", "dob",
+                    "parent_name", "parent_phone", "parent_whatsapp", "parent_email", "parent_password"],
+        "validations": {"class_id": "Classes (use the ID column)"},
+        "ref_sections": ["classes"],
+    },
+    "attendance": {
+        "headers": ["student_uid", "date", "status", "remark"],
+        "validations": {"student_uid": "Students (use the ID column)", "status": "Attendance statuses"},
+        "ref_sections": ["students", "attendance_statuses"],
+    },
+    "marks": {
+        "headers": ["student_uid", "exam_id", "subject_id", "marks_obtained", "max_marks", "remark"],
+        "validations": {
+            "student_uid": "Students (use the ID column)",
+            "exam_id": "Exams (use the ID column)",
+            "subject_id": "Subjects (use the ID column)",
+        },
+        "ref_sections": ["students", "exams", "subjects"],
+    },
+    "holidays": {
+        "headers": ["title", "date", "end_date", "type", "description"],
+        "validations": {"type": "Holiday types"},
+        "ref_sections": ["holiday_types"],
+    },
+}
+
+
+async def _build_references(user: dict, sections: list[str]) -> dict[str, list[tuple[str, str]]]:
+    """Load reference lookups (id → label) for the school the user belongs to.
+    Returns an ordered dict suitable for `_write_excel(references=...)`.
+    """
+    refs: dict[str, list[tuple[str, str]]] = {}
+    if not user.get("school_id"):
+        return refs
+    tdb = await tenant_db(user["school_id"])
+
+    if "classes" in sections:
+        classes = await tdb.classes.find({}, {"_id": 0}).sort("name", 1).to_list(500)
+        refs["Classes (use the ID column)"] = [
+            (c["id"], f"{c.get('name')} (sections: {', '.join(c.get('sections') or [])})")
+            for c in classes
+        ]
+
+    if "students" in sections:
+        students = await tdb.students.find(
+            {"status": {"$ne": "inactive"}}, {"_id": 0, "id": 1, "student_uid": 1, "name": 1, "section": 1},
+        ).sort("student_uid", 1).to_list(2000)
+        refs["Students (use the ID column)"] = [
+            (s.get("student_uid"), f"{s.get('name')} · Sec {s.get('section')}") for s in students
+        ]
+
+    if "exams" in sections:
+        exams = await tdb.exams.find({}, {"_id": 0}).sort("start_date", -1).to_list(500)
+        refs["Exams (use the ID column)"] = [
+            (e["id"], f"{e.get('name')} · {e.get('term') or ''}") for e in exams
+        ]
+
+    if "subjects" in sections:
+        subjects = await tdb.subjects.find({}, {"_id": 0}).sort("name", 1).to_list(500)
+        refs["Subjects (use the ID column)"] = [
+            (s["id"], f"{s.get('name')} ({s.get('code') or ''})") for s in subjects
+        ]
+
+    if "attendance_statuses" in sections:
+        refs["Attendance statuses"] = [
+            ("present", "Present"), ("absent", "Absent"), ("sick", "Sick"),
+            ("late", "Late"), ("half_day", "Half day"), ("excused", "Excused"),
+        ]
+
+    if "holiday_types" in sections:
+        refs["Holiday types"] = [
+            ("public", "Public holiday"), ("school", "School holiday"),
+            ("religious", "Religious"), ("festival", "Festival"),
+        ]
+
+    return refs
+
+
 # ---------- Templates ----------
 @router.get("/template/{kind}")
-async def template(kind: str, _: dict = Depends(require_roles("school_admin", "teacher", "accounts"))):
-    templates = {
-        "students": (
-            ["name", "class_id", "section", "roll_number", "gender", "dob",
-             "parent_name", "parent_phone", "parent_whatsapp", "parent_email", "parent_password"],
-            [],
-        ),
-        "attendance": (
-            ["student_uid", "date", "status", "remark"],
-            [],
-        ),
-        "marks": (
-            ["student_uid", "exam_id", "subject_id", "marks_obtained", "max_marks", "remark"],
-            [],
-        ),
-        "holidays": (
-            ["title", "date", "end_date", "type", "description"],
-            [],
-        ),
-    }
-    if kind not in templates:
+async def template(kind: str, user: dict = Depends(require_roles("school_admin", "teacher", "accounts"))):
+    spec = TEMPLATE_SPECS.get(kind)
+    if not spec:
         raise HTTPException(status_code=404, detail="Unknown template")
-    headers, rows = templates[kind]
-    hints = TEMPLATE_HINTS.get(kind)
-    data = _write_excel(headers, rows, hints=hints)
+    references = await _build_references(user, spec["ref_sections"])
+    data = _write_excel(
+        headers=spec["headers"],
+        rows=[],
+        hints=TEMPLATE_HINTS.get(kind),
+        references=references,
+        column_validations=spec["validations"],
+    )
     return StreamingResponse(
         io.BytesIO(data),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename={kind}_template.xlsx"},
+    )
+
+
+@router.get("/template-csv/{kind}")
+async def template_csv(kind: str, user: dict = Depends(require_roles("school_admin", "teacher", "accounts"))):
+    """CSV variant of the template — same headers + hint row. Easy to import
+    into Google Sheets via File → Import → Upload."""
+    spec = TEMPLATE_SPECS.get(kind)
+    if not spec:
+        raise HTTPException(status_code=404, detail="Unknown template")
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(spec["headers"])
+    hints = TEMPLATE_HINTS.get(kind)
+    if hints:
+        w.writerow(hints)
+    return StreamingResponse(
+        io.BytesIO(buf.getvalue().encode("utf-8")),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={kind}_template.csv"},
     )
 
 
