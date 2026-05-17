@@ -1,5 +1,21 @@
 # SCMS — School Child Monitoring System (PRD)
 
+## Implemented v1.37 (2026-05-17) — Sick-leave appeal flow
+
+### 🔁 Parents can appeal rejected sick leaves (instead of creating a new one)
+- **Backend** (`/app/backend/routes/sick_leaves.py`):
+  - `POST /api/sick-leaves/{id}/appeal` — parent-only. Validates: status must be `rejected`, parent must be the original `recorded_by`, `appeal_note` is required.
+  - On success: status flips back to `pending`, both `teacher_approval` and `admin_approval` reset to `{status:"pending"}`, and an entry is appended to `appeals[]` containing `appealed_at`, `appeal_note`, `previous_reason`, `previous_teacher_approval`, `previous_admin_approval`. Optional `reason` / `diagnosis` on the appeal body update the leave in-place. `last_appeal_at` + `last_appeal_note` shortcuts kept on the top-level doc.
+  - Audit log: `action=appeal_sick_leave` with `appeal_count` + truncated note.
+- **Frontend** (`/app/frontend/src/pages/shared/SickLeavesPage.jsx`):
+  - **Appeal button** on each parent's rejected row (`appeal-btn-{id}`); rejection note rendered inline (`rejection-note-{id}`) plus appeals count (`appeal-count-{id}`).
+  - **AppealModal** (`appeal-modal`) — shows prior rejection (`appeal-prior-rejection`) with the approver's note; editable reason/diagnosis fields pre-populated with current values; required `appeal-note` textarea; optional `appeal-cert` file input (uploads after the appeal POST via the existing `/certificate` endpoint); explicit reset-to-pending notice.
+  - **Approver context** — pending-card now renders `appeal-history-{id}` panel when `appeals[].length > 0`, surfacing the parent's appeal note + previous reason + the prior rejecting approver and their note, so the reviewer has full context.
+
+### Verified (iter25)
+- Backend: **9/9 pytest** in `tests/test_v136_sick_leave_appeal.py` — validation (4), happy-path (1), full appeal→teacher-approve→admin-approve→attendance-marked chain (1), re-appeal after second rejection (1), prior-endpoint regression (2). 403 for non-parent roles, 403 for cross-parent appeal, 400 for non-rejected status, 400 for empty appeal_note all enforced.
+- Frontend: parent appeals a rejected leave end-to-end; modal shows prior rejection w/ note; empty submit is blocked client-side; admin sees appeal-history panel with full context.
+
 ## Implemented v1.36 (2026-05-17) — Sick-leave approval workflow
 
 ### 🏥 Parent-submitted sick leaves now flow through teacher + admin approval
