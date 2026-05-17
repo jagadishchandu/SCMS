@@ -118,6 +118,3 @@ services:
 networks:
   scms_net:
     driver: bridge
-
-volumes:
-  mongo_data:
