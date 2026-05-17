@@ -3,6 +3,7 @@ import { NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { ROLE_LABELS } from "../lib/utils";
 import { useSickLeavePending } from "../hooks/useSickLeavePending";
+import { useUnreadNotifications } from "../hooks/useUnreadNotifications";
 import {
   House, Buildings, GraduationCap, ClipboardText, ChartLineUp,
   Calendar, BookOpen, Receipt, BellRinging, UploadSimple,
@@ -156,6 +157,7 @@ function Footer() {
 export default function Sidebar({ mobileOpen, onCloseMobile }) {
   const { user } = useAuth();
   const sickPending = useSickLeavePending();
+  const { count: unreadNotifs } = useUnreadNotifications();
   if (!user) return null;
   let items = NAV_BY_ROLE[user.role] || [];
 
@@ -169,6 +171,8 @@ export default function Sidebar({ mobileOpen, onCloseMobile }) {
   const badges = {
     "/school/sick-leaves": user.role === "school_admin" ? sickPending : 0,
     "/teacher/sick-leaves": user.role === "teacher" ? sickPending : 0,
+    "/school/notifications": user.role === "school_admin" ? unreadNotifs : 0,
+    "/platform/notifications": user.role === "platform_admin" ? unreadNotifs : 0,
   };
 
   return (

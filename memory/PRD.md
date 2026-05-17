@@ -16,6 +16,18 @@
 - School Super Admin (per school)
 - Accounts / Teacher / Parent
 
+## Iteration — 2026-01 (current session, part 3)
+**Unread-count badge on sidebar Notifications link**
+- New endpoints `GET /api/notifications/unread-count` and
+  `POST /api/notifications/mark-all-read` (in-app channel, recipient_id-scoped).
+- New hook `frontend/src/hooks/useUnreadNotifications.js` polls every 30s,
+  on window focus, and on a `scms:notifications:refresh-unread` custom event
+  so any caller (e.g. NotificationsLog page) can clear the badge instantly.
+- `Sidebar.jsx` wires the count into the existing `badges` map for
+  `/school/notifications` and `/platform/notifications`.
+- `NotificationsLog.jsx` calls mark-all-read on mount and broadcasts the
+  refresh event — badge clears the moment the page renders.
+
 ## Iteration — 2026-01 (current session, part 2)
 **Yearly upgrade nudge** (env-tunable threshold, default 50 children)
 - `GET /api/subscriptions/pricing` now returns `yearly_nudge_threshold` from

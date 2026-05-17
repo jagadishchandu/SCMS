@@ -2,10 +2,24 @@ import React, { useEffect, useState } from "react";
 import { api } from "../../lib/api";
 import { PageHeader, Section, Empty } from "../../components/Primitives";
 import { formatDate } from "../../lib/utils";
+import { broadcastUnreadRefresh } from "../../hooks/useUnreadNotifications";
 
 export default function NotificationsLog() {
   const [items, setItems] = useState([]);
-  useEffect(() => { api.get("/notifications").then((r) => setItems(r.data)); }, []);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const { data } = await api.get("/notifications");
+      if (alive) setItems(data);
+      // Clear the sidebar badge — all in-app notifications addressed to this
+      // user are now considered read because they're rendered on this page.
+      try {
+        await api.post("/notifications/mark-all-read");
+        broadcastUnreadRefresh();
+      } catch { /* non-blocking */ }
+    })();
+    return () => { alive = false; };
+  }, []);
   return (
     <div data-testid="notifications-log-page">
       <PageHeader eyebrow="Notifications" title="WhatsApp & parent communication log"
