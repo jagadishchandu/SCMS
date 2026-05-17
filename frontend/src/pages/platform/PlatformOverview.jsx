@@ -8,6 +8,7 @@ import {
 } from "@phosphor-icons/react";
 import toast from "react-hot-toast";
 import { formatDate } from "../../lib/utils";
+import PhoneInput from "../../components/PhoneInput";
 
 export default function PlatformOverview() {
   const [schools, setSchools] = useState([]);
@@ -581,7 +582,7 @@ function BulkDeleteStudentsModal({ school, studentIds, students, onClose, onDele
 function CreateSchoolModal({ open, onClose, onCreated }) {
   const [form, setForm] = useState({
     name: "", code: "", address: "", phone: "", email: "", academic_year: "2025-2026",
-    admin_name: "", admin_email: "", admin_password: "",
+    admin_name: "", admin_email: "", admin_password: "", admin_phone: "",
   });
   const [busy, setBusy] = useState(false);
   const update = (k) => (e) => setForm({ ...form, [k]: e.target.value });
@@ -606,12 +607,30 @@ function CreateSchoolModal({ open, onClose, onCreated }) {
         <div><label className="label">School name</label><input className="input" required value={form.name} onChange={update("name")} data-testid="school-name-input" /></div>
         <div><label className="label">School code</label><input className="input" required value={form.code} onChange={update("code")} data-testid="school-code-input" /></div>
         <div className="md:col-span-2"><label className="label">Address</label><input className="input" value={form.address} onChange={update("address")} /></div>
-        <div><label className="label">Phone</label><input className="input" value={form.phone} onChange={update("phone")} /></div>
+        <div>
+          <label className="label">Phone</label>
+          <PhoneInput
+            value={form.phone}
+            onChange={(v) => setForm((f) => ({ ...f, phone: v }))}
+            testId="school-phone-input"
+            placeholder="School phone"
+          />
+        </div>
         <div><label className="label">Email</label><input className="input" type="email" value={form.email} onChange={update("email")} /></div>
         <div><label className="label">Academic year</label><input className="input" value={form.academic_year} onChange={update("academic_year")} /></div>
         <div className="md:col-span-2 pt-2 border-t border-line"><div className="overline">School Super Admin (login account)</div></div>
         <div><label className="label">Admin name</label><input className="input" required value={form.admin_name} onChange={update("admin_name")} data-testid="admin-name-input" /></div>
         <div><label className="label">Admin email</label><input className="input" type="email" required value={form.admin_email} onChange={update("admin_email")} data-testid="admin-email-input" /></div>
+        <div className="md:col-span-2">
+          <label className="label">Admin phone</label>
+          <PhoneInput
+            value={form.admin_phone}
+            onChange={(v) => setForm((f) => ({ ...f, admin_phone: v }))}
+            testId="admin-phone-input"
+            placeholder="Admin contact number"
+          />
+          <div className="text-[11px] text-ink-muted mt-1">Pick the country dial code, then enter the local number (no spaces).</div>
+        </div>
         <div className="md:col-span-2"><label className="label">Temporary password</label><input className="input" type="text" required minLength={6} value={form.admin_password} onChange={update("admin_password")} data-testid="admin-password-input" /></div>
         <div className="md:col-span-2 flex justify-end gap-2 pt-2">
           <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>

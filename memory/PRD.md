@@ -932,3 +932,9 @@ Whenever a user is created (school admin via school creation, teachers/parents/a
   - Teacher `/teacher/trips` details modal has a read-only "RSVPs" tab scoped to their own classes.
 
 **Tested**: 11/11 backend pytest cases + full frontend Playwright runs (parent confirm/decline, admin filters & roster, teacher read-only) all PASS.
+
+### v1.20.2 — Country code on admin phone + cleaner bulk templates (Jan 2026)
+**Fixes**:
+- Platform admin "Create school" modal now shows a country-code dropdown for both **School phone** and **Admin phone** (uses existing `PhoneInput` component). Admin phone is persisted on the new school admin's user record.
+- `SchoolCreate` model accepts `admin_phone`; `routes/schools.py` writes it to the admin user doc.
+- Bulk upload templates (`/api/uploads/template/{students|attendance|holidays|marks}`) now return **headers only** — sample data rows removed so users see the exact required columns without confusion.

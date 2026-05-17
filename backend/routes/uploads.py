@@ -44,20 +44,19 @@ async def template(kind: str, _: dict = Depends(require_roles("school_admin", "t
         "students": (
             ["name", "class_id", "section", "roll_number", "gender", "dob",
              "parent_name", "parent_phone", "parent_whatsapp", "parent_email", "parent_password"],
-            [["Aarav Sharma", "CLASS_ID_HERE", "A", "1", "M", "2014-05-10",
-              "Rakesh Sharma", "+911234567890", "+911234567890", "rakesh@example.com", "Parent@123"]],
+            [],
         ),
         "attendance": (
             ["student_uid", "date", "status", "remark"],
-            [["STU-00001", "2025-01-15", "present", ""]],
+            [],
         ),
         "marks": (
             ["student_uid", "exam_id", "subject_id", "marks_obtained", "max_marks", "remark"],
-            [["STU-00001", "EXAM_ID", "SUBJECT_ID", 85, 100, "good"]],
+            [],
         ),
         "holidays": (
             ["title", "date", "end_date", "type", "description"],
-            [["Republic Day", "2025-01-26", "", "public", "National holiday"]],
+            [],
         ),
     }
     if kind not in templates:

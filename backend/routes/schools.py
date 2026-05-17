@@ -242,6 +242,7 @@ async def create_school(payload: SchoolCreate, user: dict = Depends(require_role
         "email": payload.admin_email.lower(),
         "password_hash": hash_password(payload.admin_password),
         "name": payload.admin_name,
+        "phone": payload.admin_phone,
         "role": "school_admin",
         "school_id": school_id,
         "is_active": True,
