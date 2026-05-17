@@ -945,3 +945,9 @@ Whenever a user is created (school admin via school creation, teachers/parents/a
 - Same hint is attached as an **Excel cell comment** on each header (visible as a tooltip on hover in Excel / Google Sheets).
 - Header row is **bolded green + frozen** (freeze_panes='A2') so it stays visible while scrolling.
 - Upload parser skips rows whose first cell starts with `"e.g."` — a freshly-downloaded template uploads as `inserted=0, errors=0`. Verified round-trip with real data still works (`inserted=1, errors=0`).
+
+### v1.20.4 — Smart bulk templates (Jan 2026)
+- **Excel Data Validation dropdowns**: each xlsx template now ships with an extra `References` sheet listing the school's real `classes`, `students`, `subjects`, `exams`, plus the allowed enum values for `status` (attendance) and `type` (holidays). The `Upload` sheet has DataValidation rules pointing at those reference ranges so users pick an ID from a dropdown instead of copy-pasting.
+- **CSV variant** at `GET /api/uploads/template-csv/{kind}` (separate path to avoid collision with the xlsx route). Returns the same headers + italic hint row.
+- **"Open in Google Sheets" button** on `/school/uploads`: downloads the CSV and opens a fresh `docs.google.com/spreadsheets/create` tab; toast tells the user to use *File → Import → Upload*. No OAuth, no Google credentials required.
+- Tested: 13/13 backend pytest cases + Playwright frontend run all green.
