@@ -120,15 +120,7 @@ endpoints no longer drop mid-request.
 
 ---
 
-## 4. Subscription-charge bug — fixed
 
-Earlier, the "Choose your plan" cards on `/school/subscription` showed
-`₹0` until students were physically onboarded — even though the school admin
-had already entered the planned children count.
-
-The quote endpoint (`GET /api/subscriptions/my`) now bills the **greater of**:
-
-* `subscription_approval.approved_children_count`
 * `subscription_approval.requested_children_count`
 * current `students.status == "active"` count
 
