@@ -21,9 +21,22 @@ flows that span schools iterate every school's tenant DB explicitly.
 
 See `/app/README_DB.md` for the full schema + index documentation.
 """
+
+"""
+if encription have issue use this 
+from urllib.parse import quote_plus
+
+username = "jagadish"
+password = quote_plus("Chandu@123")
+
+mongo_url = f"mongodb+srv://{username}:{password}@scms.global.mongocluster.cosmos.azure.com/?tls=true&authMechanism=SCRAM-SHA-256&retryWrites=false&maxIdleTimeMS=120000"
+print(mongo_url)
+"""
 import os
 import re
+import certifi
 from motor.motor_asyncio import AsyncIOMotorClient
+
 
 _client: AsyncIOMotorClient | None = None
 _db = None
@@ -32,7 +45,9 @@ _db = None
 def get_client() -> AsyncIOMotorClient:
     global _client
     if _client is None:
-        _client = AsyncIOMotorClient(os.environ["MONGO_URL"])
+        _client = AsyncIOMotorClient(os.environ["MONGO_URL"],
+            tls=True,
+            tlsCAFile=certifi.where(),)
     return _client
 
 
@@ -113,7 +128,6 @@ TENANT_OPERATIONAL_COLLECTIONS = (
     "timetable", "activities", "activity_enrollments",
     "sick_leaves", "notifications", "bulk_uploads", "receipts",
     "audit_logs", "staff", "expenses", "fee_items", "teacher_duties",
-    "trips", "trip_rsvps",
 )
 
 
@@ -321,14 +335,6 @@ async def init_school_db(school: dict):
     await sdb.teacher_duties.create_index([("teacher_id", 1), ("start_at", 1)])
     await sdb.teacher_duties.create_index("start_at")
     await sdb.teacher_duties.create_index("type")
-
-    # ---- Educational trips ----
-    await sdb.trips.create_index("departure_date")
-    await sdb.trips.create_index("status")
-    await sdb.trips.create_index("title")
-    await sdb.trip_rsvps.create_index([("trip_id", 1), ("student_id", 1)], unique=True)
-    await sdb.trip_rsvps.create_index("parent_user_id")
-    await sdb.trip_rsvps.create_index("status")
 
     # ---- Meta marker (lists which version provisioned the schema) ----
     await sdb.meta.update_one(
