@@ -914,3 +914,21 @@ Whenever a user is created (school admin via school creation, teachers/parents/a
   - Sidebar nav entries added for school_admin, teacher, parent.
 
 **Tested**: 12/12 pytest cases pass (CRUD + RBAC). Frontend verified for all 3 roles.
+
+### v1.20.1 — Trip RSVP (Jan 2026)
+**Problem**: Parents need to confirm if their child is coming on a trip; principal & teachers need to see the headcount.
+
+**Implemented**:
+- Backend `routes/trips.py` adds:
+  - `POST /api/trips/{trip_id}/rsvp` (parent) — submit/update confirmed|declined for one of their children; upsert keyed on (trip_id, student_id).
+  - `GET /api/trips/{trip_id}/my-rsvps` (parent) — list of parent's eligible children with current status (pending/confirmed/declined).
+  - `GET /api/trips/{trip_id}/rsvps` (school_admin / teacher / accounts) — full roster with summary counts. Teachers are scoped to their own classes.
+- Tenant DB index `(trip_id, student_id) unique` on `trip_rsvps`.
+- Cancelled trips reject RSVP submissions with 400.
+
+- Frontend:
+  - Parent `/parent/trips` details modal has a "Confirm attendance" tab with per-child Yes/No buttons + optional note; status badge updates inline.
+  - School admin `/school/trips` trip card has a new "RSVPs" button opening a modal with summary counters, filter pills, and a roster table (student, parent name/phone, status, note).
+  - Teacher `/teacher/trips` details modal has a read-only "RSVPs" tab scoped to their own classes.
+
+**Tested**: 11/11 backend pytest cases + full frontend Playwright runs (parent confirm/decline, admin filters & roster, teacher read-only) all PASS.
