@@ -1,0 +1,35 @@
+{
+  "summary": "v1.36 sick-leave APPEAL workflow tested end-to-end. Backend: 9/9 pytest tests passed (validation 4, happy-path 1, appeal->approve->approve chain 1, re-appeal 1, prior-endpoint regression 2). Frontend: full UI flow exercised - parent's rejected leave row shows appeal-btn-{id}, modal opens with prior rejection block carrying the admin's note, empty submit is blocked client-side (modal stays open, no API call), successful submit closes modal + status flips to 'Pending' + 'appeal-count-{id}' renders '1 appeal submitted'; teacher and admin pending cards both render 'appeal-history-{id}' panel that contains the parent's appeal note + previous reason + admin's prior rejection note. v1.20 regression: known test_attendance_not_marked_yet test-data overlap from iter24 still flakes intermittently (already-documented as a TEST issue, not a product bug; my v1.36 tests use future Mondays +49 days out to avoid collisions).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_v136_sick_leave_appeal.py",
+    "/app/test_reports/pytest/iter25_appeal.xml"
+  ],
+  "action_items": [
+    "Optional hardening: routes/sick_leaves.py is now 504 lines. Still under the 700-line split threshold but worth keeping an eye on if more endpoints are added.",
+    "Optional: the v1.20 fixture test_attendance_not_marked_yet (iter24) remains a flaky test due to date overlap when prior runs leave approved leaves on the same Monday. Suggest hardening by either parametrising the fixture's offset further or pre-cleaning attendance/sick_leaves for the test student in the fixture setup."
+  ],
+  "critical_code_review_comments": [
+    "appeal_leave correctly enforces parent-only (require_roles('parent')), parent-owns-leave (recorded_by check), rejected-state-only, and non-empty appeal_note - all four cases covered by 400/403 tests.",
+    "appeals[] entry preserves previous_reason / previous_teacher_approval / previous_admin_approval BEFORE the reset overwrites them - this is the critical history-preservation contract and verified end-to-end.",
+    "_normalize_status now adds default appeals=[] for legacy docs - keeps the list endpoints backward-compatible.",
+    "Re-appeal flow correctly works: after second rejection, appeals[] grows to length 2 and the latest entry captures the teacher_approval state (rejection) - verified.",
+    "Frontend AppealModal posts /appeal first then /certificate separately (two requests). Cert path was not exercised in UI test but the order is correct in the code path and the certificate endpoint is the same v1.20 endpoint already covered.",
+    "Frontend empty-note guard fires client-side BEFORE the API call (toast.error then return) - verified the modal stays open with no network call after empty submit click."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_v136_sick_leave_appeal.py (new, 9 tests)"
+  ],
+  "success_rate": {"backend": "100% (9/9 v1.36 appeal tests; v1.20 regression: 12/13 with the 1 known-flaky test_attendance_not_marked_yet documented since iter24)", "frontend": "100% (all required testids present and behaving correctly)"},
+  "test_credentials": "principal@sunrise.edu / School@123 (school_admin), priya@sunrise.edu / Teacher@123 (teacher), parent.stu-00001@sunrise.edu / Parent@123 (parent), parent.stu-00002@sunrise.edu / Parent@123 (parent), accounts@sunrise.edu / Accounts@123 (accounts) - all verified.",
+  "seed_data_creation": "Each test class creates its own future-dated leave (Mon +49 days through +98 days) and cleans up via DELETE in finally blocks. UI test created/cleaned 1 leave (Jun 2026 window).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "v1.36 = appeal workflow on top of v1.20. New endpoint POST /api/sick-leaves/{id}/appeal (parent-only). Pydantic: AppealRequest{appeal_note (req), reason?, diagnosis?}. Frontend: SickLeavesPage main table; AppealModal at line 512 of /app/frontend/src/pages/shared/SickLeavesPage.jsx; data-testids used: appeal-btn-{id}, appeal-modal, appeal-prior-rejection, appeal-reason, appeal-diagnosis, appeal-note, appeal-cert, appeal-submit, appeal-history-{id}, appeal-count-{id}, status-{id}, cert-link-{id}. Auth uses cookie sessions via requests.Session (no Bearer header). Login payload requires {email,password,role}. To switch users in Playwright always context.clear_cookies() before navigating to /login (otherwise the existing session redirects back to the user's home).",
+  "rca of the issue": "No defects. The only test failure (TestParentLongLeaveApproval::test_attendance_not_marked_yet in the v1.20 suite) is a pre-existing test-data overlap documented in iteration_24.json - not introduced by v1.36."
+}

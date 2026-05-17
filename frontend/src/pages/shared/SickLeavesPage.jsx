@@ -6,7 +6,7 @@ import { Modal } from "../../components/Modal";
 import { formatDate } from "../../lib/utils";
 import {
   Plus, Heartbeat, FileText, Trash, UploadSimple, Warning, CheckCircle,
-  XCircle, Clock, Hourglass, User,
+  XCircle, Clock, Hourglass, User, ArrowCounterClockwise,
 } from "@phosphor-icons/react";
 import toast from "react-hot-toast";
 
@@ -54,6 +54,7 @@ export default function SickLeavesPage() {
   const [pendingList, setPendingList] = useState([]);
   const [open, setOpen] = useState(false);
   const [decideTarget, setDecideTarget] = useState(null); // {leave, action}
+  const [appealTarget, setAppealTarget] = useState(null); // leave to appeal
   const [studentFilter, setStudentFilter] = useState("");
 
   const canManage = user && ["school_admin", "teacher", "parent"].includes(user.role);
@@ -200,6 +201,32 @@ export default function SickLeavesPage() {
                         <div className="text-xs text-ink-muted mt-2">Diagnosis: {l.diagnosis}</div>
                       ) : null}
                     </div>
+                    {(l.appeals || []).length > 0 && (
+                      <div className="bg-status-info-bg border border-status-info/30 rounded-md p-3 my-3 text-xs" data-testid={`appeal-history-${l.id}`}>
+                        <div className="flex items-center gap-1.5 text-status-info font-medium mb-2">
+                          <ArrowCounterClockwise size={14}/> Appeal #{l.appeals.length} — re-submitted by parent
+                        </div>
+                        <div className="text-ink mb-1.5">
+                          <b>Parent's appeal note:</b> {l.appeals[l.appeals.length - 1].appeal_note}
+                        </div>
+                        {l.appeals[l.appeals.length - 1].previous_reason && l.appeals[l.appeals.length - 1].previous_reason !== l.reason ? (
+                          <div className="text-ink-muted">Previous reason: <i>{l.appeals[l.appeals.length - 1].previous_reason}</i></div>
+                        ) : null}
+                        {(() => {
+                          const prev = l.appeals[l.appeals.length - 1];
+                          const t = prev.previous_teacher_approval;
+                          const a = prev.previous_admin_approval;
+                          const rejector = t?.status === "rejected" ? t : a?.status === "rejected" ? a : null;
+                          if (!rejector) return null;
+                          return (
+                            <div className="text-status-danger mt-1.5">
+                              Previously rejected by {rejector.by_role || "approver"}{rejector.by_name ? ` (${rejector.by_name})` : ""}
+                              {rejector.note ? `: "${rejector.note}"` : ""}
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    )}
                     <div className="flex flex-wrap gap-2 mb-3">
                       {approvalStepBadge(l.teacher_approval, "Teacher")}
                       {approvalStepBadge(l.admin_approval, "Admin")}
@@ -287,6 +314,17 @@ export default function SickLeavesPage() {
                           {l.reason ? <div>{l.reason}</div> : null}
                           {l.diagnosis ? <div className="text-ink-muted">{l.diagnosis}</div> : null}
                           {!l.reason && !l.diagnosis ? <span className="text-ink-muted">—</span> : null}
+                          {l.status === "rejected" && (l.teacher_approval?.status === "rejected" || l.admin_approval?.status === "rejected") && (
+                            <div className="mt-1 text-status-danger text-[11px]" data-testid={`rejection-note-${l.id}`}>
+                              Rejected by {l.teacher_approval?.status === "rejected" ? "teacher" : "admin"}
+                              {(l.teacher_approval?.note || l.admin_approval?.note) ? `: ${l.teacher_approval?.note || l.admin_approval?.note}` : ""}
+                            </div>
+                          )}
+                          {(l.appeals || []).length > 0 && (
+                            <div className="mt-1 text-status-info text-[11px]" data-testid={`appeal-count-${l.id}`}>
+                              {l.appeals.length} appeal{l.appeals.length !== 1 ? "s" : ""} submitted
+                            </div>
+                          )}
                         </td>
                         <td className="td">
                           {l.medical_certificate ? (
@@ -303,11 +341,23 @@ export default function SickLeavesPage() {
                         </td>
                         <td className="td text-xs text-ink-muted">{formatDate(l.created_at)}<br/><span>by {l.recorded_by_role}</span></td>
                         <td className="td">
-                          {(user?.role === "school_admin" || (user?.role === "parent" && l.recorded_by === user.id)) && (
-                            <button className="btn-ghost text-status-danger p-1.5" onClick={() => remove(l.id)} data-testid={`delete-leave-${l.id}`}>
-                              <Trash size={14} />
-                            </button>
-                          )}
+                          <div className="flex items-center gap-1">
+                            {user?.role === "parent" && l.recorded_by === user.id && l.status === "rejected" && (
+                              <button
+                                className="btn-secondary text-xs px-2.5 py-1"
+                                onClick={() => setAppealTarget(l)}
+                                data-testid={`appeal-btn-${l.id}`}
+                                title="Appeal this rejection with extra notes / certificate"
+                              >
+                                <ArrowCounterClockwise size={12}/> Appeal
+                              </button>
+                            )}
+                            {(user?.role === "school_admin" || (user?.role === "parent" && l.recorded_by === user.id)) && (
+                              <button className="btn-ghost text-status-danger p-1.5" onClick={() => remove(l.id)} data-testid={`delete-leave-${l.id}`}>
+                                <Trash size={14} />
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -325,6 +375,12 @@ export default function SickLeavesPage() {
         target={decideTarget}
         onClose={() => setDecideTarget(null)}
         onDone={() => { setDecideTarget(null); load(); }}
+      />
+
+      <AppealModal
+        leave={appealTarget}
+        onClose={() => setAppealTarget(null)}
+        onDone={() => { setAppealTarget(null); load(); }}
       />
     </div>
   );
@@ -445,6 +501,133 @@ function DecisionModal({ target, onClose, onDone }) {
             data-testid="decision-submit"
           >
             {busy ? "Saving…" : isApprove ? "Approve" : "Reject"}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+
+function AppealModal({ leave, onClose, onDone }) {
+  const [appealNote, setAppealNote] = useState("");
+  const [reason, setReason] = useState("");
+  const [diagnosis, setDiagnosis] = useState("");
+  const [certFile, setCertFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (leave) {
+      setAppealNote("");
+      setReason(leave.reason || "");
+      setDiagnosis(leave.diagnosis || "");
+      setCertFile(null);
+    }
+  }, [leave]);
+
+  if (!leave) return null;
+
+  // Identify which approver rejected and their note (for context display)
+  const t = leave.teacher_approval, a = leave.admin_approval;
+  const rejector = t?.status === "rejected" ? { role: "teacher", ...t } : a?.status === "rejected" ? { role: "admin", ...a } : null;
+  const priorAppeals = leave.appeals || [];
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!appealNote.trim()) { toast.error("Please add a note explaining your appeal"); return; }
+    setBusy(true);
+    try {
+      await api.post(`/sick-leaves/${leave.id}/appeal`, {
+        appeal_note: appealNote.trim(),
+        reason: reason.trim() || null,
+        diagnosis: diagnosis.trim() || null,
+      });
+      // Upload certificate if a new one was selected
+      if (certFile) {
+        const fd = new FormData(); fd.append("file", certFile);
+        await api.post(`/sick-leaves/${leave.id}/certificate`, fd);
+      }
+      toast.success("Appeal submitted — teacher and admin will review again");
+      onDone();
+    } catch (err) {
+      toast.error(formatApiError(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal open={!!leave} onClose={onClose} title="Appeal rejected sick leave" size="md" testId="appeal-modal">
+      <form onSubmit={submit} className="space-y-4">
+        <div className="text-sm">
+          <div><b>{leave.student_uid}</b></div>
+          <div className="text-xs text-ink-muted">
+            {formatDate(leave.start_date)} → {formatDate(leave.end_date)} · {leave.working_days || workingDaysExclSunday(leave.start_date, leave.end_date)} working days
+          </div>
+        </div>
+
+        {rejector && (
+          <div className="bg-status-danger-bg border border-status-danger/30 rounded-md p-3 text-sm" data-testid="appeal-prior-rejection">
+            <div className="text-xs uppercase tracking-wide text-status-danger mb-1">
+              Rejected by {rejector.role}{rejector.by_name ? ` (${rejector.by_name})` : ""}
+            </div>
+            <div className="text-ink">{rejector.note || <span className="text-ink-muted italic">No reason given</span>}</div>
+          </div>
+        )}
+
+        {priorAppeals.length > 0 && (
+          <div className="text-xs text-ink-muted">
+            This is appeal #{priorAppeals.length + 1}. Previous attempts: {priorAppeals.length}.
+          </div>
+        )}
+
+        <div>
+          <label className="label">Update reason (optional)</label>
+          <textarea className="input" rows={2} value={reason} onChange={(e) => setReason(e.target.value)} data-testid="appeal-reason" />
+          <div className="text-xs text-ink-muted mt-1">Leave unchanged to keep the original reason.</div>
+        </div>
+
+        <div>
+          <label className="label">Diagnosis (optional)</label>
+          <input className="input" value={diagnosis} onChange={(e) => setDiagnosis(e.target.value)} data-testid="appeal-diagnosis" />
+        </div>
+
+        <div>
+          <label className="label">Your appeal note <span className="text-status-danger">*</span></label>
+          <textarea
+            className="input" rows={3} required value={appealNote}
+            onChange={(e) => setAppealNote(e.target.value)}
+            placeholder="Explain why you are appealing this rejection (e.g. clarifications, additional context)"
+            data-testid="appeal-note"
+          />
+        </div>
+
+        <div>
+          <label className="label">Attach medical certificate (optional)</label>
+          {leave.medical_certificate ? (
+            <div className="text-xs text-ink-muted mb-2">
+              A certificate is already attached.{" "}
+              <a href={leave.medical_certificate.data_url} target="_blank" rel="noreferrer" className="text-primary underline">view current</a>
+              {certFile ? " — uploading a new one will replace it." : " You can upload a replacement below."}
+            </div>
+          ) : null}
+          <input
+            type="file" accept="image/*,application/pdf" className="input"
+            onChange={(e) => setCertFile(e.target.files?.[0] || null)}
+            data-testid="appeal-cert"
+          />
+          {certFile && <div className="text-xs text-ink-muted mt-1">Selected: {certFile.name}</div>}
+        </div>
+
+        <div className="bg-bg-subtle rounded-md p-3 text-xs flex items-start gap-2">
+          <ArrowCounterClockwise size={14} className="text-primary mt-0.5 shrink-0"/>
+          <div>Submitting your appeal will reset this leave to <b>pending</b> and send it back to the class teacher and school admin for a fresh decision.</div>
+        </div>
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn-primary" disabled={busy} data-testid="appeal-submit">
+            {busy ? "Submitting…" : "Submit appeal"}
           </button>
         </div>
       </form>

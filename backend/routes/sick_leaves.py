@@ -33,6 +33,12 @@ class ApprovalDecision(BaseModel):
     note: str | None = None
 
 
+class AppealRequest(BaseModel):
+    appeal_note: str
+    reason: str | None = None  # parent may update the reason on appeal
+    diagnosis: str | None = None
+
+
 def _working_days_excl_sunday(start_iso: str, end_iso: str) -> int:
     """Inclusive count of days between start and end, excluding Sundays."""
     start = datetime.fromisoformat(start_iso).date()
@@ -56,6 +62,8 @@ def _normalize_status(leave: dict) -> dict:
         leave["teacher_approval"] = None
     if "admin_approval" not in leave:
         leave["admin_approval"] = None
+    if "appeals" not in leave:
+        leave["appeals"] = []
     return leave
 
 
@@ -382,6 +390,58 @@ async def reject_leave(
     tdb = await tenant_db(user["school_id"])
     note = payload.note if payload else None
     return await _record_decision(tdb, leave_id, user, "rejected", note)
+
+
+@router.post("/{leave_id}/appeal")
+async def appeal_leave(
+    leave_id: str,
+    payload: AppealRequest,
+    user: dict = Depends(require_roles("parent")),
+):
+    """Parent appeals a rejected sick leave. Resets it back to pending so both
+    approvers review again, with the prior rejection captured in `appeals` history."""
+    tdb = await tenant_db(user["school_id"])
+    leave = await tdb.sick_leaves.find_one({"id": leave_id})
+    if not leave:
+        raise HTTPException(status_code=404, detail="Leave not found")
+    await _student_in_scope(tdb, user, leave["student_id"])
+    if leave.get("recorded_by") != user["id"]:
+        raise HTTPException(status_code=403, detail="Only the parent who recorded this leave can appeal it")
+    if leave.get("status") != "rejected":
+        raise HTTPException(status_code=400, detail=f"Only rejected leaves can be appealed (current: {leave.get('status', 'approved')})")
+    if not payload.appeal_note or not payload.appeal_note.strip():
+        raise HTTPException(status_code=400, detail="Appeal note is required")
+
+    appeals = leave.get("appeals") or []
+    appeals.append({
+        "appealed_at": utc_now(),
+        "appeal_note": payload.appeal_note.strip(),
+        "previous_reason": leave.get("reason"),
+        "previous_teacher_approval": leave.get("teacher_approval"),
+        "previous_admin_approval": leave.get("admin_approval"),
+    })
+
+    update = {
+        "status": "pending",
+        "teacher_approval": {"status": "pending"},
+        "admin_approval": {"status": "pending"},
+        "appeals": appeals,
+        "last_appeal_at": utc_now(),
+        "last_appeal_note": payload.appeal_note.strip(),
+    }
+    if payload.reason is not None and payload.reason.strip():
+        update["reason"] = payload.reason.strip()
+    if payload.diagnosis is not None:
+        update["diagnosis"] = payload.diagnosis.strip() or None
+
+    await tdb.sick_leaves.update_one({"id": leave_id}, {"$set": update})
+    await log_action(
+        user["id"], user["role"], leave["school_id"],
+        "appeal_sick_leave", "sick_leave", leave_id,
+        meta={"appeal_count": len(appeals), "appeal_note": payload.appeal_note[:200]},
+    )
+    refreshed = await tdb.sick_leaves.find_one({"id": leave_id}, {"_id": 0})
+    return _normalize_status(refreshed)
 
 
 @router.get("/recurring")
