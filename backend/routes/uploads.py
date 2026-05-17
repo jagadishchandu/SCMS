@@ -1,6 +1,8 @@
 """Excel bulk upload endpoints — supports students, attendance, marks, holidays."""
 import io
 import openpyxl
+from openpyxl.comments import Comment
+from openpyxl.styles import Font, PatternFill, Alignment
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from core.auth import require_roles
@@ -21,20 +23,92 @@ def _read_excel(file_bytes: bytes) -> list[dict]:
     for r in rows[1:]:
         if r is None or all(v is None for v in r):
             continue
+        # Skip the hint/legend row (italic-grey) — it always starts with "e.g."
+        first_val = r[0]
+        if isinstance(first_val, str) and first_val.strip().lower().startswith("e.g."):
+            continue
         d = {h: v for h, v in zip(headers, r) if h}
         out.append(d)
     return out
 
 
-def _write_excel(headers: list[str], rows: list[list]) -> bytes:
+def _write_excel(headers: list[str], rows: list[list], hints: list[str] | None = None) -> bytes:
+    """Write an .xlsx with bolded headers, an optional italic-grey hint row, and
+    cell comments on each header explaining the expected format."""
     wb = openpyxl.Workbook()
     ws = wb.active
+
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="4E5B3A", end_color="4E5B3A", fill_type="solid")
+    hint_font = Font(italic=True, color="9CA3AF")  # light grey
+    centre = Alignment(horizontal="left", vertical="center")
+
     ws.append(headers)
+    for col_idx, h in enumerate(headers, start=1):
+        c = ws.cell(row=1, column=col_idx)
+        c.font = header_font
+        c.fill = header_fill
+        c.alignment = centre
+        # Auto-width approx
+        ws.column_dimensions[c.column_letter].width = max(14, len(str(h)) + 4)
+
+    if hints:
+        ws.append(hints)
+        for col_idx, hint in enumerate(hints, start=1):
+            c = ws.cell(row=2, column=col_idx)
+            c.font = hint_font
+            c.alignment = centre
+            # Attach the hint also as a tooltip-style comment on the header cell.
+            header_cell = ws.cell(row=1, column=col_idx)
+            if hint:
+                header_cell.comment = Comment(hint, "SCMS")
+
+    ws.freeze_panes = "A2"  # keep header visible when scrolling
+
     for r in rows:
         ws.append(r)
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+# Column-format hints (kept short — shown as italic-grey legend row + header comment).
+TEMPLATE_HINTS: dict[str, list[str]] = {
+    "students": [
+        "e.g. Aarav Sharma",
+        "e.g. CLASS_ID (copy from Classes page)",
+        "e.g. A",
+        "e.g. 1",
+        "M / F / Other",
+        "e.g. 2014-05-10 (YYYY-MM-DD)",
+        "e.g. Rakesh Sharma",
+        "e.g. +911234567890 (with country code)",
+        "e.g. +911234567890 (with country code)",
+        "e.g. rakesh@example.com",
+        "e.g. Parent@123 (min 6 chars)",
+    ],
+    "attendance": [
+        "e.g. STU-00001 (student UID)",
+        "e.g. 2025-01-15 (YYYY-MM-DD)",
+        "present / absent / sick / late / half_day / excused",
+        "e.g. fever (optional)",
+    ],
+    "marks": [
+        "e.g. STU-00001 (student UID)",
+        "e.g. EXAM_ID (from Exams page)",
+        "e.g. SUBJECT_ID (from Subjects page)",
+        "e.g. 85",
+        "e.g. 100",
+        "Optional comment",
+    ],
+    "holidays": [
+        "e.g. Republic Day",
+        "e.g. 2025-01-26 (YYYY-MM-DD)",
+        "e.g. 2025-01-26 (optional, same as date for single-day)",
+        "public / school / religious / festival",
+        "Optional description",
+    ],
+}
 
 
 # ---------- Templates ----------
@@ -62,7 +136,8 @@ async def template(kind: str, _: dict = Depends(require_roles("school_admin", "t
     if kind not in templates:
         raise HTTPException(status_code=404, detail="Unknown template")
     headers, rows = templates[kind]
-    data = _write_excel(headers, rows)
+    hints = TEMPLATE_HINTS.get(kind)
+    data = _write_excel(headers, rows, hints=hints)
     return StreamingResponse(
         io.BytesIO(data),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

@@ -938,3 +938,10 @@ Whenever a user is created (school admin via school creation, teachers/parents/a
 - Platform admin "Create school" modal now shows a country-code dropdown for both **School phone** and **Admin phone** (uses existing `PhoneInput` component). Admin phone is persisted on the new school admin's user record.
 - `SchoolCreate` model accepts `admin_phone`; `routes/schools.py` writes it to the admin user doc.
 - Bulk upload templates (`/api/uploads/template/{students|attendance|holidays|marks}`) now return **headers only** — sample data rows removed so users see the exact required columns without confusion.
+
+### v1.20.3 — Country-code on Staff phone + Template legend (Jan 2026)
+- `StaffPage.jsx` (Support Staff) phone input now uses the shared `PhoneInput` component with country-dial-code dropdown (was a plain `<input>`).
+- Bulk upload templates now include a **legend** in row 2 (italic, light-grey) with format hints per column (e.g. `e.g. 2014-05-10 (YYYY-MM-DD)`, `present / absent / ...`).
+- Same hint is attached as an **Excel cell comment** on each header (visible as a tooltip on hover in Excel / Google Sheets).
+- Header row is **bolded green + frozen** (freeze_panes='A2') so it stays visible while scrolling.
+- Upload parser skips rows whose first cell starts with `"e.g."` — a freshly-downloaded template uploads as `inserted=0, errors=0`. Verified round-trip with real data still works (`inserted=1, errors=0`).

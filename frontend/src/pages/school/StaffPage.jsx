@@ -4,6 +4,7 @@ import { PageHeader, Section, Empty, KPI } from "../../components/Primitives";
 import { Modal } from "../../components/Modal";
 import { Plus, Trash, Pencil, FilePdf } from "@phosphor-icons/react";
 import toast from "react-hot-toast";
+import PhoneInput from "../../components/PhoneInput";
 
 const ROLE_LABEL = {
   cleaner: "Cleaner", bus_driver: "Bus driver", security: "Security",
@@ -185,7 +186,7 @@ function StaffModal({ open, editing, onClose, onSaved }) {
           <input type="number" min="0" className="input" value={form.monthly_salary} onChange={(e) => setForm({ ...form, monthly_salary: e.target.value })} data-testid="staff-salary-input" />
         </div>
         <div><label className="label">Phone</label>
-          <input className="input" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} data-testid="staff-phone-input" />
+          <PhoneInput value={form.phone} onChange={(v) => setForm({ ...form, phone: v })} testId="staff-phone-input" placeholder="Staff phone" />
         </div>
         <div><label className="label">Email</label>
           <input type="email" className="input" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
