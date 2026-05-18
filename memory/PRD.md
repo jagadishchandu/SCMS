@@ -264,3 +264,48 @@ ordering, read receipts/unread-count, typing auth, full WS round-trip.
 - `tests/test_iter32_system_peer_pin_mute.py` (16 new) + 
   `tests/test_iter32_app_regression.py` (15 broad-app regression).
 - Combined with iter29 + iter30 + iter31: **67/67 pass**.
+
+## Iteration — 2026-01 (current session, part 8)
+**Chat: Semantic system bubbles + Parent quick-reply round-trip**
+
+### Backend (`/app/backend/routes/messaging.py`)
+- **Removed channel labels** (TELEGRAM/WHATSAPP/SMS/EMAIL) from system
+  bubbles. Updates are now classified by **kind**:
+  `attendance | fee | exam | sick | holiday | trip | general`.
+- `_KIND_BY_TEMPLATE` maps 13 known templates + best-effort partial-match
+  fallback. `_classify_update()` returns `{kind, label, color, quick_replies}`.
+- `_chat_update_to_message` emits `kind, kind_label, kind_color, subject,
+  quick_replies, replied_at, reply_text, student_name, student_uid` instead
+  of the old `channel` field.
+- **POST `/messaging/system/reply` {update_id, text}** — parent (or any
+  user) sends a quick-reply that:
+  1. Is routed via `_resolve_reply_recipient`:
+     - attendance / sick / exam (with related_student_id) → child's
+       class teacher (via `class_teacher_map`).
+     - fee or unknown → first `school_admin` of the school.
+  2. Persists as a regular 1-1 chat message prefixed with
+     `↩︎ Re: <subject> · <student name> (<UID>)` for traceability.
+  3. Reuses `_upsert_conversation` + `_trim_conversation_history` so all
+     existing plumbing (WS / push / unread / 10-msg cap) fires.
+  4. Stamps `chat_updates.replied_at` + `reply_text` + `reply_recipient_id`
+     so the UI hides quick-reply chips on subsequent loads.
+  5. WS-fans to both sender and recipient, web-pushes if recipient offline.
+- 409 on second reply, 404 when caller doesn't own the update.
+
+### Frontend (`pages/shared/ChatPage.jsx`)
+- `KIND_META` palette with kind-icon (ClipboardText, Receipt, GraduationCap,
+  Heartbeat, CalendarBlank, AirplaneTilt, Buildings).
+- `MessageBubble` renders a dedicated `.chat-system-card` for system msgs:
+  coloured 4 px left border, icon tile, semantic title, optional
+  "For <student> · <UID>" subtitle, body.
+- `.chat-quick-replies` row of pill buttons; tap → `sendQuickReply`
+  optimistically marks replied, POSTs `/system/reply`, toast
+  "Sent to <staff name>". Replied state shows
+  "✓ You replied: '…'" pill.
+- All chip / done states carry data-testid for testability.
+
+### Tests
+- `tests/test_iter33_system_replies.py` (14 new). Combined with all prior
+  suites: **66/66** when each is run as a separate pytest process
+  (motor's first-touched event-loop binding prevents bundling — already
+  the documented regression mode).
