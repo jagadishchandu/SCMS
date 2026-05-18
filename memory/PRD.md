@@ -226,3 +226,41 @@ ordering, read receipts/unread-count, typing auth, full WS round-trip.
 - Parent's Updates tab shows latest 7 Telegram-channel mirrors
 - 1-1 chat trim retains exactly the newest 10 by send order
 - Cross-class teacher cannot post to / read another teacher's group (403)
+
+## Iteration — 2026-01 (current session, part 7)
+**Chat: System "School Notifications" peer + Group mute + Pin broadcast**
+
+### Backend (`/app/backend/routes/messaging.py`)
+- **System virtual peer** `SYSTEM_PEER_ID = "system::school-notifications"` —
+  no DB row. Surfaced as a contact at the top of every user's list.
+  - `list_messages` synthesises message-shaped dicts from `chat_updates`
+    rows when peer_id == SYSTEM_PEER_ID (carries channel/student_name).
+  - `mark_read` flips read_at on chat_updates.
+  - `get_conv_settings` returns `muted: false` (no per-user mute on the
+    system feed; users should always see school alerts).
+- **Per-group mute**: reuses `conv_settings` collection with
+  `conv_id = "group:{group_id}"`. Endpoints `POST /groups/{id}/mute` and
+  `GET /groups/{id}/settings`. Group sends now web-push every non-muted,
+  offline member.
+- **Pin broadcast**: owner-only `POST /groups/{id}/pin {message_id, hours?}`
+  (default 24h, max 168h) and `DELETE /groups/{id}/pin`. WS event
+  `type='group_pin'` fanned to all members. `list_groups` auto-expires the
+  pin when `pinned_until < now`.
+- **`core/notify.py`** mirror also dispatches a `type='message'` WS event
+  so the parent's open Chat page slides the new "School Notifications"
+  message in real-time without a refresh.
+
+### Frontend (`pages/shared/ChatPage.jsx`)
+- **Updates tab removed** — single chat list view.
+- `Avatar` gains `isSystem` branch (Buildings icon).
+- `MessageBubble` renders a channel header (TELEGRAM / WHATSAPP / SMS /
+  EMAIL with brand colours) inside system bubbles + dashed-bottom separator.
+- Group header: mute toggle, owner-only unpin button; group banner
+  (`chat-pin-banner`) above thread when a pin exists.
+- Group message bubble: hover-reveal pin button (owner only).
+- System chat: locked composer with "read-only feed" copy.
+
+### Tests
+- `tests/test_iter32_system_peer_pin_mute.py` (16 new) + 
+  `tests/test_iter32_app_regression.py` (15 broad-app regression).
+- Combined with iter29 + iter30 + iter31: **67/67 pass**.
