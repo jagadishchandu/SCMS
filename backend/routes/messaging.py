@@ -353,20 +353,88 @@ def _system_contact() -> dict:
     }
 
 
+_KIND_BY_TEMPLATE: dict[str, dict] = {
+    # template ↔ (kind, label, color, suggested quick replies)
+    "attendance_alert":        {"kind": "attendance", "label": "Attendance Alert",     "color": "warning"},
+    "absent_alert":            {"kind": "attendance", "label": "Absence Notice",       "color": "warning"},
+    "fee_due_reminder":        {"kind": "fee",        "label": "Fee Reminder",         "color": "danger"},
+    "fee_invoice":             {"kind": "fee",        "label": "Fee Invoice",          "color": "danger"},
+    "fee_paid_receipt":        {"kind": "fee",        "label": "Payment Receipt",      "color": "success"},
+    "exam_alert":              {"kind": "exam",       "label": "Exam Update",          "color": "info"},
+    "exam_result":             {"kind": "exam",       "label": "Exam Result",          "color": "info"},
+    "sick_leave_response":     {"kind": "sick",       "label": "Sick-leave Update",    "color": "info"},
+    "sick_leave_submitted":    {"kind": "sick",       "label": "Sick-leave Submitted", "color": "info"},
+    "holiday_alert":           {"kind": "holiday",    "label": "Holiday Notice",       "color": "success"},
+    "trip_announcement":       {"kind": "trip",       "label": "Trip Announcement",    "color": "info"},
+    "trip_rsvp":               {"kind": "trip",       "label": "Trip RSVP",            "color": "info"},
+    "syllabus_update":         {"kind": "exam",       "label": "Syllabus Update",      "color": "info"},
+    "general":                 {"kind": "general",    "label": "School Notice",        "color": "neutral"},
+}
+
+
+_QUICK_REPLIES_BY_KIND: dict[str, list[str]] = {
+    "attendance": ["Acknowledged", "My child is unwell", "Will be there tomorrow"],
+    "fee":        ["Will pay today", "Need extension", "Already paid — sharing receipt"],
+    "exam":       ["Acknowledged", "Have a doubt", "Need help with prep"],
+    "sick":       ["Thank you", "Will share update tomorrow"],
+    "holiday":    ["Got it, thanks"],
+    "trip":       ["Yes, count us in", "Need more details", "Cannot attend this time"],
+    "general":    ["Acknowledged", "Need more info"],
+}
+
+
+def _classify_update(upd: dict) -> dict:
+    """Return {kind, label, color, quick_replies} for a chat_updates row."""
+    tpl = (upd.get("template") or "general").lower()
+    info = _KIND_BY_TEMPLATE.get(tpl)
+    if not info:
+        # Best-effort partial match (e.g., "fee_*", "attendance_*")
+        if "fee" in tpl:
+            info = _KIND_BY_TEMPLATE["fee_due_reminder"]
+        elif "attend" in tpl or "absent" in tpl:
+            info = _KIND_BY_TEMPLATE["attendance_alert"]
+        elif "exam" in tpl or "result" in tpl:
+            info = _KIND_BY_TEMPLATE["exam_alert"]
+        elif "sick" in tpl:
+            info = _KIND_BY_TEMPLATE["sick_leave_response"]
+        elif "holiday" in tpl:
+            info = _KIND_BY_TEMPLATE["holiday_alert"]
+        elif "trip" in tpl:
+            info = _KIND_BY_TEMPLATE["trip_announcement"]
+        else:
+            info = _KIND_BY_TEMPLATE["general"]
+    return {
+        "kind": info["kind"],
+        "label": info["label"],
+        "color": info["color"],
+        "quick_replies": _QUICK_REPLIES_BY_KIND.get(info["kind"], _QUICK_REPLIES_BY_KIND["general"]),
+    }
+
+
 def _chat_update_to_message(upd: dict, recipient_id: str) -> dict:
-    """Render a chat_updates row as a chat-message-shaped dict."""
+    """Render a chat_updates row as a chat-message-shaped dict. The bubble is
+    purposely channel-agnostic — we no longer surface 'TELEGRAM' / 'WHATSAPP'
+    labels. Instead we surface the SEMANTIC kind (Attendance / Fee / Exam /
+    Sick-leave / Holiday / Trip / Notice) along with suggested quick replies."""
+    info = _classify_update(upd)
     return {
         "id": upd.get("id"),
         "conv_id": SYSTEM_PEER_ID,
         "school_id": upd.get("school_id"),
         "sender_id": SYSTEM_PEER_ID,
         "recipient_id": recipient_id,
+        "subject": upd.get("subject"),
         "text": upd.get("body") or upd.get("subject") or "",
         "attachment": None,
         "mentions": [],
         "created_at": upd.get("created_at"),
         "read_at": upd.get("read_at"),
-        "channel": upd.get("channel"),
+        "kind": info["kind"],
+        "kind_label": info["label"],
+        "kind_color": info["color"],
+        "quick_replies": info["quick_replies"],
+        "replied_at": upd.get("replied_at"),
+        "reply_text": upd.get("reply_text"),
         "student_name": upd.get("student_name"),
         "student_uid": upd.get("student_uid"),
     }
@@ -1401,3 +1469,157 @@ async def unpin_group_message(group_id: str, user: dict = Depends(get_current_us
         await manager.send_to_user(member_id, evt)
     await manager.send_to_user(user["id"], evt)
     return {"ok": True}
+
+
+
+# =========================================================================
+#  Quick replies on a School Notifications message
+# =========================================================================
+
+class QuickReplyIn(BaseModel):
+    update_id: str = Field(min_length=1, max_length=64)
+    text: str = Field(min_length=1, max_length=600)
+
+
+async def _resolve_reply_recipient(user: dict, upd: dict, tdb) -> Optional[dict]:
+    """Decide whom the parent's quick reply goes to:
+
+      * Attendance / sick-leave  →  child's class teacher (single-best match)
+      * Fee                     →  first accounts user, else school admin
+      * Anything else           →  first school_admin
+
+    Returns the recipient user dict (db.users) or None.
+    """
+    db = get_db()
+    kind = _classify_update(upd).get("kind")
+    school_id = user["school_id"]
+    sid = upd.get("related_student_id")
+
+    async def _first(role: str) -> Optional[dict]:
+        return await db.users.find_one(
+            {"school_id": school_id, "role": role, "is_active": True},
+            {"_id": 0, "password_hash": 0},
+        )
+
+    if kind in ("attendance", "sick", "exam") and sid:
+        student = await tdb.students.find_one({"id": sid}, {"_id": 0, "class_id": 1, "section": 1})
+        if student:
+            mapping = await tdb.class_teacher_map.find_one(
+                {"school_id": school_id, "class_id": student["class_id"], "section": student["section"]},
+                {"_id": 0, "teacher_id": 1},
+            )
+            if mapping:
+                t = await db.users.find_one({"id": mapping["teacher_id"], "is_active": True},
+                                            {"_id": 0, "password_hash": 0})
+                if t:
+                    return t
+    if kind == "fee":
+        # Fee matters are routed to the school admin (accounts users aren't
+        # chat-enabled in this app). The admin can forward to accounts if needed.
+        return await _first("school_admin")
+    return await _first("school_admin")
+
+
+@router.post("/system/reply")
+async def post_system_quick_reply(payload: QuickReplyIn, user: dict = Depends(get_current_user)):
+    """Send a quick-reply to whomever owns the school notification topic.
+
+    Persists as a normal 1-1 chat message (so it shows up in the recipient's
+    Chat tab) and stamps the originating chat_updates row as `replied_at`
+    so the UI can hide the quick-reply buttons on subsequent loads.
+    """
+    if user.get("role") not in ("parent", "teacher", "school_admin"):
+        raise HTTPException(status_code=403, detail="Not allowed")
+    school_id = user["school_id"]
+    tdb = await tenant_db(school_id)
+    upd = await tdb.chat_updates.find_one(
+        {"id": payload.update_id, "recipient_id": user["id"], "school_id": school_id},
+        {"_id": 0},
+    )
+    if not upd:
+        raise HTTPException(status_code=404, detail="School notification not found")
+    if upd.get("replied_at"):
+        raise HTTPException(status_code=409, detail="Already replied")
+
+    recipient = await _resolve_reply_recipient(user, upd, tdb)
+    if not recipient:
+        raise HTTPException(status_code=400, detail="No staff available to receive the reply right now")
+
+    # Prepend a clear context line so staff knows what the parent is replying to.
+    subject = upd.get("subject") or _classify_update(upd).get("label") or "School Notice"
+    student_label = ""
+    if upd.get("related_student_id"):
+        s = await tdb.students.find_one({"id": upd["related_student_id"]},
+                                        {"_id": 0, "name": 1, "student_uid": 1})
+        if s:
+            student_label = f" · {s.get('name')} ({s.get('student_uid')})"
+    composed = f"↩︎ Re: {subject}{student_label}\n\n{payload.text}"
+
+    # Reuse the standard 1-1 send flow so all WS / push / trim plumbing fires.
+    conv = await _upsert_conversation(tdb, school_id, user["id"], recipient["id"])
+    now = utc_now()
+    msg = {
+        "id": new_id(),
+        "conv_id": conv["id"],
+        "school_id": school_id,
+        "sender_id": user["id"],
+        "recipient_id": recipient["id"],
+        "text": composed,
+        "attachment": None,
+        "mentions": [],
+        "created_at": now.isoformat(),
+        "read_at": None,
+        "is_quick_reply": True,
+        "system_update_id": upd["id"],
+    }
+    await tdb.messages.insert_one(dict(msg))
+    await tdb.conversations.update_one(
+        {"id": conv["id"]},
+        {
+            "$set": {
+                "last_message_at": msg["created_at"],
+                "last_message_text": composed[:160],
+                "last_sender_id": user["id"],
+            },
+            "$inc": {f"unread_for.{recipient['id']}": 1},
+        },
+    )
+    try:
+        await _trim_conversation_history(tdb, conv["id"])
+    except Exception:
+        pass
+
+    # Stamp the update so the UI hides the quick-reply chips
+    await tdb.chat_updates.update_one(
+        {"id": upd["id"]},
+        {"$set": {"replied_at": now.isoformat(), "reply_text": payload.text, "reply_recipient_id": recipient["id"]}},
+    )
+
+    out_msg = clean_doc(dict(msg))
+    payload_evt = {
+        "type": "message",
+        "message": out_msg,
+        "sender": {"id": user["id"], "name": user.get("name"), "role": user.get("role")},
+    }
+    await manager.send_to_user(recipient["id"], payload_evt)
+    await manager.send_to_user(user["id"], payload_evt)
+
+    # Web-push to the staff if offline
+    try:
+        if not manager.is_online(recipient["id"]):
+            await _send_web_push(recipient["id"], school_id, {
+                "title": f"{user.get('name') or 'Parent'} replied",
+                "body": payload.text[:120],
+                "url": "/chat",
+                "from": {"id": user["id"], "name": user.get("name"), "role": user.get("role")},
+            })
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "update_id": upd["id"],
+        "replied_at": msg["created_at"],
+        "reply_text": payload.text,
+        "recipient": {"id": recipient["id"], "name": recipient.get("name"), "role": recipient.get("role")},
+    }

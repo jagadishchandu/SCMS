@@ -1,0 +1,43 @@
+{
+  "summary": "Iter 33 — School Notification cards now classified by semantic KIND (no TELEGRAM/WHATSAPP label) + parent quick-reply round-trip. Backend: 66/66 across all 5 messaging suites when run separately (12+10+14+16+14). Iter33 alone: 14/14. Frontend (parent): School Notifications thread shows semantic cards (Attendance Alert, Holiday Notice, School Notice) with kind icons + colored left borders; NO 'TELEGRAM'/'WHATSAPP' text label anywhere; quick-reply chips render (Acknowledged / My child is unwell / Will be there tomorrow / Got it thanks / Need more info); tap → toast 'Sent to <staff name>' fires, chip group disappears, 'You replied: <text>' chip appears beneath bubble (verified count: 13→12 qr groups, 4→5 done chips after a single click); replied state persists (previously-replied bubbles already showed 'You replied:' on first load). Class-teacher Priya's direct contact list pre-populated with 17 unread Re: ↩︎ entries from prior reply traffic — round-trip confirmed end-to-end. NOTE: a pre-existing flaky asyncio motor-loop binding makes test_iter32_system_peer_pin_mute.py::TestMirrorWsFire fail when bundled in a single pytest process with iter29/30/31; running each suite separately (as iter32 also did) is the supported regression mode and gives 66/66 green.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter33_system_replies.py",
+    "/app/test_reports/pytest/iter33_replies.xml",
+    "/app/test_reports/pytest/iter33_full_regression.xml",
+    "/app/test_reports/pytest/iter33_iter29_30_31_32_regression.xml"
+  ],
+  "action_items": [
+    "(carry-over) routes/messaging.py send_message still has an unreachable duplicate 'return out_msg' near line 613 — harmless dead code.",
+    "(carry-over) /api/calendar route from parent nav was not surfaced as a separate page for the teacher dashboard side-nav.",
+    "Pre-existing test infra flake: TestMirrorWsFire and any inside-pod async test that builds its own motor client interferes with subsequent in-process motor calls (Future attached to a different loop). Running the 5 messaging suites in separate pytest invocations is required for full green. Not a product bug."
+  ],
+  "critical_code_review_comments": [
+    "messaging.py _KIND_BY_TEMPLATE covers 13 known templates; _classify_update has best-effort partial-match fallbacks ('fee', 'attend', 'absent', 'exam', 'result', 'sick', 'holiday', 'trip') with sensible defaults to 'general'. Channel field intentionally NOT surfaced on the bubble payload (per spec) — confirmed at line 414-440 (_chat_update_to_message returns only kind/kind_label/kind_color/quick_replies/replied_at/reply_text alongside the canonical message keys).",
+    "messaging.py /system/reply route correctly: (a) validates owner via {recipient_id: user.id} in lookup → 404 for non-owner / non-existent, (b) blocks double-reply with 409, (c) resolves recipient via _resolve_reply_recipient with attendance/sick/exam → class teacher (via class_teacher_map on student.class_id + section) and fee/unknown → first school_admin, (d) reuses _upsert_conversation + tdb.messages.insert + _trim_conversation_history so the reply behaves like a normal 1-1 message, (e) marks chat_updates.replied_at + reply_text + reply_recipient_id, (f) WS-fans to both sender and recipient and optionally web-pushes if recipient is offline.",
+    "Composed message prefix '↩︎ Re: <subject> · <student name> (<uid>)\\n\\n<text>' — verified end-to-end via test_attendance_reply_routes_to_class_teacher; the teacher's inbox contains exactly this format.",
+    "QuickReplyIn Pydantic model has min_length=1 on both update_id and text — 422 on empty text confirmed.",
+    "Routing nit: when kind=='fee' the code still falls through to school_admin (no accounts user lookup) — the inline comment explicitly says 'accounts users aren't chat-enabled in this app'. Intentional and matches the spec ('fee → school_admin'). Same for general/unknown.",
+    "ChatPage.jsx KIND_META covers attendance/fee/exam/sick/holiday/trip/general with per-kind icon + Tailwind border color; MessageBubble shows .chat-quick-replies group + per-chip data-testid='chat-quick-reply-<msgid>-<slug>' and .chat-quick-reply-done with data-testid='chat-quick-reply-done-<msgid>' for replied state. Excellent testability.",
+    "iter32 regression tests updated: removed two assertions that expected the now-removed channel label on the bubble; replaced with kind/kind_label/kind_color presence checks. Test file: /app/backend/tests/test_iter32_system_peer_pin_mute.py lines ~127-135 and ~365-374."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter33_system_replies.py (new — 14 tests)",
+    "/app/backend/tests/test_iter32_system_peer_pin_mute.py (assertions on removed `channel` bubble label replaced with kind/kind_label/kind_color assertions to keep iter32 regression green under the new payload shape)"
+  ],
+  "success_rate": {
+    "backend": "100% (66/66) when each suite is run as a separate pytest process — iter29=12, iter30=10, iter31=14, iter32=16, iter33=14. Combined-process run hits a pre-existing motor loop-binding flake (TestMirrorWsFire only).",
+    "frontend": "100% on the parent quick-reply smoke — no TELEGRAM/WHATSAPP label visible, semantic cards rendered, chips clickable, toast 'Sent to Anjali Mehta' on tap, replied chip appears, no page errors (one harmless 401 on background asset)"
+  },
+  "test_credentials": "Same as iter32. principal@sunrise.edu/School@123 (school_admin), priya@sunrise.edu/Teacher@123 (class teacher Grade 5-A), parent.stu-00001@sunrise.edu/Parent@123 (parent of Aarav, STU-00001). Login: select role on [data-testid=login-role-select], fill email/password, click [data-testid=login-submit-btn].",
+  "seed_data_creation": "Multiple TEST_iter33_* chat_updates rows inserted under parent.stu-00001 across templates (attendance_alert, fee_due_reminder, holiday_alert, exam_alert, totally_unknown_ZZZ). Each capped by the existing per-(recipient_id, related_student_id) cap of 7. Several were replied via /messaging/system/reply, stamping replied_at + reply_text. The class teacher (priya) accordingly has a TEST_iter33_-prefixed 1-1 thread with several '↩︎ Re:' messages.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "FIVE messaging backend test files now form the chat regression suite: test_messaging.py (12), test_iter30_messaging_v2.py (10), test_iter31_groups_updates.py (14), test_iter32_system_peer_pin_mute.py (16), test_iter33_system_replies.py (14). RUN EACH AS A SEPARATE PYTEST INVOCATION — motor binds its first-touched event loop and any test that drives async backend code in-process (TestMirrorWsFire, TestClassification, TestSystemBubblePayload, TestQuickReply) cannot share a process with another in-process async caller. iter33 uses a module-level _LOOP for this purpose. The reply endpoint requires update_id to be a chat_updates id OWNED by the caller (recipient_id == user.id); cross-owner returns 404. For attendance/sick/exam routing to class teacher, callers MUST pass context={'student_id': <real student.id>} — NOT student_uid 'STU-00001'. The mirror code copies context['student_id'] verbatim into chat_updates.related_student_id, and the resolver does tdb.students.find_one({'id': sid}). Real notification routes (e.g. /attendance/bulk) already pass student['id'] correctly. /system/reply composes '↩︎ Re: <subject> · <student name> (<uid>)\\n\\n<text>' — the student segment is only added when related_student_id is present. Channel field is INTENTIONALLY removed from the bubble payload; do not add it back as an assertion in any test.",
+  "rca of the issue": "No product issues found. One pre-existing test-infra issue surfaces only when multiple async-backend test files are bundled in a single pytest process (motor event-loop binding). Mitigation already in place: run each suite separately, which matches how iter32 also reported its 67/67."
+}

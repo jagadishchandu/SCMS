@@ -9,6 +9,7 @@ import {
   CheckCircle, Check, Circle, BellSimpleSlash, BellSimple, Paperclip,
   FilePdf, X as XIcon, At, Megaphone, Newspaper, WhatsappLogo, TelegramLogo,
   EnvelopeSimple, DeviceMobile, UsersThree, PushPin, PushPinSlash, Buildings,
+  ClipboardText, Receipt, GraduationCap, Heartbeat, CalendarBlank, AirplaneTilt,
 } from "@phosphor-icons/react";
 import toast from "react-hot-toast";
 
@@ -197,11 +198,25 @@ function AttachmentView({ att, mine }) {
   );
 }
 
-function MessageBubble({ msg, mine, peerName, hideReceipt = false, onPin = null, isPinned = false }) {
+const KIND_META = {
+  attendance: { label: "Attendance Alert",   color: "warning", icon: ClipboardText },
+  fee:        { label: "Fee Reminder",        color: "danger",  icon: Receipt },
+  exam:       { label: "Exam Update",         color: "info",    icon: GraduationCap },
+  sick:       { label: "Sick-leave Update",   color: "info",    icon: Heartbeat },
+  holiday:    { label: "Holiday Notice",      color: "success", icon: CalendarBlank },
+  trip:       { label: "Trip Announcement",   color: "info",    icon: AirplaneTilt },
+  general:    { label: "School Notice",       color: "neutral", icon: Buildings },
+};
+
+function MessageBubble({ msg, mine, peerName, hideReceipt = false, onPin = null, isPinned = false, onQuickReply = null }) {
   const hasMention = Array.isArray(msg.mentions) && msg.mentions.length > 0;
   const onlyAttachment = !msg.text && msg.attachment;
-  const isSystem = msg.sender_id === SYSTEM_PEER_ID || msg.channel;
-  const channelMeta = isSystem && msg.channel ? CHANNEL_META[msg.channel] : null;
+  const isSystem = msg.sender_id === SYSTEM_PEER_ID || !!msg.kind;
+  const kind = msg.kind || "general";
+  const meta = KIND_META[kind] || KIND_META.general;
+  const Icon = meta.icon;
+  const quickReplies = Array.isArray(msg.quick_replies) ? msg.quick_replies : [];
+  const alreadyReplied = !!msg.replied_at;
   return (
     <div className={`flex w-full ${mine ? "justify-end" : "justify-start"} chat-msg-enter group-message`}>
       <div className={`max-w-[82%] md:max-w-[66%] ${mine ? "items-end" : "items-start"} flex flex-col gap-1 relative chat-msg-wrap`}>
@@ -220,29 +235,69 @@ function MessageBubble({ msg, mine, peerName, hideReceipt = false, onPin = null,
         ) : null}
         {msg.attachment ? <AttachmentView att={msg.attachment} mine={mine} /> : null}
         {!onlyAttachment ? (
-          <div
-            className={`px-3.5 py-2 rounded-2xl text-sm leading-snug whitespace-pre-wrap break-words shadow-soft ${
-              isSystem
-                ? `chat-bubble-system ${channelMeta?.cls || ""}`
-                : mine
+          isSystem ? (
+            <div
+              className={`chat-system-card chat-system-card-${meta.color}`}
+              title={fullTime(msg.created_at)}
+              data-testid={`chat-msg-${msg.id}`}
+            >
+              <div className="chat-system-card-header">
+                <span className={`chat-system-card-icon chat-system-card-icon-${meta.color}`}>
+                  <Icon size={16} weight="duotone" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="chat-system-card-title">{msg.kind_label || meta.label}</div>
+                  {msg.student_name ? (
+                    <div className="chat-system-card-subtitle">
+                      For <strong>{msg.student_name}</strong>
+                      {msg.student_uid ? <span className="opacity-70"> · {msg.student_uid}</span> : null}
+                    </div>
+                  ) : msg.subject ? (
+                    <div className="chat-system-card-subtitle">{msg.subject}</div>
+                  ) : null}
+                </div>
+              </div>
+              <div className="chat-system-card-body">
+                {msg.text}
+              </div>
+            </div>
+          ) : (
+            <div
+              className={`px-3.5 py-2 rounded-2xl text-sm leading-snug whitespace-pre-wrap break-words shadow-soft ${
+                mine
                   ? "bg-primary text-primary-foreground rounded-br-md"
                   : "bg-bg-surface border border-line text-ink rounded-bl-md"
-            } ${hasMention && !mine ? "chat-bubble-mention" : ""}`}
-            title={fullTime(msg.created_at)}
-            data-testid={`chat-msg-${msg.id}`}
-          >
-            {channelMeta ? (
-              <div className="chat-bubble-channel-header">
-                <channelMeta.icon size={13} weight="fill" />
-                <span>{channelMeta.label}</span>
-                {msg.student_name ? (
-                  <span className="ml-auto opacity-70">for {msg.student_name}</span>
-                ) : null}
-              </div>
-            ) : null}
-            {renderTextWithMentions(msg.text, peerName)}
+              } ${hasMention && !mine ? "chat-bubble-mention" : ""}`}
+              title={fullTime(msg.created_at)}
+              data-testid={`chat-msg-${msg.id}`}
+            >
+              {renderTextWithMentions(msg.text, peerName)}
+            </div>
+          )
+        ) : null}
+
+        {/* Quick replies (system bubbles only) */}
+        {isSystem && onQuickReply && !alreadyReplied && quickReplies.length > 0 ? (
+          <div className="chat-quick-replies" data-testid={`chat-quick-replies-${msg.id}`}>
+            {quickReplies.map((qr) => (
+              <button
+                key={qr}
+                type="button"
+                className="chat-quick-reply"
+                onClick={() => onQuickReply(msg, qr)}
+                data-testid={`chat-quick-reply-${msg.id}-${qr.replace(/\s+/g, "-").toLowerCase()}`}
+              >
+                {qr}
+              </button>
+            ))}
           </div>
         ) : null}
+        {isSystem && alreadyReplied ? (
+          <div className="chat-quick-reply-done" data-testid={`chat-quick-reply-done-${msg.id}`}>
+            <CheckCircle size={11} weight="fill" /> You replied: “{msg.reply_text || "—"}”
+          </div>
+        ) : null}
+
         <div className={`text-[10px] flex items-center gap-1 px-1 ${mine ? "text-ink-muted" : "text-ink-muted"}`}>
           {!mine && !isSystem ? <span className="font-medium">{peerName}</span> : null}
           <span>{timeShort(msg.created_at)}</span>
@@ -666,6 +721,20 @@ export default function ChatPage() {
     } catch (e) { toast.error(formatApiError(e)); }
   };
 
+  const sendQuickReply = async (msg, replyText) => {
+    if (!msg || !replyText) return;
+    // Optimistic: stamp the bubble as replied so the chips disappear immediately
+    setMessages((prev) => prev.map((m) => m.id === msg.id ? { ...m, replied_at: new Date().toISOString(), reply_text: replyText } : m));
+    try {
+      const r = await api.post("/messaging/system/reply", { update_id: msg.id, text: replyText });
+      toast.success(`Sent to ${r.data?.recipient?.name || "school"}`);
+    } catch (e) {
+      // Rollback on failure
+      setMessages((prev) => prev.map((m) => m.id === msg.id ? { ...m, replied_at: null, reply_text: null } : m));
+      toast.error(formatApiError(e));
+    }
+  };
+
   const insertMention = () => {
     if (!active) return;
     const insertText = `@${active.name} `;
@@ -931,6 +1000,7 @@ export default function ChatPage() {
                         hideReceipt={isGroup || isSystem}
                         onPin={isGroup && active.is_owner ? pinBroadcast : null}
                         isPinned={isGroup && active.pinned_message_id === m.id}
+                        onQuickReply={isSystem ? sendQuickReply : null}
                       />
                     ))}
                     {peerTyping ? <TypingDots /> : null}

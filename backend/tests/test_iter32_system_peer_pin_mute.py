@@ -126,8 +126,10 @@ class TestSystemPeer:
         msg = j["messages"][-1]
         assert msg["sender_id"] == SYSTEM_PEER
         assert msg["conv_id"] == SYSTEM_PEER
-        # channel header field is present
-        assert "channel" in msg
+        # iter33: channel label removed from bubble; semantic kind fields present instead
+        assert "channel" not in msg
+        assert "kind" in msg and "kind_label" in msg and "kind_color" in msg
+        assert "quick_replies" in msg and isinstance(msg["quick_replies"], list)
         # Now fetch again and assert all messages have read_at set (marked on read)
         r2 = s.get(
             f"{API}/messaging/conversations/{SYSTEM_PEER}/messages?limit=50", timeout=20
@@ -365,11 +367,12 @@ class TestMirrorWsFire:
         assert r.status_code == 200
         texts = [m.get("text") for m in r.json()["messages"]]
         assert marker in texts, f"mirror failed - texts: {texts}"
-        # Locate the message and assert sender + channel + conv_id
+        # Locate the message and assert sender + conv_id (iter33: channel removed)
         m = next(x for x in r.json()["messages"] if x["text"] == marker)
         assert m["sender_id"] == SYSTEM_PEER
         assert m["conv_id"] == SYSTEM_PEER
-        assert m.get("channel") == "telegram"
+        assert "channel" not in m
+        assert m.get("kind") in {"attendance", "fee", "exam", "sick", "holiday", "trip", "general"}
         # Verify the WS hook lines exist (path is invoked)
         assert hasattr(messaging_mod, "manager")
         assert hasattr(messaging_mod, "SYSTEM_PEER_ID")
