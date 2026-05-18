@@ -10,6 +10,7 @@ import {
   FilePdf, X as XIcon, At, Megaphone, Newspaper, WhatsappLogo, TelegramLogo,
   EnvelopeSimple, DeviceMobile, UsersThree, PushPin, PushPinSlash, Buildings,
   ClipboardText, Receipt, GraduationCap, Heartbeat, CalendarBlank, AirplaneTilt,
+  Lightning,
 } from "@phosphor-icons/react";
 import toast from "react-hot-toast";
 
@@ -208,7 +209,7 @@ const KIND_META = {
   general:    { label: "School Notice",       color: "neutral", icon: Buildings },
 };
 
-function MessageBubble({ msg, mine, peerName, hideReceipt = false, onPin = null, isPinned = false, onQuickReply = null }) {
+function MessageBubble({ msg, mine, peerName, hideReceipt = false, onPin = null, isPinned = false, onQuickReply = null, onSmartAction = null }) {
   const hasMention = Array.isArray(msg.mentions) && msg.mentions.length > 0;
   const onlyAttachment = !msg.text && msg.attachment;
   const isSystem = msg.sender_id === SYSTEM_PEER_ID || !!msg.kind;
@@ -217,6 +218,8 @@ function MessageBubble({ msg, mine, peerName, hideReceipt = false, onPin = null,
   const Icon = meta.icon;
   const quickReplies = Array.isArray(msg.quick_replies) ? msg.quick_replies : [];
   const alreadyReplied = !!msg.replied_at;
+  const smartActions = Array.isArray(msg.smart_actions) ? msg.smart_actions : [];
+  const smartDone = !!msg.smart_action_done;
   return (
     <div className={`flex w-full ${mine ? "justify-end" : "justify-start"} chat-msg-enter group-message`}>
       <div className={`max-w-[82%] md:max-w-[66%] ${mine ? "items-end" : "items-start"} flex flex-col gap-1 relative chat-msg-wrap`}>
@@ -295,6 +298,33 @@ function MessageBubble({ msg, mine, peerName, hideReceipt = false, onPin = null,
         {isSystem && alreadyReplied ? (
           <div className="chat-quick-reply-done" data-testid={`chat-quick-reply-done-${msg.id}`}>
             <CheckCircle size={11} weight="fill" /> You replied: “{msg.reply_text || "—"}”
+          </div>
+        ) : null}
+
+        {/* Smart-action suggestions on a parent quick-reply (recipient side) */}
+        {!mine && onSmartAction && smartActions.length > 0 && !smartDone ? (
+          <div className="chat-smart-actions" data-testid={`chat-smart-actions-${msg.id}`}>
+            <div className="chat-smart-actions-label">
+              <Lightning size={11} weight="fill" /> Suggested actions
+            </div>
+            <div className="chat-smart-actions-row">
+              {smartActions.map((a) => (
+                <button
+                  key={a.action}
+                  type="button"
+                  className="chat-smart-action"
+                  onClick={() => onSmartAction(msg, a)}
+                  data-testid={`chat-smart-action-${msg.id}-${a.action}`}
+                >
+                  {a.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        {smartDone ? (
+          <div className="chat-smart-action-done" data-testid={`chat-smart-done-${msg.id}`}>
+            {msg.smart_action_outcome || `✅ Action taken: ${msg.smart_action_done}`}
           </div>
         ) : null}
 
@@ -551,6 +581,12 @@ export default function ChatPage() {
         if (m.sender_id !== user?.id) {
           window.dispatchEvent(new Event("scms:chat:refresh-unread"));
         }
+      } else if (evt.type === "smart_action_done") {
+        setMessages((prev) => prev.map((m) => m.id === evt.message_id ? {
+          ...m,
+          smart_action_done: evt.action,
+          smart_action_outcome: evt.outcome,
+        } : m));
       } else if (evt.type === "group_pin") {
         const gid = evt.group_id;
         setGroups((gs) => gs.map((g) => g.id === gid ? {
@@ -733,6 +769,23 @@ export default function ChatPage() {
       setMessages((prev) => prev.map((m) => m.id === msg.id ? { ...m, replied_at: null, reply_text: null } : m));
       toast.error(formatApiError(e));
     }
+  };
+
+  const runSmartAction = async (msg, action) => {
+    if (!msg || !action) return;
+    try {
+      const r = await api.post(`/messaging/messages/${msg.id}/smart-action`, {
+        action: action.action,
+        student_id: action.student_id,
+        days: action.days,
+      });
+      setMessages((prev) => prev.map((m) => m.id === msg.id ? {
+        ...m,
+        smart_action_done: r.data?.action,
+        smart_action_outcome: r.data?.outcome,
+      } : m));
+      toast.success(r.data?.outcome || "Done");
+    } catch (e) { toast.error(formatApiError(e)); }
   };
 
   const insertMention = () => {
@@ -1001,6 +1054,7 @@ export default function ChatPage() {
                         onPin={isGroup && active.is_owner ? pinBroadcast : null}
                         isPinned={isGroup && active.pinned_message_id === m.id}
                         onQuickReply={isSystem ? sendQuickReply : null}
+                        onSmartAction={!isSystem && !isGroup ? runSmartAction : null}
                       />
                     ))}
                     {peerTyping ? <TypingDots /> : null}

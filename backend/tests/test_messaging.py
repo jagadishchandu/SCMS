@@ -61,8 +61,10 @@ class TestContacts:
         ids = [c["id"] for c in r.json()["contacts"]]
         assert users["teacher"]["id"] in ids
         assert users["teacher2"]["id"] in ids
-        # admin should NOT see parents directly
-        assert users["parent1"]["id"] not in ids
+        # iter34: admin contact matrix expanded — admin now also sees parents
+        # and accounts users (in addition to teachers). Verify parents are
+        # included (was previously asserted absent).
+        assert users["parent1"]["id"] in ids
 
     def test_teacher_sees_admin_and_own_class_parents(self, sessions, users):
         r = sessions["teacher"].get(f"{API}/messaging/contacts", timeout=20)
@@ -81,7 +83,9 @@ class TestContacts:
         ids = [c["id"] for c in r.json()["contacts"]]
         assert users["teacher"]["id"] in ids
         assert users["teacher2"]["id"] not in ids
-        assert users["admin"]["id"] not in ids
+        # iter34: parent contact matrix expanded — parents now ALSO see the
+        # principal (school_admin). Previously this asserted admin not in ids.
+        assert users["admin"]["id"] in ids
 
 
 # ---------- send / list messages ----------

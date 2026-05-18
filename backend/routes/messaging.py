@@ -108,13 +108,15 @@ def _conv_participants(a: str, b: str) -> list[str]:
 
 
 async def _is_allowed_peer(user: dict, peer_id: str) -> tuple[bool, Optional[dict]]:
-    """Check whether `user` is allowed to chat with `peer_id` under our role policy:
+    """Check whether `user` is allowed to chat with `peer_id` under our role policy.
 
-    * parent       ↔ class-teacher of any of their children
-    * teacher      ↔ parent of any student in their class/section (via class_teacher_map),
-                     OR any school_admin of the same school
-    * school_admin ↔ any teacher of the same school
-
+    Allowed pairs (same school, both active):
+      • school_admin ↔ teacher
+      • school_admin ↔ parent       (principal ↔ any parent)
+      • school_admin ↔ accounts
+      • accounts     ↔ parent       (fee chases)
+      • teacher      ↔ parent       (only parents of a student in teacher's class/section)
+      • parent       ↔ teacher      (only their child's class teacher)
     Returns (allowed, peer_user_dict_or_None).
     """
     if user["id"] == peer_id:
@@ -131,15 +133,21 @@ async def _is_allowed_peer(user: dict, peer_id: str) -> tuple[bool, Optional[dic
     school_id = user["school_id"]
     tdb = await tenant_db(school_id)
 
-    # school_admin <-> teacher
-    if role == "school_admin" and proles == "teacher":
-        return True, peer
-    if role == "teacher" and proles == "school_admin":
+    pair = frozenset({role, proles}) if role != proles else None
+
+    # Symmetric staff <-> staff / staff <-> parent pairs that don't need
+    # class-mapping checks.
+    OPEN_PAIRS: list[frozenset] = [
+        frozenset({"school_admin", "teacher"}),
+        frozenset({"school_admin", "parent"}),
+        frozenset({"school_admin", "accounts"}),
+        frozenset({"accounts", "parent"}),
+    ]
+    if pair and pair in OPEN_PAIRS:
         return True, peer
 
-    # teacher <-> parent
+    # teacher <-> parent — restricted to parents of students in this teacher's classes
     if role == "teacher" and proles == "parent":
-        # find any student where parent_user_id == peer.id and (class,section) is taught by this teacher
         students = await tdb.students.find({"parent_user_id": peer_id}, {"_id": 0, "class_id": 1, "section": 1}).to_list(50)
         if not students:
             return False, None
@@ -153,7 +161,6 @@ async def _is_allowed_peer(user: dict, peer_id: str) -> tuple[bool, Optional[dic
         return False, None
 
     if role == "parent" and proles == "teacher":
-        # The parent's children's class-teacher
         my_kids = await tdb.students.find({"parent_user_id": user["id"]}, {"_id": 0, "class_id": 1, "section": 1}).to_list(50)
         if not my_kids:
             return False, None
@@ -456,7 +463,7 @@ async def _hydrate_peers(school_id: str, peer_ids: list[str]) -> dict[str, dict]
 @router.get("/contacts")
 async def list_contacts(user: dict = Depends(get_current_user)):
     """Return the list of users this user is allowed to start a chat with."""
-    if user.get("role") not in ("parent", "teacher", "school_admin"):
+    if user.get("role") not in ("parent", "teacher", "school_admin", "accounts"):
         return {"contacts": []}
     school_id = user["school_id"]
     db = get_db()
@@ -465,20 +472,27 @@ async def list_contacts(user: dict = Depends(get_current_user)):
 
     out: list[dict] = []
 
-    if role == "school_admin":
-        # all teachers of this school
-        teachers = await db.users.find(
-            {"school_id": school_id, "role": "teacher", "is_active": True},
+    async def _all_users_of(roles: list[str], context: str | None = None) -> list[dict]:
+        rows = await db.users.find(
+            {"school_id": school_id, "role": {"$in": roles}, "is_active": True, "id": {"$ne": user["id"]}},
             {"_id": 0, "id": 1, "name": 1, "role": 1, "email": 1},
-        ).to_list(2000)
-        out = teachers
+        ).to_list(5000)
+        if context:
+            for r in rows:
+                r["context"] = context
+        return rows
+
+    if role == "school_admin":
+        # School admins can reach every teacher, parent, and accounts user.
+        out = (
+            await _all_users_of(["teacher"])
+            + await _all_users_of(["accounts"])
+            + await _all_users_of(["parent"])
+        )
 
     elif role == "teacher":
         # all school_admins + parents of students in teacher's classes
-        admins = await db.users.find(
-            {"school_id": school_id, "role": "school_admin", "is_active": True},
-            {"_id": 0, "id": 1, "name": 1, "role": 1, "email": 1},
-        ).to_list(50)
+        admins = await _all_users_of(["school_admin"])
         mappings = await tdb.class_teacher_map.find(
             {"school_id": school_id, "teacher_id": user["id"]}, {"_id": 0, "class_id": 1, "section": 1},
         ).to_list(100)
@@ -493,19 +507,16 @@ async def list_contacts(user: dict = Depends(get_current_user)):
             )
         parent_ids = list({s["parent_user_id"] for s in students if s.get("parent_user_id")})
         parents_idx = await _hydrate_peers(school_id, parent_ids)
-        # parent contacts get child labels appended
+        parents_with_ctx: list[dict] = []
         for s in students:
             pu = parents_idx.get(s.get("parent_user_id"))
             if not pu:
                 continue
-            out.append({
-                **pu,
-                "context": f"Parent of {s.get('name')} ({s.get('student_uid')})",
-            })
+            parents_with_ctx.append({**pu, "context": f"Parent of {s.get('name')} ({s.get('student_uid')})"})
         # de-dup parents (a parent might have two kids in same class)
         seen = set()
         deduped: list[dict] = []
-        for c in out:
+        for c in parents_with_ctx:
             if c["id"] in seen:
                 continue
             seen.add(c["id"])
@@ -513,11 +524,12 @@ async def list_contacts(user: dict = Depends(get_current_user)):
         out = admins + deduped
 
     elif role == "parent":
+        # 1. Class teachers of the parent's children
         my_kids = await tdb.students.find(
             {"parent_user_id": user["id"]},
             {"_id": 0, "id": 1, "name": 1, "student_uid": 1, "class_id": 1, "section": 1},
         ).to_list(50)
-        teacher_ids: dict[str, str] = {}  # teacher_id -> "Kid name (UID)"
+        teacher_ids: dict[str, str] = {}  # teacher_id -> ctx
         for k in my_kids:
             mappings = await tdb.class_teacher_map.find(
                 {"school_id": school_id, "class_id": k["class_id"], "section": k["section"]},
@@ -526,10 +538,36 @@ async def list_contacts(user: dict = Depends(get_current_user)):
             for m in mappings:
                 teacher_ids.setdefault(m["teacher_id"], f"Class teacher of {k['name']} ({k['student_uid']})")
         teachers_idx = await _hydrate_peers(school_id, list(teacher_ids.keys()))
+        teachers = []
         for tid, ctx in teacher_ids.items():
             t = teachers_idx.get(tid)
             if t:
-                out.append({**t, "context": ctx})
+                teachers.append({**t, "context": ctx})
+        # 2. Principal(s) — school admins
+        principals = await _all_users_of(["school_admin"], "Principal · School office")
+        # 3. Accounts (fees, dues)
+        accounts = await _all_users_of(["accounts"], "Accounts · Fees & dues")
+        out = principals + teachers + accounts
+
+    elif role == "accounts":
+        # Accounts users chat with every parent + admins.
+        admins = await _all_users_of(["school_admin"])
+        parents = await _all_users_of(["parent"], "Parent")
+        # Enrich each parent contact with their child names for quick triage.
+        if parents:
+            pids = [p["id"] for p in parents]
+            students = await tdb.students.find(
+                {"parent_user_id": {"$in": pids}},
+                {"_id": 0, "name": 1, "student_uid": 1, "parent_user_id": 1},
+            ).to_list(5000)
+            by_pid: dict[str, list[str]] = {}
+            for s in students:
+                by_pid.setdefault(s["parent_user_id"], []).append(f"{s['name']} ({s['student_uid']})")
+            for p in parents:
+                kids = by_pid.get(p["id"], [])
+                if kids:
+                    p["context"] = "Parent of " + ", ".join(kids[:2]) + (f" +{len(kids)-2} more" if len(kids) > 2 else "")
+        out = admins + parents
 
     # Enrich with online + has-existing-conversation flag
     conv_lookup = {}
@@ -583,7 +621,7 @@ async def list_contacts(user: dict = Depends(get_current_user)):
 
 @router.get("/conversations")
 async def list_conversations(user: dict = Depends(get_current_user)):
-    if user.get("role") not in ("parent", "teacher", "school_admin"):
+    if user.get("role") not in ("parent", "teacher", "school_admin", "accounts"):
         return {"conversations": []}
     school_id = user["school_id"]
     tdb = await tenant_db(school_id)
@@ -838,7 +876,7 @@ async def typing(peer_id: str, payload: TypingIn, user: dict = Depends(get_curre
 
 @router.get("/unread-count")
 async def unread_count(user: dict = Depends(get_current_user)):
-    if user.get("role") not in ("parent", "teacher", "school_admin"):
+    if user.get("role") not in ("parent", "teacher", "school_admin", "accounts"):
         return {"count": 0, "mentions": 0}
     school_id = user["school_id"]
     tdb = await tenant_db(school_id)
@@ -1038,7 +1076,7 @@ async def list_updates(user: dict = Depends(get_current_user)):
     """List the latest channel updates addressed to the current user. For
     parents, also grouped by child (limit 7 per child). The notify pipeline
     already trims to 7 per (recipient_id, related_student_id) on insert."""
-    if user.get("role") not in ("parent", "teacher", "school_admin"):
+    if user.get("role") not in ("parent", "teacher", "school_admin", "accounts"):
         return {"updates": [], "by_student": {}}
     school_id = user["school_id"]
     tdb = await tenant_db(school_id)
@@ -1065,7 +1103,7 @@ async def list_updates(user: dict = Depends(get_current_user)):
 
 @router.get("/updates/unread-count")
 async def updates_unread_count(user: dict = Depends(get_current_user)):
-    if user.get("role") not in ("parent", "teacher", "school_admin"):
+    if user.get("role") not in ("parent", "teacher", "school_admin", "accounts"):
         return {"count": 0}
     school_id = user["school_id"]
     tdb = await tenant_db(school_id)
@@ -1077,7 +1115,7 @@ async def updates_unread_count(user: dict = Depends(get_current_user)):
 
 @router.post("/updates/mark-all-read")
 async def mark_all_updates_read(user: dict = Depends(get_current_user)):
-    if user.get("role") not in ("parent", "teacher", "school_admin"):
+    if user.get("role") not in ("parent", "teacher", "school_admin", "accounts"):
         return {"ok": True, "marked": 0}
     school_id = user["school_id"]
     tdb = await tenant_db(school_id)
@@ -1173,7 +1211,7 @@ async def _ensure_teacher_to_class_parents_groups(tdb, school_id: str, teacher: 
 async def list_groups(user: dict = Depends(get_current_user)):
     """Return groups visible to the current user (owner or member). Auto-creates
     the user's owned groups on the fly so the UI is always up to date."""
-    if user.get("role") not in ("parent", "teacher", "school_admin"):
+    if user.get("role") not in ("parent", "teacher", "school_admin", "accounts"):
         return {"groups": []}
     school_id = user["school_id"]
     tdb = await tenant_db(school_id)
@@ -1528,7 +1566,7 @@ async def post_system_quick_reply(payload: QuickReplyIn, user: dict = Depends(ge
     Chat tab) and stamps the originating chat_updates row as `replied_at`
     so the UI can hide the quick-reply buttons on subsequent loads.
     """
-    if user.get("role") not in ("parent", "teacher", "school_admin"):
+    if user.get("role") not in ("parent", "teacher", "school_admin", "accounts"):
         raise HTTPException(status_code=403, detail="Not allowed")
     school_id = user["school_id"]
     tdb = await tenant_db(school_id)
@@ -1555,6 +1593,47 @@ async def post_system_quick_reply(payload: QuickReplyIn, user: dict = Depends(ge
             student_label = f" · {s.get('name')} ({s.get('student_uid')})"
     composed = f"↩︎ Re: {subject}{student_label}\n\n{payload.text}"
 
+    # ---- Smart action suggestions for the recipient ----
+    # We embed structured hints on the 1-1 message so the recipient's UI can
+    # render one-tap follow-up actions ("Mark absent today", "Approve sick
+    # leave", "Send payment link", …). The set is keyed off the original
+    # update kind + the parent's chosen reply phrase.
+    upd_info = _classify_update(upd)
+    kind = upd_info.get("kind")
+    sid = upd.get("related_student_id")
+    reply_lc = (payload.text or "").lower()
+    smart_actions: list[dict] = []
+    if kind in ("attendance", "sick") and sid:
+        if "unwell" in reply_lc or "sick" in reply_lc:
+            smart_actions = [
+                {"action": "mark_absent_today",  "label": "Mark absent today",       "kind": "attendance", "student_id": sid},
+                {"action": "approve_sick_leave", "label": "Approve sick-leave (3d)", "kind": "sick",       "student_id": sid, "days": 3},
+                {"action": "send_wellness_check", "label": "Send wellness check tomorrow", "kind": "wellness", "student_id": sid},
+            ]
+        elif "be there" in reply_lc or "tomorrow" in reply_lc:
+            smart_actions = [
+                {"action": "mark_absent_today", "label": "Mark absent today only", "kind": "attendance", "student_id": sid},
+            ]
+        else:
+            smart_actions = [
+                {"action": "acknowledge_reply", "label": "Acknowledge", "kind": "ack"},
+            ]
+    elif kind == "fee":
+        if "pay today" in reply_lc or "paying" in reply_lc:
+            smart_actions = [
+                {"action": "send_payment_link", "label": "Send payment link",        "kind": "fee", "student_id": sid},
+                {"action": "acknowledge_reply", "label": "Acknowledge",              "kind": "ack"},
+            ]
+        elif "extension" in reply_lc or "later" in reply_lc:
+            smart_actions = [
+                {"action": "grant_fee_extension", "label": "Grant 7-day extension", "kind": "fee", "student_id": sid, "days": 7},
+                {"action": "acknowledge_reply",   "label": "Acknowledge",           "kind": "ack"},
+            ]
+        else:
+            smart_actions = [
+                {"action": "acknowledge_reply", "label": "Acknowledge", "kind": "ack"},
+            ]
+
     # Reuse the standard 1-1 send flow so all WS / push / trim plumbing fires.
     conv = await _upsert_conversation(tdb, school_id, user["id"], recipient["id"])
     now = utc_now()
@@ -1571,6 +1650,10 @@ async def post_system_quick_reply(payload: QuickReplyIn, user: dict = Depends(ge
         "read_at": None,
         "is_quick_reply": True,
         "system_update_id": upd["id"],
+        "quick_reply_text": payload.text,
+        "source_kind": kind,
+        "source_student_id": sid,
+        "smart_actions": smart_actions,
     }
     await tdb.messages.insert_one(dict(msg))
     await tdb.conversations.update_one(
@@ -1623,3 +1706,188 @@ async def post_system_quick_reply(payload: QuickReplyIn, user: dict = Depends(ge
         "reply_text": payload.text,
         "recipient": {"id": recipient["id"], "name": recipient.get("name"), "role": recipient.get("role")},
     }
+
+
+# =========================================================================
+#  Smart-action execution
+# =========================================================================
+
+class SmartActionIn(BaseModel):
+    action: str = Field(min_length=1, max_length=80)
+    student_id: Optional[str] = None
+    days: Optional[int] = Field(default=None, ge=1, le=30)
+    note: Optional[str] = Field(default=None, max_length=400)
+
+
+_SMART_ACTION_ROLES = {
+    "mark_absent_today": {"teacher", "school_admin"},
+    "approve_sick_leave": {"teacher", "school_admin"},
+    "send_wellness_check": {"teacher", "school_admin"},
+    "send_payment_link": {"school_admin", "accounts"},
+    "grant_fee_extension": {"school_admin", "accounts"},
+    "acknowledge_reply": {"teacher", "school_admin", "accounts"},
+}
+
+
+async def _send_followup_to_parent(tdb, school_id: str, sender: dict, parent_id: str, text: str) -> None:
+    """Send a 1-1 chat message from `sender` to `parent_id` reusing all the
+    standard plumbing (conversation upsert + WS fan-out + trim)."""
+    if not parent_id:
+        return
+    conv = await _upsert_conversation(tdb, school_id, sender["id"], parent_id)
+    now = utc_now()
+    msg = {
+        "id": new_id(),
+        "conv_id": conv["id"],
+        "school_id": school_id,
+        "sender_id": sender["id"],
+        "recipient_id": parent_id,
+        "text": text,
+        "attachment": None,
+        "mentions": [],
+        "created_at": now.isoformat(),
+        "read_at": None,
+    }
+    await tdb.messages.insert_one(dict(msg))
+    await tdb.conversations.update_one(
+        {"id": conv["id"]},
+        {"$set": {
+            "last_message_at": msg["created_at"],
+            "last_message_text": text[:160],
+            "last_sender_id": sender["id"],
+        }, "$inc": {f"unread_for.{parent_id}": 1}},
+    )
+    try:
+        await _trim_conversation_history(tdb, conv["id"])
+    except Exception:
+        pass
+    out_msg = clean_doc(dict(msg))
+    payload_evt = {
+        "type": "message",
+        "message": out_msg,
+        "sender": {"id": sender["id"], "name": sender.get("name"), "role": sender.get("role")},
+    }
+    await manager.send_to_user(parent_id, payload_evt)
+    await manager.send_to_user(sender["id"], payload_evt)
+
+
+@router.post("/messages/{message_id}/smart-action")
+async def run_smart_action(message_id: str, payload: SmartActionIn, user: dict = Depends(get_current_user)):
+    """Execute one of the suggested smart actions attached to a quick-reply
+    message. The current user must be the message recipient AND have the role
+    allowed for that action."""
+    school_id = user["school_id"]
+    tdb = await tenant_db(school_id)
+    msg = await tdb.messages.find_one(
+        {"id": message_id, "school_id": school_id, "recipient_id": user["id"]},
+        {"_id": 0},
+    )
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if not msg.get("is_quick_reply"):
+        raise HTTPException(status_code=400, detail="Not a quick-reply message")
+    if msg.get("smart_action_done"):
+        raise HTTPException(status_code=409, detail="Action already taken")
+
+    action = payload.action
+    if action not in _SMART_ACTION_ROLES:
+        raise HTTPException(status_code=400, detail=f"Unknown smart action '{action}'")
+    if user.get("role") not in _SMART_ACTION_ROLES[action]:
+        raise HTTPException(status_code=403, detail="Your role cannot perform this action")
+
+    sid = payload.student_id or msg.get("source_student_id")
+    student = None
+    if sid:
+        student = await tdb.students.find_one({"id": sid}, {"_id": 0})
+        if not student:
+            raise HTTPException(status_code=404, detail="Student not found")
+
+    now = utc_now()
+    today = now.date().isoformat()
+    outcome_text = ""
+
+    if action == "mark_absent_today":
+        if not student:
+            raise HTTPException(status_code=400, detail="student_id required")
+        await tdb.attendance.update_one(
+            {"student_id": sid, "date": today, "school_id": school_id},
+            {"$set": {
+                "student_id": sid, "date": today, "school_id": school_id,
+                "class_id": student.get("class_id"), "section": student.get("section"),
+                "status": "absent", "note": payload.note or "Auto-marked from chat reply",
+                "marked_by": user["id"], "marked_at": now.isoformat(),
+            }, "$setOnInsert": {"id": new_id(), "created_at": now.isoformat()}},
+            upsert=True,
+        )
+        outcome_text = f"✅ Marked {student['name']} absent for {today}."
+
+    elif action == "approve_sick_leave":
+        if not student:
+            raise HTTPException(status_code=400, detail="student_id required")
+        from datetime import timedelta
+        days = max(1, payload.days or 3)
+        end = (now + timedelta(days=days - 1)).date().isoformat()
+        await tdb.sick_leaves.insert_one({
+            "id": new_id(), "school_id": school_id, "student_id": sid,
+            "student_name": student.get("name"),
+            "class_id": student.get("class_id"), "section": student.get("section"),
+            "from_date": today, "to_date": end,
+            "reason": payload.note or "Sick (auto-approved from chat reply)",
+            "status": "approved",
+            "approved_by": user["id"], "approved_at": now.isoformat(),
+            "created_at": now.isoformat(),
+            "submitted_by": msg.get("sender_id"),
+        })
+        outcome_text = f"✅ Approved sick-leave for {student['name']}: {today} → {end} ({days}d)."
+
+    elif action == "send_wellness_check":
+        await tdb.wellness_checks.insert_one({
+            "id": new_id(), "school_id": school_id, "student_id": sid,
+            "due_at": now.isoformat(), "created_by": user["id"],
+            "status": "pending", "note": payload.note, "created_at": now.isoformat(),
+        })
+        outcome_text = f"✅ Scheduled a wellness check for {student['name'] if student else 'student'} tomorrow."
+
+    elif action == "send_payment_link":
+        await _send_followup_to_parent(
+            tdb, school_id, user, msg.get("sender_id"),
+            "You can pay the pending fees here: https://classroom-messenger-1.preview.emergentagent.com/parent/fees",
+        )
+        outcome_text = "✅ Payment link sent to the parent."
+
+    elif action == "grant_fee_extension":
+        days = max(1, payload.days or 7)
+        await _send_followup_to_parent(
+            tdb, school_id, user, msg.get("sender_id"),
+            f"We've granted a {days}-day extension on the pending fees. Please pay before then to avoid late charges.",
+        )
+        outcome_text = f"✅ Granted {days}-day fee extension."
+
+    elif action == "acknowledge_reply":
+        await _send_followup_to_parent(
+            tdb, school_id, user, msg.get("sender_id"),
+            payload.note or "👍 Got it, thanks for letting us know.",
+        )
+        outcome_text = "✅ Acknowledged."
+
+    await tdb.messages.update_one(
+        {"id": message_id},
+        {"$set": {
+            "smart_action_done": action,
+            "smart_action_outcome": outcome_text,
+            "smart_action_at": now.isoformat(),
+            "smart_action_by": user["id"],
+        }},
+    )
+    conv_id = msg.get("conv_id")
+    if conv_id:
+        conv = await tdb.conversations.find_one({"id": conv_id}, {"_id": 0, "participants": 1})
+        for pid in (conv or {}).get("participants") or []:
+            await manager.send_to_user(pid, {
+                "type": "smart_action_done",
+                "message_id": message_id,
+                "action": action,
+                "outcome": outcome_text,
+            })
+    return {"ok": True, "action": action, "outcome": outcome_text}
+

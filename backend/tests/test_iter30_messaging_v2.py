@@ -19,6 +19,7 @@ API = f"{BASE_URL}/api"
 
 PRINCIPAL = ("principal@sunrise.edu", "School@123", "school_admin")
 TEACHER = ("priya@sunrise.edu", "Teacher@123", "teacher")
+TEACHER2 = ("rohit@sunrise.edu", "Teacher@123", "teacher")  # Grade 6-A — unmapped to STU-00001
 PARENT1 = ("parent.stu-00001@sunrise.edu", "Parent@123", "parent")
 
 # 1x1 transparent PNG
@@ -44,6 +45,7 @@ def ctx():
     sessions = {
         "admin": _login(*PRINCIPAL),
         "teacher": _login(*TEACHER),
+        "teacher2": _login(*TEACHER2),
         "parent": _login(*PARENT1),
     }
     users = {}
@@ -92,9 +94,12 @@ class TestMute:
         assert g3.json()["muted"] is False
 
     def test_mute_disallowed_peer(self, ctx):
-        # admin cannot mute against a parent (not allowed peer)
+        # iter34: admin↔parent is now an OPEN_PAIR. Use teacher2 (rohit, Grade
+        # 6-A class teacher) muting parent1 (STU-00001 in 5-A) — this teacher
+        # has no class-teacher mapping for parent1's child, so muting that
+        # disallowed peer must still 403.
         parent_id = ctx["u"]["parent"]["id"]
-        r = ctx["s"]["admin"].post(
+        r = ctx["s"]["teacher2"].post(
             f"{API}/messaging/conversations/{parent_id}/mute",
             json={"muted": True},
             timeout=20,

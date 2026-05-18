@@ -535,6 +535,52 @@ a { color: inherit; text-decoration: none; }
   font-style: italic;
 }
 
+/* Smart-action suggestions (recipient side of a parent quick-reply) */
+.chat-smart-actions {
+  margin-top: 4px;
+  padding: 8px 10px;
+  background: linear-gradient(90deg, rgba(196,154,44,0.12), transparent);
+  border: 1px dashed var(--status-warning);
+  border-radius: 12px;
+  animation: fadeUp 220ms ease both;
+  max-width: 100%;
+}
+.chat-smart-actions-label {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--status-warning);
+  margin-bottom: 6px;
+}
+.chat-smart-actions-row {
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.chat-smart-action {
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--status-warning);
+  color: white;
+  font-size: 12px;
+  font-weight: 600;
+  transition: background-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+  box-shadow: 0 2px 8px -2px rgba(196,154,44,0.5);
+}
+.chat-smart-action:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px -4px rgba(196,154,44,0.65);
+}
+.chat-smart-action:active { transform: scale(0.97); }
+.chat-smart-action-done {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11.5px;
+  color: var(--status-success);
+  margin-top: 4px;
+  padding: 4px 8px;
+  background: var(--status-success-bg);
+  border-radius: 8px;
+  font-weight: 500;
+}
+
 /* Pinned broadcast banner */
 .chat-pin-banner {
   display: flex; align-items: center; gap: 10px;
