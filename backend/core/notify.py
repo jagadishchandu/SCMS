@@ -219,4 +219,43 @@ async def queue_notification(
         doc["sent_at"] = utc_now()
 
     await db.notifications.insert_one(doc)
+
+    # Mirror external-channel notifications into the per-school `chat_updates`
+    # feed so parents/teachers can see them inside the in-app Chat → Updates
+    # tab. We mirror regardless of `status` (sent / queued / failed) so the
+    # update is visible even when the provider isn't configured in this env.
+    # Capped at 7 per recipient + student so we don't bloat the DB.
+    try:
+        if recipient_id and channel in ("whatsapp", "sms", "telegram", "email"):
+            from core.db import tenant_db as _tdb_lookup
+            tdb = await _tdb_lookup(school_id) if school_id else None
+            if tdb is not None:
+                related_student_id = (context or {}).get("student_id") if context else None
+                update_doc = {
+                    "id": new_id(),
+                    "school_id": school_id,
+                    "recipient_id": recipient_id,
+                    "recipient_type": recipient_type,
+                    "channel": channel,
+                    "provider": doc.get("provider"),
+                    "subject": subject or (template or "Update"),
+                    "body": message,
+                    "template": template,
+                    "context": context or {},
+                    "related_student_id": related_student_id,
+                    "created_at": utc_now().isoformat(),
+                    "read_at": None,
+                }
+                await tdb.chat_updates.insert_one(dict(update_doc))
+                # Trim to last 7 per (recipient_id, related_student_id)
+                scope = {"recipient_id": recipient_id, "related_student_id": related_student_id}
+                cursor = tdb.chat_updates.find(scope, {"_id": 0, "id": 1, "created_at": 1}).sort("created_at", -1).skip(7).limit(50)
+                older = await cursor.to_list(50)
+                if older:
+                    old_ids = [o["id"] for o in older]
+                    await tdb.chat_updates.delete_many({"id": {"$in": old_ids}})
+    except Exception as _e:
+        # Mirroring is best-effort. Never let it block the real notification flow.
+        log.warning("chat_updates mirror failed: %s", _e)
+
     return doc

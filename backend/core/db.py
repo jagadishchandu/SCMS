@@ -361,6 +361,14 @@ async def init_school_db(school: dict):
     await sdb.conv_settings.create_index([("user_id", 1), ("conv_id", 1)], unique=True)
     await sdb.conv_settings.create_index([("user_id", 1), ("muted", 1)])
 
+    # ---- Chat: groups + mirrored channel updates ----
+    await sdb.groups.create_index([("school_id", 1), ("key", 1)], unique=True)
+    await sdb.groups.create_index("owner_id")
+    await sdb.groups.create_index("members")
+    await sdb.group_messages.create_index([("group_id", 1), ("created_at", -1)])
+    await sdb.chat_updates.create_index([("recipient_id", 1), ("created_at", -1)])
+    await sdb.chat_updates.create_index([("recipient_id", 1), ("related_student_id", 1), ("created_at", -1)])
+
     # ---- Meta marker (lists which version provisioned the schema) ----
     await sdb.meta.update_one(
         {"_marker": "school_db"},

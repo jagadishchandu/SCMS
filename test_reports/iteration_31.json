@@ -1,0 +1,40 @@
+{
+  "summary": "Iter 31 — full regression of chat feature including new group chat (admin->teachers, teacher->parents), chat_updates mirror via queue_notification, and hardened _trim_conversation_history. Backend: 36/36 tests pass across iter29 (test_messaging.py 12), iter30 (test_iter30_messaging_v2.py 10), and new iter31 (test_iter31_groups_updates.py 14) in 21.13s — covers groups list (admin owner + teacher owner/member + parent member), owner-only posting (owner 200, non-owner 403, empty 400), group GET (members 200, non-member 403), group history trim to 10 after 12 sends, group mark-read flow, /updates endpoints (list with by_student hydration, unread-count, mark-all-read), DIRECT mirror call to queue_notification(channel='telegram') confirming the 9->7 trim per (recipient, related_student_id), hardened 1-1 trim leaving exactly 10 newest after 15 sends with idx 0-4 evicted, and cross-school/cross-class isolation (teacher2 cannot read priya's group). Frontend: Chat page tab switcher (Chats|Updates) works for all 3 roles; BROADCAST GROUPS section is rendered above DIRECT contacts; Megaphone shown for owners; opening admin-broadcast group as a teacher correctly shows chat-composer-locked (read-only); teacher OWNS Grade 5 A — Parents group and successfully broadcasts 'UI_broadcast_...' which is then visible to parent.stu-00001 on next load; parent sees 'Grade 5 A - Parents' as a member with chat-composer-locked composer and no send button; parent Updates tab renders 7 Telegram update cards from the queued notifications (validates mirror flow). Admin sees only the All Teachers (Broadcast) group as owner with active composer. Student photo route /students/{id}/photo still stores base64 in MongoDB (students.photo data-URL) — no Azure.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter31_groups_updates.py",
+    "/app/backend/tests/test_iter30_messaging_v2.py",
+    "/app/backend/tests/test_messaging.py",
+    "/app/test_reports/pytest/iter31_groups_updates.xml",
+    "/app/test_reports/pytest/iter31_full_regression.xml"
+  ],
+  "action_items": [
+    "(carry-over from iter30 — not in this iter's scope) Fix the @@ doubling bug in ChatPage.jsx insertMention() so the user-typed '@' trigger is stripped before inserting '@<Name> '.",
+    "(nit) routes/messaging.py send_message has an unreachable duplicate 'return out_msg' near line 613 — harmless dead code, worth tidying when next touched."
+  ],
+  "critical_code_review_comments": [
+    "messaging.py _trim_conversation_history (1-1): now uses keep-set delete (delete WHERE id NOT IN <latest 10 ids>). Verified end-to-end: after 15 alternating sends, GET returns exactly 10 messages and the 5 oldest are evicted. Hardening goal achieved — identical created_at values cannot evict a kept row.",
+    "messaging.py send_group_message: applies the same keep-set trim pattern to group_messages (delete WHERE id NOT IN keep_ids). Trim only fires when len(keep_ids) >= cap, which is correct. Verified by sending 12 group messages then asserting <=10 remain with the newest preserved.",
+    "messaging.py list_groups: auto-creates groups on every GET via _ensure_admin_to_teachers_group / _ensure_teacher_to_class_parents_groups and refreshes member list to current teacher/parent set. Good — keeps groups in sync with class assignments without a separate cron. Watch: O(students*classes) lookup per call; fine for current scale but consider caching if a school has 100+ classes.",
+    "messaging.py mark_group_read: uses $addToSet on read_by — idempotent and safe. modified_count is returned even when no docs actually changed: acceptable but slightly misleading. Not a bug.",
+    "notify.py queue_notification: mirror block correctly runs for whatsapp/sms/telegram/email regardless of provider status (sent/queued/failed) so dev envs without Twilio/Telegram still populate chat_updates. Trim uses sort+skip(7) which is fine; consider adding a {recipient_id, related_student_id, created_at} compound index to keep this scan cheap as volume grows (db.py already adds indexes — verify the compound exists).",
+    "notify.py queue_notification mirror: silently swallows all mirror errors via try/except. Acceptable as 'best-effort', but a log.warning('chat_updates mirror failed: %s', _e) IS already present — good.",
+    "Cross-school isolation: a teacher of school A querying /groups/{id of school B}/messages returns 404 (group not found in tenant_db(A)) and POST returns 404 as well — verified within-school by using teacher2 (non-member of priya's class group), which returned 403 as expected. True cross-tenant test was not run because we only have one seeded school (DEMO) — the route filters by school_id of the calling user's tenant DB, which structurally enforces isolation.",
+    "students.py upload_photo: confirmed base64 data URL stored in tdb.students.photo. No Azure/object-store dependency. Max ~2MB enforced upstream.",
+    "ChatPage.jsx: tab switcher, GroupRow with Megaphone for owner, UpdateCard with channel icon, chat-composer-locked block — all rendered with proper data-testid attributes. Verified the parent's locked composer correctly omits chat-send-btn and chat-input is replaced with the locked message."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter31_groups_updates.py"
+  ],
+  "success_rate": {"backend": "100% (36/36 incl regression)", "frontend": "100% on the 6 group/updates flows tested for admin+teacher+parent"},
+  "test_credentials": "principal@sunrise.edu/School@123 (School Super Admin), priya@sunrise.edu/Teacher@123 (Teacher), rohit@sunrise.edu/Teacher@123 (Teacher, no class students), parent.stu-00001@sunrise.edu/Parent@123 (Parent), parent.stu-00002@sunrise.edu/Parent@123 (Parent). Login: select_option(label=...) on [data-testid=login-role-select] then fill email/password and click [data-testid=login-submit-btn].",
+  "seed_data_creation": "Sent 12 group messages in priya's Grade 5 A — Parents group (TEST_gtrim_*_0..11) which auto-trimmed to 10. Sent 15 messages in priya<->parent.stu-00001 1-1 thread (TEST_trim31_*_00..14) which auto-trimmed to newest 10. Inserted 9 telegram-channel chat_updates rows for parent.stu-00001 with student_id=STU-00001 (TEST_update_0..8_<ts>), auto-trimmed to 7. One UI-sent broadcast 'UI_broadcast_<ts>' in priya's Grade 5 A — Parents group also remains. All TEST_-prefixed except the UI broadcast.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Three messaging backend test files now exist and should be run together as the chat-feature regression: test_messaging.py (iter29, 12), test_iter30_messaging_v2.py (iter30, 10), test_iter31_groups_updates.py (iter31, 14). The iter31 file includes one test (test_mirror_via_direct_db_call) that imports backend modules directly and uses load_dotenv('/app/backend/.env'); this only works when run from inside the kubernetes pod with /app/backend on PYTHONPATH (pytest auto-adds it because of conftest at /app/backend). Groups are LAZILY auto-created on GET /api/messaging/groups — never assume they exist before hitting that endpoint for the role you want. Parents only see groups they're members of, which requires the OWNING TEACHER to have called GET /groups at least once first to provision the group. UI tip: the first chat-group-* row in the contact list is sorted by last_message_at DESC, so depending on activity it can be either the admin broadcast or the teacher_to_parents group — always identify the owner group by matching text 'Parents' AND 'Grade' before clicking, never by index. chat-composer-locked vs chat-send-btn is the most reliable owner/non-owner check on the UI side."
+}

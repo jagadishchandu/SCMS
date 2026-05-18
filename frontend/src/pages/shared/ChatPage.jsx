@@ -7,7 +7,8 @@ import { PageHeader, Empty } from "../../components/Primitives";
 import {
   ChatCircleDots, PaperPlaneTilt, MagnifyingGlass, CaretLeft,
   CheckCircle, Check, Circle, BellSimpleSlash, BellSimple, Paperclip,
-  FilePdf, X as XIcon, At,
+  FilePdf, X as XIcon, At, Megaphone, Newspaper, WhatsappLogo, TelegramLogo,
+  EnvelopeSimple, DeviceMobile, UsersThree,
 } from "@phosphor-icons/react";
 import toast from "react-hot-toast";
 
@@ -183,7 +184,7 @@ function AttachmentView({ att, mine }) {
   );
 }
 
-function MessageBubble({ msg, mine, peerName }) {
+function MessageBubble({ msg, mine, peerName, hideReceipt = false }) {
   const hasMention = Array.isArray(msg.mentions) && msg.mentions.length > 0;
   const onlyAttachment = !msg.text && msg.attachment;
   return (
@@ -207,7 +208,7 @@ function MessageBubble({ msg, mine, peerName }) {
           {!mine ? <span className="font-medium">{peerName}</span> : null}
           <span>{timeShort(msg.created_at)}</span>
           {mine ? (
-            msg.read_at ? (
+            hideReceipt ? null : msg.read_at ? (
               <CheckCircle size={12} weight="fill" className="text-status-info" data-testid={`chat-read-${msg.id}`} />
             ) : (
               <Check size={12} className="text-ink-muted" data-testid={`chat-sent-${msg.id}`} />
@@ -230,11 +231,88 @@ function TypingDots() {
   );
 }
 
+function GroupRow({ group, active, onClick }) {
+  const isOwner = group.is_owner;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`w-full text-left px-3 py-3 flex items-center gap-3 rounded-lg transition-all duration-200 chat-contact-row ${
+        active ? "bg-primary-light/60 ring-1 ring-primary/30" : "hover:bg-bg-subtle"
+      }`}
+      data-testid={`chat-group-${group.id}`}
+    >
+      <div className="chat-group-avatar"><UsersThree size={20} weight="duotone" /></div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <div className="font-medium text-sm truncate text-ink flex items-center gap-1.5">
+            {group.name}
+            {isOwner ? <Megaphone size={11} className="text-primary" /> : null}
+          </div>
+          {group.last_message_at ? (
+            <div className="ml-auto text-[10px] text-ink-muted shrink-0">{timeShort(group.last_message_at)}</div>
+          ) : null}
+        </div>
+        <div className="flex items-center gap-2 mt-0.5">
+          <span className="badge bg-primary-light text-primary !text-[10px] !py-0">
+            {group.scope === "admin_to_teachers" ? "Admin → Teachers" : "Teacher → Parents"}
+          </span>
+          <div className="text-xs text-ink-muted truncate flex-1">
+            {group.last_message_text || `${group.member_count} member${group.member_count === 1 ? "" : "s"}`}
+          </div>
+        </div>
+      </div>
+      {group.unread > 0 ? (
+        <span
+          className="ml-1 inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-semibold bg-status-danger text-white chat-unread-badge"
+          data-testid={`chat-group-unread-${group.id}`}
+        >
+          {group.unread > 99 ? "99+" : group.unread}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
+const CHANNEL_META = {
+  whatsapp: { icon: WhatsappLogo, label: "WhatsApp", cls: "chat-update-whatsapp" },
+  telegram: { icon: TelegramLogo, label: "Telegram", cls: "chat-update-telegram" },
+  sms: { icon: DeviceMobile, label: "SMS", cls: "chat-update-sms" },
+  email: { icon: EnvelopeSimple, label: "Email", cls: "chat-update-email" },
+};
+
+function UpdateCard({ upd }) {
+  const meta = CHANNEL_META[upd.channel] || { icon: Newspaper, label: upd.channel, cls: "" };
+  const Icon = meta.icon;
+  return (
+    <article
+      className={`chat-update-card ${meta.cls} ${upd.read_at ? "" : "is-unread"}`}
+      data-testid={`chat-update-${upd.id}`}
+    >
+      <div className="chat-update-channel">
+        <Icon size={16} weight="duotone" />
+        <span>{meta.label}</span>
+        <span className="ml-auto text-[10px] text-ink-muted">{timeShort(upd.created_at)}</span>
+      </div>
+      {upd.student_name ? (
+        <div className="text-[11px] text-primary font-medium mt-1">
+          For {upd.student_name} {upd.student_uid ? <span className="text-ink-muted font-normal">· {upd.student_uid}</span> : null}
+        </div>
+      ) : null}
+      <div className="text-sm text-ink mt-1.5 whitespace-pre-wrap break-words">{upd.body}</div>
+    </article>
+  );
+}
+
 export default function ChatPage() {
   const { user } = useAuth();
   const [contacts, setContacts] = useState([]);
+  const [groups, setGroups] = useState([]);
+  const [updates, setUpdates] = useState([]);
+  const [updatesByStudent, setUpdatesByStudent] = useState({});
+  const [tab, setTab] = useState("chats"); // chats | updates
   const [loadingContacts, setLoadingContacts] = useState(true);
-  const [active, setActive] = useState(null); // peer object
+  const [active, setActive] = useState(null); // peer object OR group object (has scope)
   const [messages, setMessages] = useState([]);
   const [draft, setDraft] = useState("");
   const [search, setSearch] = useState("");
@@ -252,11 +330,17 @@ export default function ChatPage() {
   const { status: wsStatus, sendRaw, onEvent } = useMessagingSocket(!!user);
   const push = useWebPush(!!user);
 
+  const isGroup = !!(active && active.scope);
+
   const loadContacts = useCallback(async () => {
     try {
       setLoadingContacts(true);
-      const r = await api.get("/messaging/contacts");
-      setContacts(r.data?.contacts || []);
+      const [c, g] = await Promise.all([
+        api.get("/messaging/contacts").then((r) => r.data?.contacts || []),
+        api.get("/messaging/groups").then((r) => r.data?.groups || []).catch(() => []),
+      ]);
+      setContacts(c);
+      setGroups(g);
     } catch (e) {
       toast.error(formatApiError(e));
     } finally {
@@ -264,34 +348,52 @@ export default function ChatPage() {
     }
   }, []);
 
-  useEffect(() => { loadContacts(); }, [loadContacts]);
-
-  const loadMessages = useCallback(async (peer) => {
+  const loadUpdates = useCallback(async () => {
     try {
+      const r = await api.get("/messaging/updates");
+      setUpdates(r.data?.updates || []);
+      setUpdatesByStudent(r.data?.by_student || {});
+      api.post("/messaging/updates/mark-all-read").catch(() => {});
+    } catch (_e) { /* silent */ }
+  }, []);
+
+  useEffect(() => { loadContacts(); }, [loadContacts]);
+  useEffect(() => { if (tab === "updates") loadUpdates(); }, [tab, loadUpdates]);
+
+  const loadMessages = useCallback(async (target) => {
+    try {
+      if (target.scope) {
+        // Group
+        const r = await api.get(`/messaging/groups/${target.id}/messages`);
+        setMessages(r.data?.messages || []);
+        await api.post(`/messaging/groups/${target.id}/read`).catch(() => {});
+        setGroups((gs) => gs.map((g) => g.id === target.id ? { ...g, unread: 0 } : g));
+        return;
+      }
       const [msgRes, settingsRes] = await Promise.all([
-        api.get(`/messaging/conversations/${peer.id}/messages`),
-        api.get(`/messaging/conversations/${peer.id}/settings`).catch(() => ({ data: { muted: false } })),
+        api.get(`/messaging/conversations/${target.id}/messages`),
+        api.get(`/messaging/conversations/${target.id}/settings`).catch(() => ({ data: { muted: false } })),
       ]);
       setMessages(msgRes.data?.messages || []);
       // Sync mute state into the active peer
-      setActive((p) => p && p.id === peer.id ? { ...p, muted: !!settingsRes.data?.muted } : p);
-      setContacts((cs) => cs.map((c) => c.id === peer.id ? { ...c, muted: !!settingsRes.data?.muted } : c));
+      setActive((p) => p && p.id === target.id ? { ...p, muted: !!settingsRes.data?.muted } : p);
+      setContacts((cs) => cs.map((c) => c.id === target.id ? { ...c, muted: !!settingsRes.data?.muted } : c));
       // Mark read
-      await api.post(`/messaging/conversations/${peer.id}/read`).catch(() => {});
+      await api.post(`/messaging/conversations/${target.id}/read`).catch(() => {});
       window.dispatchEvent(new Event("scms:chat:refresh-unread"));
       // Locally clear unread for this contact
-      setContacts((cs) => cs.map((c) => c.id === peer.id ? { ...c, unread: 0, mentions: 0 } : c));
+      setContacts((cs) => cs.map((c) => c.id === target.id ? { ...c, unread: 0, mentions: 0 } : c));
     } catch (e) {
       toast.error(formatApiError(e));
     }
   }, []);
 
-  const openChat = useCallback((peer) => {
-    setActive(peer);
+  const openChat = useCallback((target) => {
+    setActive(target);
     setMessages([]);
     setPeerTyping(false);
     setShowListMobile(false);
-    loadMessages(peer);
+    loadMessages(target);
     setTimeout(() => inputRef.current?.focus(), 200);
   }, [loadMessages]);
 
@@ -339,6 +441,33 @@ export default function ChatPage() {
         if (m.sender_id !== user?.id) {
           window.dispatchEvent(new Event("scms:chat:refresh-unread"));
         }
+      } else if (evt.type === "group_message") {
+        const m = evt.message;
+        const gid = evt.group_id;
+        if (active && active.scope && active.id === gid) {
+          setMessages((prev) => prev.some((x) => x.id === m.id) ? prev : [...prev, m]);
+          if (m.sender_id !== user?.id) {
+            api.post(`/messaging/groups/${gid}/read`).catch(() => {});
+            window.dispatchEvent(new Event("scms:chat:refresh-unread"));
+          }
+        }
+        setGroups((gs) => {
+          const updated = gs.map((g) => {
+            if (g.id !== gid) return g;
+            const incrUnread = m.sender_id !== user?.id && (!active || active.id !== gid);
+            return {
+              ...g,
+              last_message_at: m.created_at,
+              last_message_text: m.text || (m.attachment ? `📎 ${m.attachment.name}` : ""),
+              last_sender_id: m.sender_id,
+              unread: incrUnread ? (g.unread || 0) + 1 : g.unread,
+            };
+          });
+          return updated;
+        });
+        if (m.sender_id !== user?.id) {
+          window.dispatchEvent(new Event("scms:chat:refresh-unread"));
+        }
       } else if (evt.type === "typing") {
         if (active && evt.from === active.id) {
           setPeerTyping(!!evt.is_typing);
@@ -381,22 +510,37 @@ export default function ChatPage() {
     try {
       const body = { text };
       if (savedAtt) body.attachment = savedAtt;
-      const r = await api.post(`/messaging/conversations/${active.id}/messages`, body);
+      const url = isGroup
+        ? `/messaging/groups/${active.id}/messages`
+        : `/messaging/conversations/${active.id}/messages`;
+      const r = await api.post(url, body);
       const m = r.data;
       setMessages((prev) => prev.some((x) => x.id === m.id) ? prev : [...prev, m]);
-      setContacts((cs) => {
-        const updated = cs.map((c) => c.id === active.id ? {
-          ...c,
-          last_message_at: m.created_at,
-          last_message_text: m.text || (m.attachment ? `📎 ${m.attachment.name}` : ""),
-        } : c);
-        const idx = updated.findIndex((c) => c.id === active.id);
-        if (idx > 0) {
-          const [row] = updated.splice(idx, 1);
-          updated.unshift(row);
-        }
-        return updated;
-      });
+      if (isGroup) {
+        setGroups((gs) => {
+          const updated = gs.map((g) => g.id === active.id ? {
+            ...g,
+            last_message_at: m.created_at,
+            last_message_text: m.text || (m.attachment ? `📎 ${m.attachment.name}` : ""),
+            last_sender_id: m.sender_id,
+          } : g);
+          return updated;
+        });
+      } else {
+        setContacts((cs) => {
+          const updated = cs.map((c) => c.id === active.id ? {
+            ...c,
+            last_message_at: m.created_at,
+            last_message_text: m.text || (m.attachment ? `📎 ${m.attachment.name}` : ""),
+          } : c);
+          const idx = updated.findIndex((c) => c.id === active.id);
+          if (idx > 0) {
+            const [row] = updated.splice(idx, 1);
+            updated.unshift(row);
+          }
+          return updated;
+        });
+      }
     } catch (e) {
       toast.error(formatApiError(e));
       setDraft(savedText);
@@ -442,12 +586,18 @@ export default function ChatPage() {
     const insertText = `@${active.name} `;
     setDraft((d) => {
       const el = inputRef.current;
-      if (el && el.selectionStart != null) {
-        const i = el.selectionStart;
-        const j = el.selectionEnd;
-        return d.slice(0, i) + insertText + d.slice(j);
+      const cursor = el && el.selectionStart != null ? el.selectionStart : d.length;
+      // Walk back from cursor to find the most recent unclosed '@' trigger.
+      let start = cursor;
+      while (start > 0 && d[start - 1] !== "@" && !/\s/.test(d[start - 1])) {
+        start--;
       }
-      return d + insertText;
+      if (start > 0 && d[start - 1] === "@") {
+        start--; // include the @ so we replace it
+      } else {
+        start = cursor; // no trigger found — fall back to plain insert
+      }
+      return d.slice(0, start) + insertText + d.slice(cursor);
     });
     setMentionMenu(false);
     setTimeout(() => inputRef.current?.focus(), 0);
@@ -497,41 +647,101 @@ export default function ChatPage() {
           className={`chat-list panel ${showListMobile ? "is-shown" : ""}`}
           data-testid="chat-contact-list"
         >
-          <div className="p-3 border-b border-line">
-            <div className="relative">
-              <MagnifyingGlass size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-muted pointer-events-none" />
-              <input
-                className="input !pl-9"
-                placeholder="Search contacts…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                data-testid="chat-search-input"
-              />
-            </div>
+          {/* Tabs */}
+          <div className="chat-tabs" role="tablist">
+            <button
+              type="button"
+              className={`chat-tab ${tab === "chats" ? "is-active" : ""}`}
+              onClick={() => { setTab("chats"); setActive(null); }}
+              data-testid="chat-tab-chats"
+            >
+              <ChatCircleDots size={14} /> Chats
+            </button>
+            <button
+              type="button"
+              className={`chat-tab ${tab === "updates" ? "is-active" : ""}`}
+              onClick={() => { setTab("updates"); setActive(null); setShowListMobile(true); }}
+              data-testid="chat-tab-updates"
+            >
+              <Newspaper size={14} /> Updates
+            </button>
           </div>
-          <div className="flex-1 overflow-y-auto p-2 space-y-1">
-            {loadingContacts ? (
-              <>
-                {[0, 1, 2, 3].map((i) => <div key={i} className="skeleton h-14 w-full" />)}
-              </>
-            ) : filteredContacts.length === 0 ? (
-              <div className="p-4">
-                <Empty
-                  title={search ? "No matches" : "No contacts yet"}
-                  message={search ? "Try a different search." : "Once you're assigned to a class, the people you can chat with will appear here."}
-                />
+
+          {tab === "chats" ? (
+            <>
+              <div className="p-3 border-b border-line">
+                <div className="relative">
+                  <MagnifyingGlass size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-muted pointer-events-none" />
+                  <input
+                    className="input !pl-9"
+                    placeholder="Search contacts…"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    data-testid="chat-search-input"
+                  />
+                </div>
               </div>
-            ) : (
-              filteredContacts.map((c) => (
-                <ContactRow
-                  key={c.id}
-                  contact={c}
-                  active={active?.id === c.id}
-                  onClick={() => openChat(c)}
-                />
-              ))
-            )}
-          </div>
+              <div className="flex-1 overflow-y-auto p-2 space-y-1">
+                {/* Groups section */}
+                {groups.length > 0 ? (
+                  <>
+                    <div className="px-2 pt-1 pb-1 text-[10px] uppercase tracking-wider font-semibold text-ink-muted flex items-center gap-1.5">
+                      <UsersThree size={11} /> Broadcast Groups
+                    </div>
+                    {groups.map((g) => (
+                      <GroupRow
+                        key={g.id}
+                        group={g}
+                        active={isGroup && active?.id === g.id}
+                        onClick={() => openChat({ ...g, scope: g.scope })}
+                      />
+                    ))}
+                    <div className="px-2 pt-3 pb-1 text-[10px] uppercase tracking-wider font-semibold text-ink-muted">
+                      Direct
+                    </div>
+                  </>
+                ) : null}
+
+                {loadingContacts ? (
+                  <>
+                    {[0, 1, 2, 3].map((i) => <div key={i} className="skeleton h-14 w-full" />)}
+                  </>
+                ) : filteredContacts.length === 0 && groups.length === 0 ? (
+                  <div className="p-4">
+                    <Empty
+                      title={search ? "No matches" : "No contacts yet"}
+                      message={search ? "Try a different search." : "Once you're assigned to a class, the people you can chat with will appear here."}
+                    />
+                  </div>
+                ) : (
+                  filteredContacts.map((c) => (
+                    <ContactRow
+                      key={c.id}
+                      contact={c}
+                      active={!isGroup && active?.id === c.id}
+                      onClick={() => openChat(c)}
+                    />
+                  ))
+                )}
+              </div>
+            </>
+          ) : (
+            // Updates tab — read-only feed of WhatsApp/Telegram/SMS/Email mirrors
+            <div className="flex-1 overflow-y-auto p-3 space-y-3" data-testid="chat-updates-list">
+              {updates.length === 0 ? (
+                <div className="p-4">
+                  <Empty
+                    title="No updates yet"
+                    message={user?.role === "parent"
+                      ? "When the school sends attendance, fee, or sick-leave updates by WhatsApp or Telegram, they will appear here. The last 7 per child are kept."
+                      : "Your channel updates will appear here."}
+                  />
+                </div>
+              ) : (
+                updates.map((u) => <UpdateCard key={u.id} upd={u} />)
+              )}
+            </div>
+          )}
         </aside>
 
         {/* Chat window */}
@@ -560,45 +770,62 @@ export default function ChatPage() {
                 >
                   <CaretLeft size={16} />
                 </button>
-                <Avatar name={active.name} online={active.online} size={36} />
+                {isGroup ? (
+                  <div className="chat-group-avatar"><UsersThree size={20} weight="duotone" /></div>
+                ) : (
+                  <Avatar name={active.name} online={active.online} size={36} />
+                )}
                 <div className="min-w-0 flex-1">
                   <div className="font-medium truncate flex items-center gap-1.5">
                     {active.name}
-                    {active.muted ? <BellSimpleSlash size={12} className="text-ink-muted" /> : null}
+                    {!isGroup && active.muted ? <BellSimpleSlash size={12} className="text-ink-muted" /> : null}
+                    {isGroup && active.is_owner ? <Megaphone size={12} className="text-primary" /> : null}
                   </div>
                   <div className="text-[11px] text-ink-muted truncate">
-                    {(ROLE_BADGE[active.role]?.label) || active.role}
-                    {active.context ? ` · ${active.context}` : ""}
-                    {active.online ? " · online" : ""}
+                    {isGroup ? (
+                      <>
+                        {active.scope === "admin_to_teachers" ? "Broadcast · All teachers" : "Broadcast · Class parents"}
+                        {` · ${active.member_count} members`}
+                        {active.is_owner ? " · You broadcast" : " · Read-only"}
+                      </>
+                    ) : (
+                      <>
+                        {(ROLE_BADGE[active.role]?.label) || active.role}
+                        {active.context ? ` · ${active.context}` : ""}
+                        {active.online ? " · online" : ""}
+                      </>
+                    )}
                   </div>
                 </div>
-                <div className="flex items-center gap-1 ml-auto">
-                  {push.supported && !push.isSubscribed ? (
+                {!isGroup ? (
+                  <div className="flex items-center gap-1 ml-auto">
+                    {push.supported && !push.isSubscribed ? (
+                      <button
+                        type="button"
+                        className="btn-ghost p-1.5 chat-icon-btn"
+                        onClick={async () => {
+                          const r = await push.subscribe();
+                          if (r.ok) toast.success("Push notifications enabled");
+                          else if (r.reason === "denied") toast.error("Permission denied. Enable in browser settings.");
+                          else if (r.reason !== "unsupported") toast.error("Could not enable push notifications.");
+                        }}
+                        title="Enable push notifications"
+                        data-testid="chat-enable-push-btn"
+                      >
+                        <BellSimple size={16} />
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       className="btn-ghost p-1.5 chat-icon-btn"
-                      onClick={async () => {
-                        const r = await push.subscribe();
-                        if (r.ok) toast.success("Push notifications enabled");
-                        else if (r.reason === "denied") toast.error("Permission denied. Enable in browser settings.");
-                        else if (r.reason !== "unsupported") toast.error("Could not enable push notifications.");
-                      }}
-                      title="Enable push notifications"
-                      data-testid="chat-enable-push-btn"
+                      onClick={toggleMute}
+                      title={active.muted ? "Unmute" : "Mute notifications"}
+                      data-testid="chat-mute-btn"
                     >
-                      <BellSimple size={16} />
+                      {active.muted ? <BellSimpleSlash size={16} className="text-status-warning" /> : <BellSimple size={16} />}
                     </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    className="btn-ghost p-1.5 chat-icon-btn"
-                    onClick={toggleMute}
-                    title={active.muted ? "Unmute" : "Mute notifications"}
-                    data-testid="chat-mute-btn"
-                  >
-                    {active.muted ? <BellSimpleSlash size={16} className="text-status-warning" /> : <BellSimple size={16} />}
-                  </button>
-                </div>
+                  </div>
+                ) : null}
               </header>
 
               <div className="chat-thread" ref={scrollRef} data-testid="chat-thread">
@@ -614,7 +841,8 @@ export default function ChatPage() {
                         key={m.id}
                         msg={m}
                         mine={m.sender_id === user?.id}
-                        peerName={active.name}
+                        peerName={isGroup ? "" : active.name}
+                        hideReceipt={isGroup}
                       />
                     ))}
                     {peerTyping ? <TypingDots /> : null}
@@ -645,7 +873,7 @@ export default function ChatPage() {
                 </div>
               ) : null}
 
-              {mentionMenu ? (
+              {mentionMenu && !isGroup ? (
                 <div className="chat-mention-menu" data-testid="chat-mention-menu">
                   <button type="button" className="chat-mention-item" onClick={insertMention} data-testid="chat-mention-suggest">
                     <At size={14} className="text-primary" />
@@ -655,51 +883,62 @@ export default function ChatPage() {
                 </div>
               ) : null}
 
-              <footer className="chat-composer">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept={ALLOWED_MIMES.join(",")}
-                  className="hidden"
-                  onChange={onPickFile}
-                  data-testid="chat-file-input"
-                />
-                <button
-                  type="button"
-                  className="btn-ghost chat-composer-icon-btn"
-                  onClick={() => fileInputRef.current?.click()}
-                  title="Attach image or PDF"
-                  data-testid="chat-attach-btn"
-                >
-                  <Paperclip size={18} />
-                </button>
-                <textarea
-                  ref={inputRef}
-                  rows={1}
-                  className="input chat-composer-input"
-                  placeholder={`Message ${active.name}…  (type @ to mention)`}
-                  value={draft}
-                  onChange={(e) => onDraftChange(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Escape") setMentionMenu(false);
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      send();
-                    }
-                  }}
-                  data-testid="chat-input"
-                />
-                <button
-                  type="button"
-                  className="btn-primary chat-send-btn"
-                  onClick={send}
-                  disabled={(!draft.trim() && !attachment) || sending}
-                  data-testid="chat-send-btn"
-                  aria-label="Send message"
-                >
-                  <PaperPlaneTilt size={16} weight={sending ? "regular" : "fill"} />
-                </button>
-              </footer>
+              {isGroup && !active.is_owner ? (
+                <footer className="chat-composer chat-composer-locked" data-testid="chat-composer-locked">
+                  <Megaphone size={18} className="text-ink-muted" />
+                  <span className="text-xs text-ink-muted">
+                    This is a broadcast group. Only {active.scope === "admin_to_teachers" ? "the school admin" : "your class teacher"} can post here.
+                  </span>
+                </footer>
+              ) : (
+                <footer className="chat-composer">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept={ALLOWED_MIMES.join(",")}
+                    className="hidden"
+                    onChange={onPickFile}
+                    data-testid="chat-file-input"
+                  />
+                  <button
+                    type="button"
+                    className="btn-ghost chat-composer-icon-btn"
+                    onClick={() => fileInputRef.current?.click()}
+                    title="Attach image or PDF"
+                    data-testid="chat-attach-btn"
+                  >
+                    <Paperclip size={18} />
+                  </button>
+                  <textarea
+                    ref={inputRef}
+                    rows={1}
+                    className="input chat-composer-input"
+                    placeholder={isGroup
+                      ? `Broadcast to ${active.member_count} member${active.member_count === 1 ? "" : "s"}…`
+                      : `Message ${active.name}…  (type @ to mention)`}
+                    value={draft}
+                    onChange={(e) => onDraftChange(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") setMentionMenu(false);
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        send();
+                      }
+                    }}
+                    data-testid="chat-input"
+                  />
+                  <button
+                    type="button"
+                    className="btn-primary chat-send-btn"
+                    onClick={send}
+                    disabled={(!draft.trim() && !attachment) || sending}
+                    data-testid="chat-send-btn"
+                    aria-label="Send message"
+                  >
+                    <PaperPlaneTilt size={16} weight={sending ? "regular" : "fill"} />
+                  </button>
+                </footer>
+              )}
             </>
           )}
         </section>

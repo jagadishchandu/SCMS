@@ -205,15 +205,19 @@ def _history_max() -> int:
 
 async def _trim_conversation_history(tdb, conv_id: str) -> int:
     """Keep only the latest `_history_max()` messages for this conversation.
-    Returns the count of rows deleted. Safe to call after every insert."""
+    Returns the count of rows deleted. Safe to call after every insert.
+
+    We sort by created_at DESC, take the IDs to keep, then delete EVERY
+    other row. This is safer than a `$lte cutoff` cutoff because identical
+    `created_at` timestamps cannot accidentally evict one of the kept rows.
+    """
     cap = _history_max()
-    # Find the `cap`th newest message's created_at; delete everything older.
-    cursor = tdb.messages.find({"conv_id": conv_id}, {"_id": 0, "created_at": 1}).sort("created_at", -1).skip(cap).limit(1)
-    docs = await cursor.to_list(1)
-    if not docs:
-        return 0
-    cutoff = docs[0]["created_at"]
-    res = await tdb.messages.delete_many({"conv_id": conv_id, "created_at": {"$lte": cutoff}})
+    keep_cursor = tdb.messages.find({"conv_id": conv_id}, {"_id": 0, "id": 1}).sort("created_at", -1).limit(cap)
+    keep = await keep_cursor.to_list(cap)
+    if len(keep) < cap:
+        return 0  # nothing to trim
+    keep_ids = [k["id"] for k in keep]
+    res = await tdb.messages.delete_many({"conv_id": conv_id, "id": {"$nin": keep_ids}})
     return res.deleted_count
 
 
@@ -607,7 +611,6 @@ async def send_message(peer_id: str, payload: SendMessageIn, user: dict = Depend
         pass
 
     return out_msg
-    return out_msg
 
 
 @router.post("/conversations/{peer_id}/read")
@@ -848,3 +851,273 @@ async def messaging_ws(websocket: WebSocket, token: Optional[str] = Query(defaul
         pass
     finally:
         await manager.disconnect(user["id"], websocket)
+
+
+# =========================================================================
+#  Chat Updates feed (mirrors of WhatsApp / Telegram / SMS / Email notifs)
+# =========================================================================
+
+@router.get("/updates")
+async def list_updates(user: dict = Depends(get_current_user)):
+    """List the latest channel updates addressed to the current user. For
+    parents, also grouped by child (limit 7 per child). The notify pipeline
+    already trims to 7 per (recipient_id, related_student_id) on insert."""
+    if user.get("role") not in ("parent", "teacher", "school_admin"):
+        return {"updates": [], "by_student": {}}
+    school_id = user["school_id"]
+    tdb = await tenant_db(school_id)
+    rows = await tdb.chat_updates.find(
+        {"recipient_id": user["id"], "school_id": school_id}, {"_id": 0},
+    ).sort("created_at", -1).to_list(200)
+
+    # For parents we also surface a child-label so the UI can group by kid.
+    by_student: dict[str, dict] = {}
+    if user.get("role") == "parent" and rows:
+        sids = list({r.get("related_student_id") for r in rows if r.get("related_student_id")})
+        if sids:
+            kids = await tdb.students.find(
+                {"id": {"$in": sids}}, {"_id": 0, "id": 1, "name": 1, "student_uid": 1},
+            ).to_list(len(sids))
+            by_student = {k["id"]: k for k in kids}
+        for r in rows:
+            sid = r.get("related_student_id")
+            if sid and sid in by_student:
+                r["student_name"] = by_student[sid]["name"]
+                r["student_uid"] = by_student[sid]["student_uid"]
+    return {"updates": rows, "by_student": by_student}
+
+
+@router.get("/updates/unread-count")
+async def updates_unread_count(user: dict = Depends(get_current_user)):
+    if user.get("role") not in ("parent", "teacher", "school_admin"):
+        return {"count": 0}
+    school_id = user["school_id"]
+    tdb = await tenant_db(school_id)
+    n = await tdb.chat_updates.count_documents(
+        {"recipient_id": user["id"], "school_id": school_id, "read_at": None},
+    )
+    return {"count": n}
+
+
+@router.post("/updates/mark-all-read")
+async def mark_all_updates_read(user: dict = Depends(get_current_user)):
+    if user.get("role") not in ("parent", "teacher", "school_admin"):
+        return {"ok": True, "marked": 0}
+    school_id = user["school_id"]
+    tdb = await tenant_db(school_id)
+    res = await tdb.chat_updates.update_many(
+        {"recipient_id": user["id"], "school_id": school_id, "read_at": None},
+        {"$set": {"read_at": utc_now().isoformat()}},
+    )
+    return {"ok": True, "marked": res.modified_count}
+
+
+# =========================================================================
+#  Group chat (broadcast) — admin→all teachers, teacher→all class parents
+# =========================================================================
+
+async def _ensure_admin_to_teachers_group(tdb, school_id: str, admin: dict) -> dict:
+    """Auto-provision one group per school_admin → all teachers in their school."""
+    key = f"admin_to_teachers::{admin['id']}"
+    g = await tdb.groups.find_one({"school_id": school_id, "key": key}, {"_id": 0})
+    db = get_db()
+    teachers = await db.users.find(
+        {"school_id": school_id, "role": "teacher", "is_active": True},
+        {"_id": 0, "id": 1},
+    ).to_list(2000)
+    member_ids = sorted({t["id"] for t in teachers})
+    if g:
+        # refresh members each time so newly added teachers see broadcasts
+        if set(g.get("members", [])) != set(member_ids):
+            await tdb.groups.update_one({"id": g["id"]}, {"$set": {"members": member_ids}})
+            g["members"] = member_ids
+        return g
+    g = {
+        "id": new_id(),
+        "school_id": school_id,
+        "key": key,
+        "scope": "admin_to_teachers",
+        "name": "All Teachers (Broadcast)",
+        "owner_id": admin["id"],
+        "members": member_ids,
+        "created_at": utc_now().isoformat(),
+        "last_message_at": None,
+        "last_message_text": None,
+        "last_sender_id": None,
+    }
+    await tdb.groups.insert_one(dict(g))
+    return g
+
+
+async def _ensure_teacher_to_class_parents_groups(tdb, school_id: str, teacher: dict) -> list[dict]:
+    """One group per (teacher, class, section) populated with parents."""
+    mappings = await tdb.class_teacher_map.find(
+        {"school_id": school_id, "teacher_id": teacher["id"]},
+        {"_id": 0, "class_id": 1, "section": 1},
+    ).to_list(100)
+    classes = await tdb.classes.find({"school_id": school_id}, {"_id": 0, "id": 1, "name": 1}).to_list(500)
+    class_name = {c["id"]: c["name"] for c in classes}
+    groups: list[dict] = []
+    for m in mappings:
+        students = await tdb.students.find(
+            {"class_id": m["class_id"], "section": m["section"], "parent_user_id": {"$ne": None}},
+            {"_id": 0, "parent_user_id": 1},
+        ).to_list(2000)
+        member_ids = sorted({s["parent_user_id"] for s in students if s.get("parent_user_id")})
+        key = f"teacher_to_parents::{teacher['id']}::{m['class_id']}::{m['section']}"
+        name = f"{class_name.get(m['class_id'], m['class_id'])} {m['section']} — Parents"
+        existing = await tdb.groups.find_one({"school_id": school_id, "key": key}, {"_id": 0})
+        if existing:
+            if set(existing.get("members", [])) != set(member_ids):
+                await tdb.groups.update_one({"id": existing["id"]}, {"$set": {"members": member_ids}})
+                existing["members"] = member_ids
+            groups.append(existing)
+            continue
+        g = {
+            "id": new_id(),
+            "school_id": school_id,
+            "key": key,
+            "scope": "teacher_to_parents",
+            "name": name,
+            "owner_id": teacher["id"],
+            "members": member_ids,
+            "class_id": m["class_id"],
+            "section": m["section"],
+            "created_at": utc_now().isoformat(),
+            "last_message_at": None,
+            "last_message_text": None,
+            "last_sender_id": None,
+        }
+        await tdb.groups.insert_one(dict(g))
+        groups.append(g)
+    return groups
+
+
+@router.get("/groups")
+async def list_groups(user: dict = Depends(get_current_user)):
+    """Return groups visible to the current user (owner or member). Auto-creates
+    the user's owned groups on the fly so the UI is always up to date."""
+    if user.get("role") not in ("parent", "teacher", "school_admin"):
+        return {"groups": []}
+    school_id = user["school_id"]
+    tdb = await tenant_db(school_id)
+
+    if user["role"] == "school_admin":
+        await _ensure_admin_to_teachers_group(tdb, school_id, user)
+    elif user["role"] == "teacher":
+        await _ensure_teacher_to_class_parents_groups(tdb, school_id, user)
+
+    # Find every group where the user is owner OR member
+    flt = {"school_id": school_id, "$or": [{"owner_id": user["id"]}, {"members": user["id"]}]}
+    rows = await tdb.groups.find(flt, {"_id": 0}).sort("last_message_at", -1).to_list(500)
+    # Unread counts (simple: count messages where read_by lacks me + sender != me)
+    out = []
+    for g in rows:
+        unread = await tdb.group_messages.count_documents(
+            {"group_id": g["id"], "sender_id": {"$ne": user["id"]}, "read_by": {"$ne": user["id"]}},
+        )
+        out.append({
+            "id": g["id"],
+            "key": g.get("key"),
+            "name": g.get("name"),
+            "scope": g.get("scope"),
+            "owner_id": g.get("owner_id"),
+            "is_owner": g.get("owner_id") == user["id"],
+            "member_count": len(g.get("members") or []),
+            "last_message_at": g.get("last_message_at"),
+            "last_message_text": g.get("last_message_text"),
+            "last_sender_id": g.get("last_sender_id"),
+            "unread": unread,
+        })
+    return {"groups": out}
+
+
+@router.get("/groups/{group_id}/messages")
+async def list_group_messages(group_id: str, limit: int = 100, user: dict = Depends(get_current_user)):
+    school_id = user["school_id"]
+    tdb = await tenant_db(school_id)
+    g = await tdb.groups.find_one({"id": group_id, "school_id": school_id}, {"_id": 0})
+    if not g:
+        raise HTTPException(status_code=404, detail="Group not found")
+    if g["owner_id"] != user["id"] and user["id"] not in (g.get("members") or []):
+        raise HTTPException(status_code=403, detail="Not a member of this group")
+    msgs = await tdb.group_messages.find({"group_id": group_id}, {"_id": 0}).sort("created_at", -1).limit(limit).to_list(limit)
+    msgs.reverse()
+    return {"group": g, "messages": msgs}
+
+
+class GroupSendIn(BaseModel):
+    text: str = Field(default="", max_length=4000)
+    attachment: Optional[AttachmentIn] = None
+
+
+@router.post("/groups/{group_id}/messages")
+async def send_group_message(group_id: str, payload: GroupSendIn, user: dict = Depends(get_current_user)):
+    school_id = user["school_id"]
+    tdb = await tenant_db(school_id)
+    g = await tdb.groups.find_one({"id": group_id, "school_id": school_id}, {"_id": 0})
+    if not g:
+        raise HTTPException(status_code=404, detail="Group not found")
+    if g["owner_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="Only the group owner can send broadcasts")
+    text = (payload.text or "").strip()
+    att = payload.attachment
+    if not text and not att:
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+    if att and att.type not in _ALLOWED_ATT_MIMES:
+        raise HTTPException(status_code=400, detail="Unsupported file type")
+    now = utc_now()
+    msg = {
+        "id": new_id(),
+        "group_id": group_id,
+        "school_id": school_id,
+        "sender_id": user["id"],
+        "text": text,
+        "attachment": dict(att) if att else None,
+        "created_at": now.isoformat(),
+        "read_by": [user["id"]],
+    }
+    await tdb.group_messages.insert_one(dict(msg))
+    preview = text[:160] if text else (f"📎 {att.name}" if att else "")
+    await tdb.groups.update_one(
+        {"id": group_id},
+        {"$set": {
+            "last_message_at": msg["created_at"],
+            "last_message_text": preview,
+            "last_sender_id": user["id"],
+        }},
+    )
+    # Trim: keep latest 10
+    keep_cursor = tdb.group_messages.find(
+        {"group_id": group_id}, {"_id": 0, "id": 1},
+    ).sort("created_at", -1).limit(_history_max())
+    keep_ids = [k["id"] for k in await keep_cursor.to_list(_history_max())]
+    if len(keep_ids) >= _history_max():
+        await tdb.group_messages.delete_many({"group_id": group_id, "id": {"$nin": keep_ids}})
+    out = clean_doc(dict(msg))
+    # WS fanout to each member
+    payload_evt = {
+        "type": "group_message",
+        "group_id": group_id,
+        "message": out,
+        "sender": {"id": user["id"], "name": user.get("name"), "role": user.get("role")},
+    }
+    for member_id in g.get("members") or []:
+        await manager.send_to_user(member_id, payload_evt)
+    return out
+
+
+@router.post("/groups/{group_id}/read")
+async def mark_group_read(group_id: str, user: dict = Depends(get_current_user)):
+    school_id = user["school_id"]
+    tdb = await tenant_db(school_id)
+    g = await tdb.groups.find_one({"id": group_id, "school_id": school_id}, {"_id": 0, "members": 1, "owner_id": 1})
+    if not g:
+        raise HTTPException(status_code=404, detail="Group not found")
+    if g["owner_id"] != user["id"] and user["id"] not in (g.get("members") or []):
+        raise HTTPException(status_code=403, detail="Not a member")
+    res = await tdb.group_messages.update_many(
+        {"group_id": group_id, "read_by": {"$ne": user["id"]}},
+        {"$addToSet": {"read_by": user["id"]}},
+    )
+    return {"ok": True, "marked": res.modified_count}

@@ -137,3 +137,42 @@ ordering, read receipts/unread-count, typing auth, full WS round-trip.
 - P2: file/image attachments in chat
 - P2: push notifications when a chat message arrives while offline
 - P2: archive / delete conversation
+
+## Iteration — 2026-01 (current session, part 5)
+**Chat polish: mute, @mentions, attachments, web push, history cap**
+
+### Backend (`/app/backend/routes/messaging.py`)
+- `POST /messaging/conversations/{peer_id}/mute` + `GET /…/settings` — per-user
+  mute flag stored in `conv_settings` (tenant DB). Muted threads stop bumping
+  the user's unread badge (mentions still break through).
+- @mentions detected via `_detect_mentions` (regex against peer's name).
+  Conversation `mention_for.{user}` counter incremented + WS event carries
+  `message.mentions = [user_id]` to highlight on the recipient.
+- Attachments: optional `attachment={name,type,size,data_url}` on send. Allowed
+  MIME types: jpg/png/webp/gif/pdf, ≤ ~1.8 MB raw. Stored base64 in MongoDB.
+- History cap: `_trim_conversation_history` after every send keeps only the
+  latest `CHAT_HISTORY_MAX=10` rows per conversation (env-tunable). Older
+  messages are auto-deleted.
+- Web Push (VAPID) — `GET /messaging/push/config`, `POST /push/subscribe`,
+  `POST /push/unsubscribe`. Send-message triggers a push to the peer iff the
+  peer is offline (no WS) AND the thread is not muted (mentions bypass mute).
+- Master DB collection `push_subscriptions` (unique by endpoint).
+- New `pywebpush` + `py-vapid` Python deps; VAPID keys in `backend/.env`.
+
+### Frontend
+- `pages/shared/ChatPage.jsx` — chat header now has push-enable (bell) + mute
+  (bell-slash) toggle. Composer has a paperclip for attachments (image
+  preview / file chip), an @-mention auto-complete menu, and inline rendering
+  of mentions with a flash highlight on the recipient side. Contact rows
+  show an `@` badge for unread mentions and a bell-slash icon for muted convs.
+- `hooks/useWebPush.js` — registers `/sw.js`, calls `/push/config` for the
+  VAPID public key, then subscribes via `pushManager.subscribe`.
+- `hooks/useUnreadChat.js` — now exposes `{count, mentions}`.
+- `public/sw.js` — service worker handling `push` + `notificationclick` (focus
+  existing tab or open `/chat`).
+
+### Tests
+- `tests/test_iter30_messaging_v2.py` (10 new) — history cap, mute, mentions,
+  attachments (allowed + rejected MIME), push subscribe/unsubscribe,
+  unread-count vs mute interaction.
+- Combined with iter29: **22/22 pass**.

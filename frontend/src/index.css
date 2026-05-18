@@ -370,3 +370,66 @@ a { color: inherit; text-decoration: none; }
   transition: background-color 140ms ease;
 }
 .chat-mention-item:hover { background: var(--bg-subtle); }
+
+/* Tabs at top of chat list */
+.chat-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-surface);
+  flex-shrink: 0;
+}
+.chat-tab {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 10px 6px;
+  font-size: 12px; font-weight: 500;
+  color: var(--ink-muted);
+  border-bottom: 2px solid transparent;
+  transition: color 160ms ease, border-color 160ms ease, background-color 160ms ease;
+}
+.chat-tab:hover { background: var(--bg-subtle); }
+.chat-tab.is-active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+  background: var(--primary-light);
+}
+
+/* Group avatar (used in list row and chat header) */
+.chat-group-avatar {
+  width: 40px; height: 40px;
+  border-radius: 12px;
+  display: grid; place-items: center;
+  background: linear-gradient(135deg, var(--primary), #2f3d22);
+  color: var(--primary-foreground);
+  flex-shrink: 0;
+}
+
+/* Locked composer (read-only groups) */
+.chat-composer-locked {
+  justify-content: center;
+  background: var(--bg-subtle);
+}
+
+/* Updates feed cards */
+.chat-update-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--ink-muted);
+  border-radius: 12px;
+  padding: 12px 14px;
+  animation: fadeUp 220ms ease both;
+  transition: transform 200ms ease, box-shadow 200ms ease;
+}
+.chat-update-card:hover { transform: translateY(-1px); box-shadow: var(--shadow-soft); }
+.chat-update-card.is-unread { background: var(--primary-light); }
+.chat-update-whatsapp { border-left-color: #25D366; }
+.chat-update-telegram { border-left-color: #229ED9; }
+.chat-update-sms      { border-left-color: var(--status-warning); }
+.chat-update-email    { border-left-color: var(--status-info); }
+.chat-update-channel {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  color: var(--ink-soft);
+}
+.chat-update-whatsapp .chat-update-channel { color: #25D366; }
+.chat-update-telegram .chat-update-channel { color: #229ED9; }
