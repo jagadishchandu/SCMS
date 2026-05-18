@@ -59,9 +59,10 @@ This is where your Docker images will live.
 2. Left menu → under **Settings**, click **Access keys**
 3. Toggle **Admin user** → **Enabled**
 4. **Copy and save these three values somewhere** — you'll need them in Phase 3:
-   - **Login server** (e.g. `scmsregistryjc.azurecr.io`)
-   - **Username** (same as your registry name)
-   - **password** (the long one under "password" — click the copy icon)
+   - **Login server** (e.g. `scmsregistryjc.azurecr.io`) scmsregistery.azurecr.io
+   - **Username** (same as your registry name)  scmsregistery
+   - **password** (the long one under "password" — click the copy icon)  Eyino0xz6L5jss7GCLoNcIxCi5Fwwk1jlE9yAtRHfragyFDek6M1JQQJ99CEAC77bzfEqg7NAAACAZCR61yl
+   - 3ws7F1A4EDNhczt4Pq5w1QXu19X7kdJvuKFW8xuRrrZGbfHICEBjJQQJ99CEAC77bzfEqg7NAAACAZCRWt29
 
 ---
 
