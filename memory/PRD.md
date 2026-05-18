@@ -176,3 +176,53 @@ ordering, read receipts/unread-count, typing auth, full WS round-trip.
   attachments (allowed + rejected MIME), push subscribe/unsubscribe,
   unread-count vs mute interaction.
 - Combined with iter29: **22/22 pass**.
+
+## Iteration — 2026-01 (current session, part 6)
+**Chat: Group broadcasts, channel-update mirror, hardened trim**
+
+### Backend
+- **Group chat** (`groups`, `group_messages` collections in tenant DB):
+  - Auto-provisioned via `_ensure_admin_to_teachers_group` (per admin) and
+    `_ensure_teacher_to_class_parents_groups` (one per teacher × class-section).
+  - Members are read-only; only the owner can POST.
+  - Endpoints: `GET /messaging/groups`, `GET /…/{id}/messages`,
+    `POST /…/{id}/messages`, `POST /…/{id}/read`.
+  - History capped at `CHAT_HISTORY_MAX` (10) using keep-set delete.
+  - WS event `group_message` fanned out to every member.
+- **Channel-update mirror**: `core/notify.py:queue_notification` now also
+  writes to per-school `chat_updates` for whatsapp/sms/telegram/email
+  channels (regardless of provider delivery status). Trimmed to the latest
+  7 per `(recipient_id, related_student_id)` on every insert.
+- **Endpoints**: `GET /messaging/updates`, `…/unread-count`, `…/mark-all-read`.
+- **Hardened 1-1 history trim**: switched from `$lte cutoff` to id-based
+  keep-set (`delete WHERE id NOT IN <latest_10_ids>`) — eliminates the edge
+  case where identical `created_at` could evict a kept row.
+- **Confirmed**: student photo upload still stores base64 in MongoDB
+  (`students.photo` data URL); no Azure dependency.
+
+### Frontend
+- `pages/shared/ChatPage.jsx`:
+  - Top tab switcher `[Chats | Updates]` inside the contact panel.
+  - `GroupRow` with megaphone for owners + scope badge ("Teacher → Parents"
+    or "Admin → Teachers"); "Broadcast Groups" section above "Direct"
+    contacts.
+  - `UpdateCard` with channel-coloured left border (WhatsApp green,
+    Telegram blue, SMS amber, Email blue) and student-name header for
+    parents.
+  - Group chat thread: locked composer for members ("Read-only — only the
+    school admin / your class teacher can post"); owner sees a regular
+    composer with "Broadcast to N members" placeholder.
+  - WS `group_message` event handler updates open thread + group list.
+  - `index.css` — `.chat-tabs`, `.chat-update-card`, `.chat-group-avatar`,
+    `.chat-composer-locked` styles + entrance animations.
+
+### Tests
+- `tests/test_iter31_groups_updates.py` (14 new). Combined with iter29 +
+  iter30: **36/36 pass**.
+
+### Verified end-to-end
+- Admin → all teachers broadcast received over WebSocket
+- Teacher → class parents broadcast received and visible in parent's UI
+- Parent's Updates tab shows latest 7 Telegram-channel mirrors
+- 1-1 chat trim retains exactly the newest 10 by send order
+- Cross-class teacher cannot post to / read another teacher's group (403)
