@@ -1,18 +1,34 @@
 """In-app real-time messaging (chat) between teachers, parents and school admins.
 
 Storage lives in the per-school tenant DB:
-  * `messages`        — id, conv_id, school_id, sender_id, recipient_id, text, created_at, read_at
-  * `conversations`   — id, school_id, participants[a,b] (sorted), last_message_at, last_message_text,
-                        last_sender_id, unread_for (dict: user_id -> count)
+  * `messages`              — id, conv_id, school_id, sender_id, recipient_id, text,
+                              attachment (optional {name,type,size,data_url}),
+                              mentions (list of user_ids @-mentioned), created_at, read_at
+  * `conversations`         — id, school_id, participants[a,b] (sorted), last_message_at,
+                              last_message_text, last_sender_id,
+                              unread_for (dict: user_id -> count),
+                              mention_for (dict: user_id -> count of unread @-mentions)
+  * `conv_settings`         — per-user settings on a conversation (mute toggle).
+                              key: (user_id, conv_id) unique. fields: muted (bool)
+  * `push_subscriptions`    — id, user_id, endpoint, keys{p256dh,auth}, created_at.
+
+History cap: after every successful send the conversation is trimmed to keep
+only the `CHAT_HISTORY_MAX` (default 10) most recent messages combined from
+both sides — older rows are auto-deleted to keep DB storage tight.
 
 Realtime delivery is via a single WebSocket endpoint `/api/messaging/ws` that
 multiplexes message + typing + read events for the connected user. Messages
-are persisted by the REST POST endpoint and then fanned out over WS.
+are persisted by the REST POST endpoint and then fanned out over WS. If the
+peer is NOT connected (offline) and has NOT muted the thread, a Web Push
+notification is sent via VAPID.
 """
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
+import os
+import re
 from typing import Optional
 
 import jwt
@@ -167,6 +183,7 @@ async def _upsert_conversation(tdb, school_id: str, a: str, b: str) -> dict:
         "last_message_text": None,
         "last_sender_id": None,
         "unread_for": {parts[0]: 0, parts[1]: 0},
+        "mention_for": {parts[0]: 0, parts[1]: 0},
     }
     await tdb.conversations.insert_one(dict(conv))
     return conv
@@ -174,6 +191,136 @@ async def _upsert_conversation(tdb, school_id: str, a: str, b: str) -> dict:
 
 def _peer_of(conv: dict, me: str) -> str:
     return next((p for p in conv["participants"] if p != me), "")
+
+
+# ---------- History cap ----------
+
+def _history_max() -> int:
+    try:
+        n = int(os.environ.get("CHAT_HISTORY_MAX", "10"))
+        return max(1, n)
+    except Exception:
+        return 10
+
+
+async def _trim_conversation_history(tdb, conv_id: str) -> int:
+    """Keep only the latest `_history_max()` messages for this conversation.
+    Returns the count of rows deleted. Safe to call after every insert."""
+    cap = _history_max()
+    # Find the `cap`th newest message's created_at; delete everything older.
+    cursor = tdb.messages.find({"conv_id": conv_id}, {"_id": 0, "created_at": 1}).sort("created_at", -1).skip(cap).limit(1)
+    docs = await cursor.to_list(1)
+    if not docs:
+        return 0
+    cutoff = docs[0]["created_at"]
+    res = await tdb.messages.delete_many({"conv_id": conv_id, "created_at": {"$lte": cutoff}})
+    return res.deleted_count
+
+
+# ---------- Mute settings ----------
+
+async def _is_muted(tdb, user_id: str, conv_id: str) -> bool:
+    row = await tdb.conv_settings.find_one(
+        {"user_id": user_id, "conv_id": conv_id}, {"_id": 0, "muted": 1},
+    )
+    return bool(row and row.get("muted"))
+
+
+# ---------- Web Push ----------
+
+def _vapid_claims() -> dict:
+    return {
+        "sub": os.environ.get("VAPID_SUBJECT", "mailto:admin@scms.local"),
+    }
+
+
+def _vapid_private_pem() -> str | None:
+    """Build a PEM-encoded private key from the urlsafe base64 raw scalar in VAPID_PRIVATE_KEY."""
+    raw = os.environ.get("VAPID_PRIVATE_KEY", "").strip()
+    if not raw:
+        return None
+    try:
+        # pad
+        pad = "=" * (-len(raw) % 4)
+        scalar = base64.urlsafe_b64decode(raw + pad)
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives import serialization
+        priv = ec.derive_private_key(int.from_bytes(scalar, "big"), ec.SECP256R1())
+        pem = priv.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        ).decode()
+        return pem
+    except Exception as _e:
+        return None
+
+
+async def _send_web_push(user_id: str, school_id: str, payload: dict) -> None:
+    """Send a Web Push notification to every subscription the user registered.
+    Silently no-ops if VAPID keys are not configured or the library is missing.
+    Dead subscriptions (410/404) are auto-deleted."""
+    priv_pem = _vapid_private_pem()
+    if not priv_pem:
+        return
+    db = get_db()
+    subs = await db.push_subscriptions.find(
+        {"user_id": user_id}, {"_id": 0},
+    ).to_list(20)
+    if not subs:
+        return
+    try:
+        from pywebpush import webpush, WebPushException  # type: ignore
+    except Exception:
+        return
+
+    def _send_one(sub: dict) -> tuple[bool, int]:
+        try:
+            webpush(
+                subscription_info={"endpoint": sub["endpoint"], "keys": sub["keys"]},
+                data=json.dumps(payload, default=str),
+                vapid_private_key=priv_pem,
+                vapid_claims=dict(_vapid_claims()),
+                ttl=600,
+            )
+            return True, 0
+        except WebPushException as e:
+            status = getattr(e.response, "status_code", 0) if getattr(e, "response", None) else 0
+            return False, status
+        except Exception:
+            return False, 0
+
+    loop = asyncio.get_event_loop()
+    for sub in subs:
+        ok, status = await loop.run_in_executor(None, _send_one, sub)
+        if not ok and status in (404, 410):
+            await db.push_subscriptions.delete_one({"endpoint": sub["endpoint"]})
+
+
+# ---------- Mention extraction ----------
+
+_MENTION_RE = re.compile(r"@([A-Za-z][A-Za-z0-9_]*(?:\s+[A-Za-z][A-Za-z0-9_]*){0,2})")
+
+
+def _detect_mentions(text: str, peer_name: str | None) -> list[str]:
+    """Return a list of full names mentioned in `text`. We match @<First> or
+    @<First Last> and check against peer_name (case-insensitive) — the only
+    user we can mention in a 1-1 chat is the other participant."""
+    if not text or not peer_name:
+        return []
+    matches = []
+    for m in _MENTION_RE.finditer(text):
+        candidate = m.group(1).strip()
+        if not candidate:
+            continue
+        if candidate.lower() == peer_name.lower():
+            matches.append(peer_name)
+            continue
+        # Also match first name only
+        first_token = candidate.split()[0].lower()
+        if first_token == peer_name.split()[0].lower():
+            matches.append(peer_name)
+    return matches
 
 
 async def _hydrate_peers(school_id: str, peer_ids: list[str]) -> dict[str, dict]:
@@ -272,21 +419,31 @@ async def list_contacts(user: dict = Depends(get_current_user)):
     convs = await tdb.conversations.find(
         {"school_id": school_id, "participants": user["id"]}, {"_id": 0},
     ).to_list(5000)
+    conv_ids = [c["id"] for c in convs]
+    muted_rows = await tdb.conv_settings.find(
+        {"user_id": user["id"], "conv_id": {"$in": conv_ids}, "muted": True},
+        {"_id": 0, "conv_id": 1},
+    ).to_list(5000) if conv_ids else []
+    muted_set = {r["conv_id"] for r in muted_rows}
     for c in convs:
         peer = _peer_of(c, user["id"])
-        conv_lookup[peer] = c
+        conv_lookup[peer] = {**c, "_muted": c["id"] in muted_set}
 
     for c in out:
         c["online"] = manager.is_online(c["id"])
         conv = conv_lookup.get(c["id"])
         if conv:
             c["unread"] = (conv.get("unread_for") or {}).get(user["id"], 0)
+            c["mentions"] = (conv.get("mention_for") or {}).get(user["id"], 0)
             c["last_message_at"] = conv.get("last_message_at")
             c["last_message_text"] = conv.get("last_message_text")
+            c["muted"] = bool(conv.get("_muted"))
         else:
             c["unread"] = 0
+            c["mentions"] = 0
             c["last_message_at"] = None
             c["last_message_text"] = None
+            c["muted"] = False
     return {"contacts": out}
 
 
@@ -342,21 +499,47 @@ async def list_messages(
     }
 
 
+class AttachmentIn(BaseModel):
+    name: str = Field(max_length=160)
+    type: str = Field(max_length=80)  # mime
+    size: int = Field(ge=0, le=2_500_000)  # ≤ ~2.5 MB after base64 inflate (~1.8 MB raw)
+    data_url: str = Field(min_length=10, max_length=4_000_000)
+
+
 class SendMessageIn(BaseModel):
-    text: str = Field(min_length=1, max_length=4000)
+    text: str = Field(default="", max_length=4000)
+    attachment: Optional[AttachmentIn] = None
+
+
+_ALLOWED_ATT_MIMES = {
+    "image/jpeg", "image/png", "image/webp", "image/gif",
+    "application/pdf",
+}
 
 
 @router.post("/conversations/{peer_id}/messages")
 async def send_message(peer_id: str, payload: SendMessageIn, user: dict = Depends(get_current_user)):
-    text = payload.text.strip()
-    if not text:
+    text = (payload.text or "").strip()
+    att = payload.attachment
+    if not text and not att:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
+    if att:
+        if att.type not in _ALLOWED_ATT_MIMES:
+            raise HTTPException(status_code=400, detail="Unsupported file type. Allowed: jpg, png, webp, gif, pdf")
+        if not att.data_url.startswith(f"data:{att.type}"):
+            raise HTTPException(status_code=400, detail="Attachment data URL must match its declared type")
     ok, peer = await _is_allowed_peer(user, peer_id)
     if not ok:
         raise HTTPException(status_code=403, detail="You are not allowed to chat with this user")
     school_id = user["school_id"]
     tdb = await tenant_db(school_id)
     conv = await _upsert_conversation(tdb, school_id, user["id"], peer_id)
+
+    # Detect @mentions of the peer's name
+    mentions: list[str] = []
+    if text and peer:
+        if _detect_mentions(text, peer.get("name") or ""):
+            mentions.append(peer_id)
 
     now = utc_now()
     msg = {
@@ -366,24 +549,38 @@ async def send_message(peer_id: str, payload: SendMessageIn, user: dict = Depend
         "sender_id": user["id"],
         "recipient_id": peer_id,
         "text": text,
+        "attachment": dict(att) if att else None,
+        "mentions": mentions,
         "created_at": now.isoformat(),
         "read_at": None,
     }
     await tdb.messages.insert_one(dict(msg))
+
+    # Build a friendly preview for the contact list summary
+    preview = text[:160] if text else (f"📎 {att.name}" if att else "")
     # update conversation summary + bump unread for peer
+    inc: dict = {f"unread_for.{peer_id}": 1}
+    if mentions:
+        inc[f"mention_for.{peer_id}"] = 1
     await tdb.conversations.update_one(
         {"id": conv["id"]},
         {
             "$set": {
                 "last_message_at": msg["created_at"],
-                "last_message_text": text[:160],
+                "last_message_text": preview,
                 "last_sender_id": user["id"],
             },
-            "$inc": {f"unread_for.{peer_id}": 1},
+            "$inc": inc,
         },
     )
+
+    # Trim history (keep only the latest CHAT_HISTORY_MAX rows for this conv)
+    try:
+        await _trim_conversation_history(tdb, conv["id"])
+    except Exception as _e:
+        pass
+
     out_msg = clean_doc(dict(msg))
-    # WS fanout
     payload_evt = {
         "type": "message",
         "message": out_msg,
@@ -391,6 +588,25 @@ async def send_message(peer_id: str, payload: SendMessageIn, user: dict = Depend
     }
     await manager.send_to_user(peer_id, payload_evt)
     await manager.send_to_user(user["id"], payload_evt)  # echo to own other tabs
+
+    # Offline push notification: send only when peer is NOT connected via WS
+    # and has NOT muted this conversation. Mentions break through mute.
+    try:
+        muted = await _is_muted(tdb, peer_id, conv["id"])
+        if (not manager.is_online(peer_id)) and (not muted or mentions):
+            push_body = preview if preview else "Sent you a message"
+            await _send_web_push(peer_id, school_id, {
+                "title": f"{user.get('name') or 'Someone'}{' mentioned you' if mentions else ''}",
+                "body": push_body,
+                "url": "/chat",
+                "conversation_id": conv["id"],
+                "from": {"id": user["id"], "name": user.get("name"), "role": user.get("role")},
+                "is_mention": bool(mentions),
+            })
+    except Exception as _e:
+        pass
+
+    return out_msg
     return out_msg
 
 
@@ -414,7 +630,7 @@ async def mark_read(peer_id: str, user: dict = Depends(get_current_user)):
     )
     await tdb.conversations.update_one(
         {"id": conv["id"]},
-        {"$set": {f"unread_for.{user['id']}": 0}},
+        {"$set": {f"unread_for.{user['id']}": 0, f"mention_for.{user['id']}": 0}},
     )
     # Notify the other side so they can flip their ticks to "read"
     await manager.send_to_user(peer_id, {
@@ -446,18 +662,131 @@ async def typing(peer_id: str, payload: TypingIn, user: dict = Depends(get_curre
 @router.get("/unread-count")
 async def unread_count(user: dict = Depends(get_current_user)):
     if user.get("role") not in ("parent", "teacher", "school_admin"):
-        return {"count": 0}
+        return {"count": 0, "mentions": 0}
     school_id = user["school_id"]
     tdb = await tenant_db(school_id)
-    # Sum unread across all participating convs
+    # Sum unread + mentions across all participating convs. Muted threads
+    # don't count toward the regular unread badge (but mentions still do).
     convs = await tdb.conversations.find(
         {"school_id": school_id, "participants": user["id"]},
-        {"_id": 0, "unread_for": 1},
+        {"_id": 0, "id": 1, "unread_for": 1, "mention_for": 1},
     ).to_list(5000)
+    if not convs:
+        return {"count": 0, "mentions": 0}
+    muted_rows = await tdb.conv_settings.find(
+        {"user_id": user["id"], "muted": True}, {"_id": 0, "conv_id": 1},
+    ).to_list(5000)
+    muted_set = {r["conv_id"] for r in muted_rows}
     total = 0
+    mentions = 0
     for c in convs:
-        total += int((c.get("unread_for") or {}).get(user["id"], 0) or 0)
-    return {"count": total}
+        u = int((c.get("unread_for") or {}).get(user["id"], 0) or 0)
+        m = int((c.get("mention_for") or {}).get(user["id"], 0) or 0)
+        mentions += m
+        if c["id"] in muted_set:
+            # muted: only mentions break through to the count badge
+            total += m
+        else:
+            total += u
+    return {"count": total, "mentions": mentions}
+
+
+# ---------- Mute toggle ----------
+
+class MuteIn(BaseModel):
+    muted: bool
+
+
+@router.post("/conversations/{peer_id}/mute")
+async def set_mute(peer_id: str, payload: MuteIn, user: dict = Depends(get_current_user)):
+    ok, _peer = await _is_allowed_peer(user, peer_id)
+    if not ok:
+        raise HTTPException(status_code=403, detail="Not allowed")
+    school_id = user["school_id"]
+    tdb = await tenant_db(school_id)
+    conv = await _upsert_conversation(tdb, school_id, user["id"], peer_id)
+    await tdb.conv_settings.update_one(
+        {"user_id": user["id"], "conv_id": conv["id"]},
+        {"$set": {
+            "user_id": user["id"],
+            "conv_id": conv["id"],
+            "school_id": school_id,
+            "muted": bool(payload.muted),
+            "updated_at": utc_now(),
+        }},
+        upsert=True,
+    )
+    return {"ok": True, "muted": bool(payload.muted)}
+
+
+@router.get("/conversations/{peer_id}/settings")
+async def get_conv_settings(peer_id: str, user: dict = Depends(get_current_user)):
+    ok, _peer = await _is_allowed_peer(user, peer_id)
+    if not ok:
+        raise HTTPException(status_code=403, detail="Not allowed")
+    school_id = user["school_id"]
+    tdb = await tenant_db(school_id)
+    conv = await _upsert_conversation(tdb, school_id, user["id"], peer_id)
+    row = await tdb.conv_settings.find_one(
+        {"user_id": user["id"], "conv_id": conv["id"]}, {"_id": 0, "muted": 1},
+    )
+    return {
+        "conversation_id": conv["id"],
+        "muted": bool(row and row.get("muted")),
+    }
+
+
+# ---------- Web Push subscription ----------
+
+class PushSubKeys(BaseModel):
+    p256dh: str
+    auth: str
+
+
+class PushSubscribeIn(BaseModel):
+    endpoint: str = Field(min_length=10, max_length=1000)
+    keys: PushSubKeys
+
+
+@router.get("/push/config")
+async def push_config(user: dict = Depends(get_current_user)):  # noqa: ARG001
+    """Return the public VAPID key so the browser can subscribe."""
+    return {
+        "public_key": os.environ.get("VAPID_PUBLIC_KEY", ""),
+        "enabled": bool(os.environ.get("VAPID_PRIVATE_KEY")),
+    }
+
+
+@router.post("/push/subscribe")
+async def push_subscribe(payload: PushSubscribeIn, user: dict = Depends(get_current_user)):
+    db = get_db()
+    await db.push_subscriptions.update_one(
+        {"endpoint": payload.endpoint},
+        {"$set": {
+            "id": new_id(),
+            "user_id": user["id"],
+            "school_id": user.get("school_id"),
+            "endpoint": payload.endpoint,
+            "keys": {"p256dh": payload.keys.p256dh, "auth": payload.keys.auth},
+            "user_agent": "",
+            "updated_at": utc_now(),
+        }, "$setOnInsert": {"created_at": utc_now()}},
+        upsert=True,
+    )
+    return {"ok": True}
+
+
+class PushUnsubscribeIn(BaseModel):
+    endpoint: str
+
+
+@router.post("/push/unsubscribe")
+async def push_unsubscribe(payload: PushUnsubscribeIn, user: dict = Depends(get_current_user)):
+    db = get_db()
+    res = await db.push_subscriptions.delete_one(
+        {"endpoint": payload.endpoint, "user_id": user["id"]},
+    )
+    return {"ok": True, "removed": res.deleted_count}
 
 
 # ---------- WebSocket ----------

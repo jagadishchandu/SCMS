@@ -358,6 +358,8 @@ async def init_school_db(school: dict):
     await sdb.messages.create_index([("conv_id", 1), ("created_at", -1)])
     await sdb.messages.create_index("recipient_id")
     await sdb.messages.create_index("sender_id")
+    await sdb.conv_settings.create_index([("user_id", 1), ("conv_id", 1)], unique=True)
+    await sdb.conv_settings.create_index([("user_id", 1), ("muted", 1)])
 
     # ---- Meta marker (lists which version provisioned the schema) ----
     await sdb.meta.update_one(
@@ -467,3 +469,6 @@ async def ensure_indexes():
     await db.notifications.create_index([("school_id", 1), ("created_at", -1)])
     await db.notifications.create_index("status")
     await db.notifications.create_index("channel")
+    # Web Push subscriptions (one user can have many endpoints / devices)
+    await db.push_subscriptions.create_index("endpoint", unique=True)
+    await db.push_subscriptions.create_index("user_id")

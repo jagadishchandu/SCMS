@@ -90,3 +90,50 @@
 - P1: a "lock count to actual onboarded students" toggle so price stops growing
   past planned capacity.
 - P2: auto-renew + auto-charge via Razorpay/Stripe.
+
+## Iteration — 2026-01 (current session, part 4)
+**In-app chat (WebSocket-based real-time messaging)**
+
+### Backend (`/app/backend/routes/messaging.py`)
+- `WS /api/messaging/ws` — JWT auth via `access_token` cookie or `?token=` query.
+  Fans out `message` / `typing` / `read` events; in-process `ConnectionManager`
+  keyed by user_id supports multiple devices per user.
+- `GET /api/messaging/contacts` — role-gated peer list:
+  - school_admin → all teachers in the same school
+  - teacher → school_admins + parents of students in the teacher's (class, section) mappings
+  - parent → class teacher(s) of their own children only
+- `GET /api/messaging/conversations` — threads with last_message + unread count, sorted desc.
+- `GET /api/messaging/conversations/{peer_id}/messages` — chronological history, `?before=` pagination.
+- `POST /api/messaging/conversations/{peer_id}/messages` — persist + WS fan-out.
+- `POST /api/messaging/conversations/{peer_id}/read` — marks recipient's unread to 0 and flips read_at.
+- `POST /api/messaging/conversations/{peer_id}/typing` — REST fallback for typing events.
+- `GET /api/messaging/unread-count` — total unread for sidebar/bottom-nav badge.
+- Storage in per-school tenant DB: `messages` + `conversations` collections.
+  Conversation key = sorted `[participants[a], participants[b]]`.
+- Indexes added to `init_school_db` in `core/db.py`.
+
+### Frontend
+- `pages/shared/ChatPage.jsx` — two-pane layout (contacts + window), mobile
+  drill-in pattern with back button, search, animated bubbles, read receipts
+  (single ✓ sent / filled ✓ read), live typing dots, "Live" WS status pill.
+- `hooks/useMessagingSocket.js` — auto-reconnecting WebSocket client with
+  exponential backoff.
+- `hooks/useUnreadChat.js` — polls /unread-count every 25s + on focus +
+  on `scms:chat:refresh-unread` custom event.
+- `components/Sidebar.jsx` — new Chat entry for school_admin / teacher / parent
+  with unread badge.
+- `components/MobileBottomNav.jsx` — bottom nav now available for teacher and
+  school_admin (previously parent-only), each with a Chat tab + badge.
+- `App.js` — `/chat` route for the three eligible roles.
+- `index.css` — chat layout, message bubble enter animation, typing-dot
+  blink, contact-row hover, online pulse, mobile responsive grid that
+  swaps list/window via `.is-shown`.
+
+### Backend tests (12/12 pass)
+`tests/test_messaging.py` — contacts RBAC, send/receive auth, conversation
+ordering, read receipts/unread-count, typing auth, full WS round-trip.
+
+## Backlog / Next
+- P2: file/image attachments in chat
+- P2: push notifications when a chat message arrives while offline
+- P2: archive / delete conversation

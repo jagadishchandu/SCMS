@@ -1,0 +1,48 @@
+{
+  "summary": "Iter 30: Tested new chat extensions — mute toggle, @mentions, attachments (image/PDF base64), web-push subscribe/unsubscribe, push/config, history cap CHAT_HISTORY_MAX=10. Backend: 10/10 new tests pass + iter29 12/12 regression still green (22/22 total in 7s). Frontend desktop UI: mute toggle works (toast + title flip), mention autocomplete menu opens on typing '@', attachment paperclip opens picker, preview shown with clear X, image renders inline after send; push button click is wired correctly (the headless browser shows 'Permission denied' toast as expected). Found ONE real UX bug: mention insertion doubles the '@' character because insertMention() does not strip the user-typed trigger '@' before inserting '@<Name> ', producing '@@Lakshmi Iyer '. Backend still detects the mention thanks to regex tolerance, but visually wrong.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "ChatPage.jsx insertMention() (line 440-454)",
+        "issue": "When the mention autocomplete is triggered by typing '@', clicking the suggestion inserts '@<Name> ' at the cursor without removing the trigger '@' the user already typed. Result: '@@Lakshmi Iyer '. Backend regex @<First> still matches (offset by 1), so the mention is detected and counted, but the rendered message bubble shows '@@Lakshmi Iyer' and the chat-mention highlight span only wraps the substring starting at the inner '@'. Fix: in insertMention(), scan back from cursor for the trigger '@' and replace from that position; or strip the most recent '@' before inserting.",
+        "selector": "[data-testid='chat-mention-suggest']",
+        "priority": "MEDIUM"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter30_messaging_v2.py",
+    "/app/backend/tests/test_messaging.py",
+    "/app/test_reports/pytest/iter30_messaging_v2.xml"
+  ],
+  "action_items": [
+    "Fix ChatPage.jsx insertMention(): replace the user-typed '@' trigger character with '@<Name> ' instead of appending after it. Suggested: walk back from cursor to find the latest '@' (until whitespace), then slice that out before injecting insertText.",
+    "(Optional/nice-to-have, not blocking) When ChatHeader peer name is not present in a queryable element, expose peer.name on the chat-window root via data-attribute for easier test targeting."
+  ],
+  "critical_code_review_comments": [
+    "messaging.py send_message: contains a duplicate `return out_msg` statement (line 609-610). Dead code — second return is unreachable but harmless. Worth cleaning up.",
+    "messaging.py _detect_mentions allows '@<First Last>' or '@<First>' to match the peer; double '@' (`@@Name`) is still tolerated because the regex anchors on '@' (non-greedy). Document this lenient behavior — it accidentally rescues the insertMention UX bug above.",
+    "messaging.py _trim_conversation_history: deletes with $lte cutoff (cutoff = (cap+1)th newest). This keeps exactly cap rows. Verified by test: after 15 sends, GET returns ≤ 10.",
+    "messaging.py push_subscribe: upserts by endpoint only (no per-user scope) — fine because endpoints are globally unique per browser/install. But unsubscribe filters by endpoint AND user_id which is correctly defensive.",
+    "messaging.py _vapid_private_pem: silently returns None on bad base64 — webpush then no-ops, masking misconfiguration. Consider logging a warning so ops can see VAPID is broken.",
+    "messaging.py send_message: when peer is muted AND no mention, push is correctly skipped. When mention is present and peer is offline, push is sent regardless of mute. ✓ matches spec.",
+    "Frontend useWebPush.js (not viewed inline but called from chat-enable-push-btn): caught console toast 'Permission denied' — works as designed in headless. In a real browser the prompt would appear; recommend exposing a fallback hint when Notification.permission === 'denied' so users know to flip the browser setting.",
+    "Frontend ChatPage MessageBubble renderText: chat-mention class is only added when the regex matches against `peer.name` (case-insensitive). With the @@ double-prefix bug, the visual highlight starts at the inner @, so the leading lone @ stays unstyled. Both backend mention detection and unread counter still increment correctly."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter30_messaging_v2.py"
+  ],
+  "success_rate": {"backend": "100% (10/10 new, 22/22 incl regression)", "frontend": "Desktop ~95% (mute, mentions menu, attachment, push wiring all OK; one UX bug on @@ doubling)"},
+  "test_credentials": "principal@sunrise.edu/School@123 (School Super Admin), priya@sunrise.edu/Teacher@123 (Teacher), parent.stu-00001@sunrise.edu/Parent@123 (Parent). Login dropdown uses native <select> with data-testid=\"login-role-select\" and label text must match (e.g., 'Teacher').",
+  "seed_data_creation": "Pushed 15+ TEST_hist_* messages between priya↔parent.stu-00001 to exercise history trim (collection then cropped back to 10). Also TEST_plain_*, TEST_mention_* (mention bypasses mute), and a 1x1 PNG attachment + a UI-sent 'Hello @Parent UI_MEN_*' to parent.stu-00005 (Lakshmi Iyer). All TEST_-prefixed except the UI mention/attachment.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Two complementary backend test files cover messaging: /app/backend/tests/test_messaging.py (iter29 baseline — 12 tests, includes WebSocket via the `websockets` lib using ?token= query auth) and /app/backend/tests/test_iter30_messaging_v2.py (iter30 — mute, mentions, attachments, push subscribe/unsubscribe, history cap, push/config). Both currently pass in ~7s combined. Login flow on the frontend uses a NATIVE <select> with data-testid='login-role-select'; use page.select_option(...) with the visible label, NOT click. After main agent fixes the @@ doubling in insertMention(), re-test by: (1) login as priya, (2) open chat to a parent, (3) page.keyboard.type('@'), (4) click [data-testid=chat-mention-suggest], (5) read [data-testid=chat-input].value — expected '@<Name> ' (single @). For the mobile layout bug from iter29, this iter's mute/mention controls live inside chat-window header so the bug may still hide the controls on mobile; was not retested here because main agent's mobile CSS fix wasn't in scope of this iteration.",
+  "rca of the issue": "@@ doubling RCA — ChatPage.jsx line 440 `insertMention` does string-splice insert of '@<active.name> ' at cursor position via slice(0,i) + insertText + slice(j). The state value (`draft`) at that moment already contains the '@' trigger that the user typed to open the menu. Nothing strips it. Backend regex `_MENTION_RE = r\"@([A-Za-z]…)\"` happens to be 'rescued' because it matches the inner @<Name>, so /api/messaging/conversations/{peer}/messages still returns mentions:[peer_id] and unread_count.mentions increments — verified end-to-end. Fix is local to insertMention(): walk back from el.selectionStart while previous char is not whitespace and not '@'; once you hit the latest '@' (or BOF), splice from that index instead of selectionStart. That single change makes the visual perfect and keeps the existing happy-path behavior when user clicks the menu without typing @ (cursor walk-back finds nothing → falls back to current behavior)."
+}
