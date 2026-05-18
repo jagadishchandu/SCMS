@@ -352,6 +352,13 @@ async def init_school_db(school: dict):
     await sdb.trip_rsvps.create_index("parent_user_id")
     await sdb.trip_rsvps.create_index("status")
 
+    # ---- In-app messaging (chat) ----
+    await sdb.conversations.create_index([("school_id", 1), ("participants", 1)])
+    await sdb.conversations.create_index("last_message_at")
+    await sdb.messages.create_index([("conv_id", 1), ("created_at", -1)])
+    await sdb.messages.create_index("recipient_id")
+    await sdb.messages.create_index("sender_id")
+
     # ---- Meta marker (lists which version provisioned the schema) ----
     await sdb.meta.update_one(
         {"_marker": "school_db"},

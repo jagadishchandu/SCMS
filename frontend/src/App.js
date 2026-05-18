@@ -23,6 +23,7 @@ import NotificationsLog from "./pages/shared/NotificationsLog";
 import CalendarPage from "./pages/shared/CalendarPage";
 import AuditLogPage from "./pages/shared/AuditLogPage";
 import SickLeavesPage from "./pages/shared/SickLeavesPage";
+import ChatPage from "./pages/shared/ChatPage";
 
 // School Admin
 import SchoolDashboard from "./pages/school/SchoolDashboard";
@@ -158,6 +159,10 @@ export default function App() {
 
       {/* Self-service profile — Telegram linking + channel reachability */}
       <Route path="/profile" element={<ProtectedRoute allow={["platform_admin","school_admin","teacher","accounts","parent"]}>{withLayout(Profile)}</ProtectedRoute>} />
+
+      {/* In-app chat */}
+      <Route path="/chat" element={<ProtectedRoute allow={["school_admin","teacher","parent"]}>{withLayout(ChatPage)}</ProtectedRoute>} />
+      <Route path="/chat/:peerId" element={<ProtectedRoute allow={["school_admin","teacher","parent"]}>{withLayout(ChatPage)}</ProtectedRoute>} />
 
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

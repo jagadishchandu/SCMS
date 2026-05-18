@@ -24,7 +24,7 @@ export default function AppLayout({ children }) {
 
   useEffect(() => { setMobileOpen(false); }, [location.pathname]);
 
-  const isParent = user?.role === "parent";
+  const showMobileBottom = ["parent", "teacher", "school_admin"].includes(user?.role);
 
   return (
     <div className="app-shell">
@@ -33,7 +33,7 @@ export default function AppLayout({ children }) {
         <Topbar schoolName={schoolName} onToggleMobile={() => setMobileOpen(true)} />
         <SubscriptionBanner user={user} />
         <TelegramLinkBanner />
-        <main className={`flex-1 px-4 lg:px-8 py-6 lg:py-10 fade-up ${isParent ? "mobile-bottom-safe" : ""}`}>{children}</main>
+        <main className={`flex-1 px-4 lg:px-8 py-6 lg:py-10 fade-up ${showMobileBottom ? "mobile-bottom-safe" : ""}`}>{children}</main>
       </div>
       <MobileBottomNav />
     </div>

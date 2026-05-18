@@ -1,0 +1,52 @@
+{
+  "summary": "Iter 29: Tested new in-app chat (REST + WebSocket). 12/12 backend tests pass — contacts RBAC, send-message authorization (403 for disallowed peer), conversations sorted by last_message_at desc, message persistence + chronological order, read receipts, unread-count, typing, and WS /api/messaging/ws (connected + message + read events). Desktop frontend works end-to-end (sidebar Chat entry with unread badge, contact list, message bubbles, single-check sent receipt, Live WS indicator). Mobile (390px) has a real CSS layout bug: both chat-list and chat-window panels render on top of each other so the drill-in pattern is broken — user only sees 'Pick a conversation' and cannot reach the contacts.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "ChatPage layout (CSS in /app/frontend/src/index.css)",
+        "issue": "On mobile (<1024px) both .chat-list and .chat-window are display:flex simultaneously and occupy the same grid cell, so chat-window overlays chat-list. Root cause: the base rules '.chat-list { display: flex }' (lines 162-167) and '.chat-window { display: flex }' (lines 168-173) come AFTER the @media (max-width:1023px) block (lines 155-161) that sets display:none. Same-specificity later rules win, so display:none is overridden. Drill-in pattern broken: user sees 'Pick a conversation' empty state, contact list rows are present in DOM but hidden below the overlay. The chat-back-btn is rendered inside chat-window only after active=peer is set, but since the overlay blocks the (force-clickable but visually hidden) contact rows, normal users cannot open a chat on mobile.",
+        "selector": "[data-testid='chat-contact-list'] / [data-testid='chat-window']",
+        "priority": "HIGH"
+      },
+      {
+        "component": "ChatPage parent contacts list",
+        "issue": "Parent of STU-00001 sees 2 contacts in the UI although docs/test_credentials.md says they should only see their class teacher (priya). Backend GET /api/messaging/contacts is returning more than 1 teacher for this parent — likely an extra class_teacher_map row for Grade 5-A (e.g., kavita) leaked from earlier seeds/tests. Functionally still gated correctly (parent can chat with priya). Worth verifying class_teacher_map seed integrity.",
+        "selector": "[data-testid^='chat-contact-']",
+        "priority": "LOW"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_messaging.py",
+    "/app/test_reports/pytest/iter29_messaging.xml"
+  ],
+  "action_items": [
+    "FIX MOBILE LAYOUT: reorder CSS in /app/frontend/src/index.css so the base .chat-list/.chat-window display:flex declarations come BEFORE the @media (max-width:1023px) block, OR add display:none/flex with higher specificity inside the media query (e.g., '.chat-shell .chat-list { display: none; }' and '.chat-shell .chat-list.is-shown { display: flex; }'). Verified with computed-style probe: at 390px both panels have display:flex and identical grid-row/column 1.",
+    "Investigate class_teacher_map: parent.stu-00001 currently maps to 2 teachers in DB; per spec should be only priya for Grade 5-A. Could be left-over data; seed should be idempotent."
+  ],
+  "critical_code_review_comments": [
+    "messaging.py _ws_user_from_token reads access_token from cookie or ?token= query — fine, but the cookie path only works for browser clients (same-origin). For mobile-app future use, query token fallback is essential — already implemented. OK.",
+    "messaging.py send_message: $inc unread_for.{peer_id} is correct but never resets to 0 when the peer is currently online and viewing the chat. The /read endpoint handles it after the fact; consider that until /read fires, the WS-pushed message still bumps unread_for. Acceptable trade-off but worth noting.",
+    "messaging.py list_messages: pagination uses created_at < before (string compare on ISO timestamps). Works because ISO-8601 sorts lexically — OK, but document so future devs don't break it by switching to datetime objects.",
+    "messaging.py mark_read: uses iso string for read_at while messages.created_at also iso. Consistent. Good.",
+    "ChatPage.jsx — line 184 'setContacts((cs)=>cs.map(c=>c.id===peer.id?{...c,unread:0}:c))' silently clears unread without waiting for /read success. Fine for UX; mismatch with backend would self-heal on next contacts fetch.",
+    "useMessagingSocket.js — exponential backoff with no jitter; can cause thundering herd on backend restart but low risk for school-sized tenant.",
+    "ChatPage.jsx — typing event is emitted via WS sendRaw but there is also a REST POST /typing endpoint exposed. UI uses WS only; REST endpoint is essentially dead code in production but useful for tests. OK."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_messaging.py"
+  ],
+  "success_rate": {"backend": "100% (12/12)", "frontend": "Desktop 100%, Mobile broken (1 CSS bug)"},
+  "test_credentials": "principal@sunrise.edu/School@123 (School Super Admin), priya@sunrise.edu/Teacher@123 (Teacher), rohit@sunrise.edu/Teacher@123, parent.stu-00001@sunrise.edu/Parent@123 (Parent)",
+  "seed_data_creation": "Test messages were written to the conversations between priya↔parent.stu-00001 and priya↔parent.stu-00005 (Lakshmi Iyer) via REST during tests. Texts: 'TEST_msg_*', 'TEST_parent_hello', 'TEST_unread', 'TEST_ws_*', plus a UI-sent 'Hello from teacher 39302' and 'Reply from parent on mobile'.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend test file /app/backend/tests/test_messaging.py uses pytest-asyncio (auto mode) and the `websockets` library to test the /api/messaging/ws endpoint with ?token= query auth. Login response sets access_token cookie via Set-Cookie; we pull it from session.cookies. After main agent fixes the mobile CSS, re-run a mobile (390x844) playwright flow that: (1) navigates to /chat as parent, (2) verifies chat-window has display:none AND chat-list has display:flex initially, (3) clicks first contact, (4) verifies chat-back-btn becomes visible and chat-thread appears, (5) sends a message via Enter key, (6) clicks back → returns to list. Real-time WS round-trip is already covered by backend test test_ws_connects_and_receives_message.",
+  "rca of the issue": "MOBILE LAYOUT BUG — CSS source-order issue in /app/frontend/src/index.css. The intent is: mobile shows EITHER chat-list OR chat-window based on the .is-shown class. The @media block at lines 155-161 sets `.chat-list { display: none }` and `.chat-list.is-shown { display: flex }`. However lines 162-167 then declare `.chat-list { display: flex }` outside any media query. Because both have the same specificity (single class) and the unscoped base rule comes LATER in source, it wins at ALL viewport widths, including mobile. Same applies to .chat-window. Both panels end up with display:flex on mobile, sit in the same grid cell (grid-row:1 grid-column:1 set inside @media), and chat-window overlays chat-list (DOM order + z-index defaults). Reproduction: open https://classroom-messenger-1.preview.emergentagent.com as any chat user at viewport 390x844; expected: contact list fills the screen; actual: empty chat-window state is shown and contact rows are unreachable. Fix: move base .chat-list/.chat-window display rules BEFORE the @media block, or increase specificity inside the @media block (e.g., `.chat-shell > .chat-list { display: none; }`)."
+}

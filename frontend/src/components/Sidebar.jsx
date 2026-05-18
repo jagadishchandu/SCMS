@@ -4,11 +4,13 @@ import { useAuth } from "../contexts/AuthContext";
 import { ROLE_LABELS } from "../lib/utils";
 import { useSickLeavePending } from "../hooks/useSickLeavePending";
 import { useUnreadNotifications } from "../hooks/useUnreadNotifications";
+import { useUnreadChat } from "../hooks/useUnreadChat";
 import {
   House, Buildings, GraduationCap, ClipboardText, ChartLineUp,
   Calendar, BookOpen, Receipt, BellRinging, UploadSimple,
   Gauge, ChalkboardTeacher, SignOut, ChartPieSlice, FileText, MagnifyingGlass,
   ShieldCheck, Package, X, Heartbeat, Users, MoneyWavy, UserCircle, Bus,
+  ChatCircleDots,
 } from "@phosphor-icons/react";
 
 const NAV_BY_ROLE = {
@@ -22,6 +24,7 @@ const NAV_BY_ROLE = {
   ],
   school_admin: [
     { to: "/school", label: "Dashboard", icon: Gauge, end: true },
+    { to: "/chat", label: "Chat", icon: ChatCircleDots },
     { to: "/school/students", label: "Students", icon: GraduationCap },
     { to: "/school/teachers", label: "Teachers & Staff", icon: ChalkboardTeacher },
     { to: "/school/staff", label: "Support Staff", icon: Users },
@@ -51,6 +54,7 @@ const NAV_BY_ROLE = {
   ],
   teacher: [
     { to: "/teacher", label: "My Dashboard", icon: Gauge, end: true },
+    { to: "/chat", label: "Chat", icon: ChatCircleDots },
     { to: "/teacher/attendance-cards", label: "Take Attendance", icon: ClipboardText },
     { to: "/teacher/attendance", label: "Attendance (grid)", icon: ClipboardText },
     { to: "/teacher/marks", label: "Enter Marks", icon: FileText },
@@ -79,6 +83,7 @@ const NAV_BY_ROLE = {
   ],
   parent: [
     { to: "/parent", label: "My Child", icon: House, end: true },
+    { to: "/chat", label: "Chat", icon: ChatCircleDots },
     { to: "/parent/calendar", label: "Calendar", icon: Calendar },
     { to: "/parent/trips", label: "Educational Trips", icon: Bus },
     { to: "/parent/sick-leaves", label: "Sick Leaves", icon: Heartbeat },
@@ -158,6 +163,7 @@ export default function Sidebar({ mobileOpen, onCloseMobile }) {
   const { user } = useAuth();
   const sickPending = useSickLeavePending();
   const { count: unreadNotifs } = useUnreadNotifications();
+  const { count: unreadChat } = useUnreadChat();
   if (!user) return null;
   let items = NAV_BY_ROLE[user.role] || [];
 
@@ -173,6 +179,7 @@ export default function Sidebar({ mobileOpen, onCloseMobile }) {
     "/teacher/sick-leaves": user.role === "teacher" ? sickPending : 0,
     "/school/notifications": user.role === "school_admin" ? unreadNotifs : 0,
     "/platform/notifications": user.role === "platform_admin" ? unreadNotifs : 0,
+    "/chat": ["school_admin", "teacher", "parent"].includes(user.role) ? unreadChat : 0,
   };
 
   return (
