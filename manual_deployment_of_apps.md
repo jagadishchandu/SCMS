@@ -1,3 +1,4 @@
+BackednURL : https://scms-backend.ambitiouscliff-7b936366.southindia.azurecontainerapps.io
 # SCMS — Full manual deployment via Azure Portal
 
 Complete step-by-step. No CLI, no scripts, just clicks. Build images locally, push to ACR, deploy two Container Apps with HTTPS, and wire them together.
