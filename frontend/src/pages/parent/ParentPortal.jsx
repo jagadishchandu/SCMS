@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { api, formatApiError } from "../../lib/api";
 import { PageHeader, KPI, Section, Empty } from "../../components/Primitives";
 import { currency, formatDate, CHART_COLORS } from "../../lib/utils";
-import { Camera, UserCircle, DownloadSimple, Receipt } from "@phosphor-icons/react";
+import { Camera, UserCircle, DownloadSimple, Receipt, GraduationCap, Lightning, BookOpen, CalendarBlank, Warning, ArrowRight } from "@phosphor-icons/react";
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell, Legend } from "recharts";
 import toast from "react-hot-toast";
 
@@ -133,6 +133,12 @@ function DashboardView({ dash, payments, onReceipt }) {
         <KPI label="Class" value={student.section} hint={`Roll ${student.roll_number || "—"}`} accent="info" testId="parent-class" />
       </div>
 
+      {/* Subject focus + upcoming exam countdown — split into two cards */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        <SubjectFocusCard lagging={academics.lagging_subjects || []} />
+        <UpcomingExamsCard exams={academics.upcoming_exams || []} />
+      </div>
+
       {insights.length > 0 && (
         <Section title="Insights">
           <ul className="space-y-2">
@@ -216,5 +222,112 @@ function DashboardView({ dash, payments, onReceipt }) {
         </Section>
       </div>
     </>
+  );
+}
+
+
+/* ============================================================
+   Subject focus + Upcoming exam countdown — Parent dashboard
+   ============================================================ */
+
+function statusToTone(status) {
+  if (status === "critical") return { wrap: "border-status-danger/40 bg-status-danger-bg", dot: "bg-status-danger" };
+  if (status === "needs_work") return { wrap: "border-status-warning/40 bg-status-warning-bg", dot: "bg-status-warning" };
+  return { wrap: "border-status-info/30 bg-status-info-bg", dot: "bg-status-info" };
+}
+
+function SubjectFocusCard({ lagging }) {
+  return (
+    <Section title="Where focus is needed" data-testid="parent-subject-focus">
+      <div className="flex items-center gap-2 mb-3 text-xs text-ink-muted">
+        <Lightning size={12} weight="fill" className="text-status-warning" />
+        Based on the most recent exam marks.
+      </div>
+      {lagging.length === 0 ? (
+        <div className="empty-state flex items-center gap-3 px-4 py-6 text-status-success">
+          <GraduationCap size={28} weight="duotone" />
+          <div>
+            <div className="font-display text-sm font-medium">Great work — no weak subjects right now.</div>
+            <div className="text-xs text-ink-muted">Keep practising consistently across all subjects.</div>
+          </div>
+        </div>
+      ) : (
+        <ul className="space-y-3" data-testid="parent-lagging-list">
+          {lagging.map((row) => {
+            const tone = statusToTone(row.status);
+            return (
+              <li
+                key={row.subject}
+                className={`rounded-lg border ${tone.wrap} p-3 flex items-start gap-3 transition-transform hover:-translate-y-0.5`}
+                data-testid={`parent-lagging-${row.subject.toLowerCase()}`}
+              >
+                <span className={`w-2 h-2 rounded-full mt-2 ${tone.dot}`} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline gap-2 flex-wrap">
+                    <div className="font-medium text-sm text-ink">{row.subject}</div>
+                    <div className="text-[11px] text-ink-muted">
+                      Student <strong>{row.student_avg}%</strong>
+                      {row.class_avg != null && <> · Class avg <strong>{row.class_avg}%</strong></>}
+                      {row.gap != null && row.gap > 0 ? <> · <span className="text-status-warning font-medium">{row.gap}% behind</span></> : null}
+                    </div>
+                  </div>
+                  <div className="text-xs mt-1 text-ink-soft">{row.suggestion}</div>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Section>
+  );
+}
+
+function UpcomingExamsCard({ exams }) {
+  return (
+    <Section title="Next exam countdown" data-testid="parent-upcoming-exams">
+      <div className="flex items-center gap-2 mb-3 text-xs text-ink-muted">
+        <CalendarBlank size={12} weight="fill" className="text-status-info" />
+        Days remaining until each subject's paper.
+      </div>
+      {exams.length === 0 ? (
+        <Empty title="No exams scheduled" message="When the school publishes the next exam, the countdown will appear here." />
+      ) : (
+        <div className="space-y-4" data-testid="parent-exam-list">
+          {exams.map((ex) => (
+            <div key={ex.id} className={`rounded-lg border ${ex.is_next ? "border-primary/40 bg-primary-light" : "border-line bg-bg-subtle"} p-3`} data-testid={`parent-exam-${ex.id}`}>
+              <div className="flex items-baseline justify-between gap-2 mb-2">
+                <div className="font-display font-medium text-sm text-ink">{ex.name}<span className="text-xs text-ink-muted font-normal"> · {ex.term}</span></div>
+                <div className={`text-xs font-semibold px-2 py-0.5 rounded-full ${ex.days_until <= 7 ? "bg-status-danger text-white" : ex.days_until <= 14 ? "bg-status-warning text-white" : "bg-primary text-white"}`}>
+                  {ex.days_until === 0 ? "TODAY" : ex.days_until === 1 ? "TOMORROW" : `${ex.days_until} days`}
+                </div>
+              </div>
+              {ex.schedule?.length > 0 ? (
+                <ul className="space-y-1">
+                  {ex.schedule.map((s, idx) => (
+                    <li
+                      key={idx}
+                      className="flex items-center gap-2 text-xs bg-bg-surface rounded-md px-2 py-1.5 border border-line"
+                      data-testid={`parent-exam-paper-${ex.id}-${idx}`}
+                    >
+                      <BookOpen size={12} className="text-ink-muted shrink-0" />
+                      <div className="flex-1 truncate">
+                        <strong>{s.subject}</strong>
+                        {s.time ? <span className="text-ink-muted"> · {s.time}</span> : null}
+                      </div>
+                      <span className="text-ink-muted">{formatDate(s.date)}</span>
+                      <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${s.days_until <= 3 ? "bg-status-danger-bg text-status-danger" : s.days_until <= 7 ? "bg-status-warning-bg text-status-warning" : "bg-status-info-bg text-status-info"}`}>
+                        {s.days_until}d
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="text-xs text-ink-muted">Schedule will be published soon.</div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </Section>
   );
 }

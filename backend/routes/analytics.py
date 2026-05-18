@@ -77,6 +77,87 @@ async def student_dashboard(student_uid: str, user: dict = Depends(get_current_u
         diff = round(last_avg - prev_avg, 1)
         improvement = {"diff": diff, "status": "improving" if diff > 1 else ("declining" if diff < -1 else "stable")}
 
+    # Lagging subjects — student avg < class avg by 5+ pts OR below 60% absolute.
+    # Each row carries a 1-line suggestion the UI can render directly.
+    lagging_subjects: list[dict] = []
+    for row in subject_avg:
+        sub = row["subject"]
+        my_avg = row["avg"]
+        cls_avg = class_subject_avg.get(sub)
+        is_below_threshold = my_avg < 60
+        is_below_class = (cls_avg is not None) and (cls_avg - my_avg >= 5)
+        if not (is_below_threshold or is_below_class):
+            continue
+        # Status / suggestion
+        if my_avg < 40:
+            status, suggestion = "critical", f"Critical — request extra coaching for {sub}."
+        elif my_avg < 60:
+            status, suggestion = "needs_work", f"Needs focused practice on {sub} fundamentals."
+        else:
+            status, suggestion = "behind_class", f"Slightly behind class average — review recent {sub} chapters."
+        lagging_subjects.append({
+            "subject": sub,
+            "student_avg": my_avg,
+            "class_avg": cls_avg,
+            "gap": round((cls_avg - my_avg), 1) if cls_avg is not None else None,
+            "status": status,
+            "suggestion": suggestion,
+        })
+    lagging_subjects.sort(key=lambda r: r["student_avg"])  # weakest first
+
+    # Upcoming exams + per-subject countdown (next 60 days)
+    from datetime import date as _date
+    today_iso = _date.today().isoformat()
+    sixty_days = (_date.today().toordinal() + 60)
+    upcoming_exams: list[dict] = []
+    for ex in exams:
+        # Only this student's class/section, only published, only in the future
+        if ex.get("class_id") != s.get("class_id") or ex.get("section") not in (None, s.get("section")):
+            continue
+        if not ex.get("is_published", True):
+            continue
+        start = ex.get("start_date") or ""
+        if not start or start < today_iso:
+            continue
+        try:
+            start_ordinal = _date.fromisoformat(start).toordinal()
+        except Exception:
+            continue
+        if start_ordinal > sixty_days:
+            continue
+        days_until = start_ordinal - _date.today().toordinal()
+        schedule_out = []
+        for slot in ex.get("schedule") or []:
+            slot_date = slot.get("date") or start
+            try:
+                d_until = _date.fromisoformat(slot_date).toordinal() - _date.today().toordinal()
+            except Exception:
+                d_until = days_until
+            if d_until < 0:
+                continue
+            schedule_out.append({
+                "subject": subject_map.get(slot.get("subject_id"), slot.get("subject_id")),
+                "date": slot_date,
+                "time": slot.get("time"),
+                "duration_min": slot.get("duration"),
+                "days_until": d_until,
+            })
+        schedule_out.sort(key=lambda x: x["date"])
+        upcoming_exams.append({
+            "id": ex.get("id"),
+            "name": ex.get("name"),
+            "term": ex.get("term"),
+            "start_date": start,
+            "end_date": ex.get("end_date"),
+            "days_until": days_until,
+            "schedule": schedule_out,
+            "is_next": False,
+        })
+    upcoming_exams.sort(key=lambda x: x["start_date"])
+    if upcoming_exams:
+        upcoming_exams[0]["is_next"] = True
+    upcoming_exams = upcoming_exams[:3]  # cap to 3
+
     # Fees
     fees = await tdb.fees.find({"school_id": s["school_id"], "student_id": s["id"]}, {"_id": 0}).to_list(100)
     fee_total = sum(f["total"] for f in fees)
@@ -143,6 +224,8 @@ async def student_dashboard(student_uid: str, user: dict = Depends(get_current_u
             "weakest": weakest,
             "improvement": improvement,
             "class_subject_avg": class_subject_avg,
+            "lagging_subjects": lagging_subjects,
+            "upcoming_exams": upcoming_exams,
         },
         "fees": {
             "total": fee_total, "paid": fee_paid, "due": fee_due, "overdue": overdue,

@@ -1,9 +1,19 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { api } from "../../lib/api";
+import { api, formatApiError } from "../../lib/api";
 import { PageHeader, Section } from "../../components/Primitives";
-import { CaretLeft, CaretRight } from "@phosphor-icons/react";
+import { CaretLeft, CaretRight, Plus, Trash, ForkKnife, Coffee, MoonStars, SoccerBall, Clock } from "@phosphor-icons/react";
+import { useAuth } from "../../contexts/AuthContext";
+import toast from "react-hot-toast";
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const DOW_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]; // index = 0..6 where Mon=0
+const BREAK_KIND_ICON = {
+  morning: Coffee,
+  lunch:   ForkKnife,
+  evening: MoonStars,
+  sports:  SoccerBall,
+  custom:  Clock,
+};
 
 function monthMatrix(year, month) {
   // month: 0-11

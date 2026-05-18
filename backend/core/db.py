@@ -370,6 +370,8 @@ async def init_school_db(school: dict):
     await sdb.chat_updates.create_index([("recipient_id", 1), ("related_student_id", 1), ("created_at", -1)])
     await sdb.wellness_checks.create_index([("school_id", 1), ("student_id", 1)])
     await sdb.wellness_checks.create_index("status")
+    await sdb.school_breaks.create_index([("school_id", 1), ("kind", 1)])
+    await sdb.school_breaks.create_index([("school_id", 1), ("is_active", 1)])
 
     # ---- Meta marker (lists which version provisioned the schema) ----
     await sdb.meta.update_one(
