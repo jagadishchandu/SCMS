@@ -327,6 +327,51 @@ def _detect_mentions(text: str, peer_name: str | None) -> list[str]:
     return matches
 
 
+# ---------- System "School Notifications" virtual peer ----------
+#
+# Parents (and any user receiving channel notifications) get a synthetic
+# contact whose id is the constant below. When a chat request targets this
+# id we synthesise messages from the `chat_updates` collection instead of
+# reading the `messages` collection. There is no DB row for the "user".
+SYSTEM_PEER_ID = "system::school-notifications"
+
+
+def _system_contact() -> dict:
+    return {
+        "id": SYSTEM_PEER_ID,
+        "name": "School Notifications",
+        "role": "system",
+        "email": "",
+        "context": "Attendance, fees, exam & sick-leave alerts",
+        "online": True,
+        "muted": False,
+        "unread": 0,
+        "mentions": 0,
+        "last_message_at": None,
+        "last_message_text": None,
+        "is_system": True,
+    }
+
+
+def _chat_update_to_message(upd: dict, recipient_id: str) -> dict:
+    """Render a chat_updates row as a chat-message-shaped dict."""
+    return {
+        "id": upd.get("id"),
+        "conv_id": SYSTEM_PEER_ID,
+        "school_id": upd.get("school_id"),
+        "sender_id": SYSTEM_PEER_ID,
+        "recipient_id": recipient_id,
+        "text": upd.get("body") or upd.get("subject") or "",
+        "attachment": None,
+        "mentions": [],
+        "created_at": upd.get("created_at"),
+        "read_at": upd.get("read_at"),
+        "channel": upd.get("channel"),
+        "student_name": upd.get("student_name"),
+        "student_uid": upd.get("student_uid"),
+    }
+
+
 async def _hydrate_peers(school_id: str, peer_ids: list[str]) -> dict[str, dict]:
     if not peer_ids:
         return {}
@@ -448,6 +493,23 @@ async def list_contacts(user: dict = Depends(get_current_user)):
             c["last_message_at"] = None
             c["last_message_text"] = None
             c["muted"] = False
+
+    # Inject the system "School Notifications" virtual contact at the top
+    # for every chat user — backed by the `chat_updates` collection.
+    sys_contact = _system_contact()
+    latest = await tdb.chat_updates.find(
+        {"recipient_id": user["id"], "school_id": school_id},
+        {"_id": 0, "body": 1, "created_at": 1, "read_at": 1},
+    ).sort("created_at", -1).limit(1).to_list(1)
+    unread_sys = await tdb.chat_updates.count_documents(
+        {"recipient_id": user["id"], "school_id": school_id, "read_at": None},
+    )
+    if latest:
+        sys_contact["last_message_at"] = latest[0].get("created_at")
+        sys_contact["last_message_text"] = (latest[0].get("body") or "")[:160]
+    sys_contact["unread"] = unread_sys
+    out = [sys_contact] + out
+
     return {"contacts": out}
 
 
@@ -485,6 +547,40 @@ async def list_messages(
     before: Optional[str] = None,
     user: dict = Depends(get_current_user),
 ):
+    # System "School Notifications" virtual conversation — synthesise messages
+    # from the `chat_updates` collection. Read-only on the user side.
+    if peer_id == SYSTEM_PEER_ID:
+        school_id = user["school_id"]
+        tdb = await tenant_db(school_id)
+        rows = await tdb.chat_updates.find(
+            {"recipient_id": user["id"], "school_id": school_id},
+            {"_id": 0},
+        ).sort("created_at", -1).limit(limit).to_list(limit)
+        rows.reverse()
+        # Hydrate student names for parent-side rendering
+        if user.get("role") == "parent" and rows:
+            sids = list({r.get("related_student_id") for r in rows if r.get("related_student_id")})
+            kids = await tdb.students.find(
+                {"id": {"$in": sids}}, {"_id": 0, "id": 1, "name": 1, "student_uid": 1},
+            ).to_list(len(sids)) if sids else []
+            by_sid = {k["id"]: k for k in kids}
+            for r in rows:
+                k = by_sid.get(r.get("related_student_id"))
+                if k:
+                    r["student_name"] = k["name"]
+                    r["student_uid"] = k["student_uid"]
+        # Mark them all read while we're here
+        await tdb.chat_updates.update_many(
+            {"recipient_id": user["id"], "school_id": school_id, "read_at": None},
+            {"$set": {"read_at": utc_now().isoformat()}},
+        )
+        msgs = [_chat_update_to_message(r, user["id"]) for r in rows]
+        return {
+            "conversation_id": SYSTEM_PEER_ID,
+            "peer": _system_contact(),
+            "messages": msgs,
+        }
+
     ok, peer = await _is_allowed_peer(user, peer_id)
     if not ok:
         raise HTTPException(status_code=403, detail="You are not allowed to chat with this user")
@@ -615,6 +711,16 @@ async def send_message(peer_id: str, payload: SendMessageIn, user: dict = Depend
 
 @router.post("/conversations/{peer_id}/read")
 async def mark_read(peer_id: str, user: dict = Depends(get_current_user)):
+    # System peer: mark all chat_updates as read
+    if peer_id == SYSTEM_PEER_ID:
+        school_id = user["school_id"]
+        tdb = await tenant_db(school_id)
+        res = await tdb.chat_updates.update_many(
+            {"recipient_id": user["id"], "school_id": school_id, "read_at": None},
+            {"$set": {"read_at": utc_now().isoformat()}},
+        )
+        return {"ok": True, "marked": res.modified_count}
+
     ok, _peer = await _is_allowed_peer(user, peer_id)
     if not ok:
         raise HTTPException(status_code=403, detail="Not allowed")
@@ -724,6 +830,8 @@ async def set_mute(peer_id: str, payload: MuteIn, user: dict = Depends(get_curre
 
 @router.get("/conversations/{peer_id}/settings")
 async def get_conv_settings(peer_id: str, user: dict = Depends(get_current_user)):
+    if peer_id == SYSTEM_PEER_ID:
+        return {"conversation_id": SYSTEM_PEER_ID, "muted": False}
     ok, _peer = await _is_allowed_peer(user, peer_id)
     if not ok:
         raise HTTPException(status_code=403, detail="Not allowed")
@@ -1010,12 +1118,31 @@ async def list_groups(user: dict = Depends(get_current_user)):
     # Find every group where the user is owner OR member
     flt = {"school_id": school_id, "$or": [{"owner_id": user["id"]}, {"members": user["id"]}]}
     rows = await tdb.groups.find(flt, {"_id": 0}).sort("last_message_at", -1).to_list(500)
+    # Per-user mute states
+    group_conv_keys = [f"group:{g['id']}" for g in rows]
+    muted_rows = await tdb.conv_settings.find(
+        {"user_id": user["id"], "conv_id": {"$in": group_conv_keys}, "muted": True},
+        {"_id": 0, "conv_id": 1},
+    ).to_list(500) if group_conv_keys else []
+    muted_set = {r["conv_id"] for r in muted_rows}
+    now_iso = utc_now().isoformat()
     # Unread counts (simple: count messages where read_by lacks me + sender != me)
     out = []
     for g in rows:
         unread = await tdb.group_messages.count_documents(
             {"group_id": g["id"], "sender_id": {"$ne": user["id"]}, "read_by": {"$ne": user["id"]}},
         )
+        # Auto-expire pin
+        pin_id = g.get("pinned_message_id")
+        pin_text = g.get("pinned_message_text")
+        pin_until = g.get("pinned_until")
+        if pin_until and pin_until < now_iso:
+            await tdb.groups.update_one({"id": g["id"]}, {"$unset": {
+                "pinned_message_id": "", "pinned_message_text": "",
+                "pinned_message_sender_id": "", "pinned_at": "",
+                "pinned_until": "", "pinned_by": "",
+            }})
+            pin_id, pin_text, pin_until = None, None, None
         out.append({
             "id": g["id"],
             "key": g.get("key"),
@@ -1028,6 +1155,10 @@ async def list_groups(user: dict = Depends(get_current_user)):
             "last_message_text": g.get("last_message_text"),
             "last_sender_id": g.get("last_sender_id"),
             "unread": unread,
+            "muted": f"group:{g['id']}" in muted_set,
+            "pinned_message_id": pin_id,
+            "pinned_message_text": pin_text,
+            "pinned_until": pin_until,
         })
     return {"groups": out}
 
@@ -1104,6 +1235,32 @@ async def send_group_message(group_id: str, payload: GroupSendIn, user: dict = D
     }
     for member_id in g.get("members") or []:
         await manager.send_to_user(member_id, payload_evt)
+
+    # Offline web-push to every member who isn't connected and hasn't muted
+    # the group. Skip the sender.
+    try:
+        muted_rows = await tdb.conv_settings.find(
+            {"conv_id": f"group:{group_id}", "muted": True}, {"_id": 0, "user_id": 1},
+        ).to_list(5000)
+        muted_users = {r["user_id"] for r in muted_rows}
+        push_body = preview if preview else "New broadcast"
+        for member_id in g.get("members") or []:
+            if member_id == user["id"]:
+                continue
+            if member_id in muted_users:
+                continue
+            if manager.is_online(member_id):
+                continue
+            await _send_web_push(member_id, school_id, {
+                "title": f"📣 {g.get('name') or 'Broadcast'}",
+                "body": push_body,
+                "url": "/chat",
+                "group_id": group_id,
+                "from": {"id": user["id"], "name": user.get("name"), "role": user.get("role")},
+            })
+    except Exception as _e:
+        pass
+
     return out
 
 
@@ -1121,3 +1278,126 @@ async def mark_group_read(group_id: str, user: dict = Depends(get_current_user))
         {"$addToSet": {"read_by": user["id"]}},
     )
     return {"ok": True, "marked": res.modified_count}
+
+
+# =========================================================================
+#  Group mute (per member) + Pinned broadcast
+# =========================================================================
+
+def _group_conv_key(group_id: str) -> str:
+    return f"group:{group_id}"
+
+
+async def _is_group_member(tdb, school_id: str, group_id: str, user_id: str) -> tuple[bool, Optional[dict]]:
+    g = await tdb.groups.find_one({"id": group_id, "school_id": school_id}, {"_id": 0})
+    if not g:
+        return False, None
+    if g["owner_id"] == user_id or user_id in (g.get("members") or []):
+        return True, g
+    return False, g
+
+
+@router.get("/groups/{group_id}/settings")
+async def get_group_settings(group_id: str, user: dict = Depends(get_current_user)):
+    school_id = user["school_id"]
+    tdb = await tenant_db(school_id)
+    ok, _g = await _is_group_member(tdb, school_id, group_id, user["id"])
+    if not ok:
+        raise HTTPException(status_code=403, detail="Not a member")
+    row = await tdb.conv_settings.find_one(
+        {"user_id": user["id"], "conv_id": _group_conv_key(group_id)},
+        {"_id": 0, "muted": 1},
+    )
+    return {"group_id": group_id, "muted": bool(row and row.get("muted"))}
+
+
+@router.post("/groups/{group_id}/mute")
+async def set_group_mute(group_id: str, payload: MuteIn, user: dict = Depends(get_current_user)):
+    school_id = user["school_id"]
+    tdb = await tenant_db(school_id)
+    ok, _g = await _is_group_member(tdb, school_id, group_id, user["id"])
+    if not ok:
+        raise HTTPException(status_code=403, detail="Not a member")
+    await tdb.conv_settings.update_one(
+        {"user_id": user["id"], "conv_id": _group_conv_key(group_id)},
+        {"$set": {
+            "user_id": user["id"],
+            "conv_id": _group_conv_key(group_id),
+            "school_id": school_id,
+            "muted": bool(payload.muted),
+            "updated_at": utc_now(),
+        }},
+        upsert=True,
+    )
+    return {"ok": True, "muted": bool(payload.muted)}
+
+
+class PinIn(BaseModel):
+    message_id: str
+    hours: int = Field(default=24, ge=1, le=168)  # default 24h, max 7 days
+
+
+@router.post("/groups/{group_id}/pin")
+async def pin_group_message(group_id: str, payload: PinIn, user: dict = Depends(get_current_user)):
+    school_id = user["school_id"]
+    tdb = await tenant_db(school_id)
+    g = await tdb.groups.find_one({"id": group_id, "school_id": school_id}, {"_id": 0})
+    if not g:
+        raise HTTPException(status_code=404, detail="Group not found")
+    if g["owner_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="Only the group owner can pin a message")
+    msg = await tdb.group_messages.find_one({"id": payload.message_id, "group_id": group_id}, {"_id": 0})
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+    from datetime import timedelta
+    pinned_until = (utc_now() + timedelta(hours=payload.hours)).isoformat()
+    await tdb.groups.update_one(
+        {"id": group_id},
+        {"$set": {
+            "pinned_message_id": payload.message_id,
+            "pinned_message_text": (msg.get("text") or "")[:240],
+            "pinned_message_sender_id": msg.get("sender_id"),
+            "pinned_at": utc_now().isoformat(),
+            "pinned_until": pinned_until,
+            "pinned_by": user["id"],
+        }},
+    )
+    # WS broadcast so members see the pin instantly
+    evt = {
+        "type": "group_pin",
+        "group_id": group_id,
+        "pinned_message_id": payload.message_id,
+        "pinned_message_text": (msg.get("text") or "")[:240],
+        "pinned_until": pinned_until,
+    }
+    for member_id in g.get("members") or []:
+        await manager.send_to_user(member_id, evt)
+    await manager.send_to_user(user["id"], evt)
+    return {"ok": True, "pinned_message_id": payload.message_id, "pinned_until": pinned_until}
+
+
+@router.delete("/groups/{group_id}/pin")
+async def unpin_group_message(group_id: str, user: dict = Depends(get_current_user)):
+    school_id = user["school_id"]
+    tdb = await tenant_db(school_id)
+    g = await tdb.groups.find_one({"id": group_id, "school_id": school_id}, {"_id": 0, "owner_id": 1, "members": 1})
+    if not g:
+        raise HTTPException(status_code=404, detail="Group not found")
+    if g["owner_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="Only the group owner can unpin")
+    await tdb.groups.update_one(
+        {"id": group_id},
+        {"$unset": {
+            "pinned_message_id": "",
+            "pinned_message_text": "",
+            "pinned_message_sender_id": "",
+            "pinned_at": "",
+            "pinned_until": "",
+            "pinned_by": "",
+        }},
+    )
+    evt = {"type": "group_pin", "group_id": group_id, "pinned_message_id": None}
+    for member_id in g.get("members") or []:
+        await manager.send_to_user(member_id, evt)
+    await manager.send_to_user(user["id"], evt)
+    return {"ok": True}

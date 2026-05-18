@@ -254,6 +254,18 @@ async def queue_notification(
                 if older:
                     old_ids = [o["id"] for o in older]
                     await tdb.chat_updates.delete_many({"id": {"$in": old_ids}})
+                # Real-time fan-out so the recipient's open Chat page slides the
+                # new "School Notifications" message in without a refresh.
+                try:
+                    from routes.messaging import manager as _chat_manager, SYSTEM_PEER_ID, _chat_update_to_message
+                    msg_evt = _chat_update_to_message(update_doc, recipient_id)
+                    await _chat_manager.send_to_user(recipient_id, {
+                        "type": "message",
+                        "message": msg_evt,
+                        "sender": {"id": SYSTEM_PEER_ID, "name": "School Notifications", "role": "system"},
+                    })
+                except Exception as _e:
+                    log.debug("chat ws fan-out skipped: %s", _e)
     except Exception as _e:
         # Mirroring is best-effort. Never let it block the real notification flow.
         log.warning("chat_updates mirror failed: %s", _e)

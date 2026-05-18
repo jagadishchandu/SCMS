@@ -8,7 +8,7 @@ import {
   ChatCircleDots, PaperPlaneTilt, MagnifyingGlass, CaretLeft,
   CheckCircle, Check, Circle, BellSimpleSlash, BellSimple, Paperclip,
   FilePdf, X as XIcon, At, Megaphone, Newspaper, WhatsappLogo, TelegramLogo,
-  EnvelopeSimple, DeviceMobile, UsersThree,
+  EnvelopeSimple, DeviceMobile, UsersThree, PushPin, PushPinSlash, Buildings,
 } from "@phosphor-icons/react";
 import toast from "react-hot-toast";
 
@@ -16,6 +16,7 @@ const ROLE_BADGE = {
   teacher: { label: "Teacher", cls: "bg-status-info-bg text-status-info" },
   parent: { label: "Parent", cls: "bg-status-warning-bg text-status-warning" },
   school_admin: { label: "Admin", cls: "bg-primary-light text-primary" },
+  system: { label: "School", cls: "bg-primary text-white" },
 };
 
 const MAX_ATT_BYTES = 1_800_000; // ~1.8MB raw → ~2.4MB base64
@@ -80,7 +81,18 @@ function initials(name = "?") {
     .join("") || "?";
 }
 
-function Avatar({ name, online, size = 40 }) {
+function Avatar({ name, online, size = 40, isSystem = false }) {
+  if (isSystem) {
+    return (
+      <div
+        className="relative rounded-full grid place-items-center font-display select-none chat-avatar chat-avatar-system"
+        style={{ width: size, height: size }}
+        data-testid="chat-avatar-system"
+      >
+        <Buildings size={size * 0.5} weight="duotone" />
+      </div>
+    );
+  }
   return (
     <div
       className="relative rounded-full grid place-items-center font-display font-medium select-none chat-avatar"
@@ -103,6 +115,7 @@ function Avatar({ name, online, size = 40 }) {
 function ContactRow({ contact, active, onClick }) {
   const badge = ROLE_BADGE[contact.role] || { label: contact.role, cls: "badge-neutral" };
   const isMention = (contact.mentions || 0) > 0;
+  const isSystem = !!contact.is_system;
   return (
     <button
       type="button"
@@ -110,14 +123,14 @@ function ContactRow({ contact, active, onClick }) {
       data-testid={`chat-contact-${contact.id}`}
       className={`w-full text-left px-3 py-3 flex items-center gap-3 rounded-lg transition-all duration-200 chat-contact-row ${
         active ? "bg-primary-light/60 ring-1 ring-primary/30" : "hover:bg-bg-subtle"
-      }`}
+      } ${isSystem ? "chat-contact-system" : ""}`}
     >
-      <Avatar name={contact.name} online={contact.online} />
+      <Avatar name={contact.name} online={contact.online} isSystem={isSystem} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <div className="font-medium text-sm truncate text-ink flex items-center gap-1.5">
             {contact.name}
-            {contact.muted ? (
+            {!isSystem && contact.muted ? (
               <BellSimpleSlash size={12} className="text-ink-muted shrink-0" data-testid={`chat-muted-icon-${contact.id}`} />
             ) : null}
           </div>
@@ -184,28 +197,54 @@ function AttachmentView({ att, mine }) {
   );
 }
 
-function MessageBubble({ msg, mine, peerName, hideReceipt = false }) {
+function MessageBubble({ msg, mine, peerName, hideReceipt = false, onPin = null, isPinned = false }) {
   const hasMention = Array.isArray(msg.mentions) && msg.mentions.length > 0;
   const onlyAttachment = !msg.text && msg.attachment;
+  const isSystem = msg.sender_id === SYSTEM_PEER_ID || msg.channel;
+  const channelMeta = isSystem && msg.channel ? CHANNEL_META[msg.channel] : null;
   return (
-    <div className={`flex w-full ${mine ? "justify-end" : "justify-start"} chat-msg-enter`}>
-      <div className={`max-w-[82%] md:max-w-[66%] ${mine ? "items-end" : "items-start"} flex flex-col gap-1`}>
+    <div className={`flex w-full ${mine ? "justify-end" : "justify-start"} chat-msg-enter group-message`}>
+      <div className={`max-w-[82%] md:max-w-[66%] ${mine ? "items-end" : "items-start"} flex flex-col gap-1 relative chat-msg-wrap`}>
+        {onPin ? (
+          <button
+            type="button"
+            className="chat-msg-pin-btn"
+            onClick={() => onPin(msg)}
+            title={isPinned ? "Already pinned" : "Pin this broadcast for 24h"}
+            disabled={isPinned}
+            data-testid={`chat-pin-msg-${msg.id}`}
+            aria-label="Pin message"
+          >
+            <PushPin size={12} weight={isPinned ? "fill" : "regular"} />
+          </button>
+        ) : null}
         {msg.attachment ? <AttachmentView att={msg.attachment} mine={mine} /> : null}
         {!onlyAttachment ? (
           <div
             className={`px-3.5 py-2 rounded-2xl text-sm leading-snug whitespace-pre-wrap break-words shadow-soft ${
-              mine
-                ? "bg-primary text-primary-foreground rounded-br-md"
-                : "bg-bg-surface border border-line text-ink rounded-bl-md"
+              isSystem
+                ? `chat-bubble-system ${channelMeta?.cls || ""}`
+                : mine
+                  ? "bg-primary text-primary-foreground rounded-br-md"
+                  : "bg-bg-surface border border-line text-ink rounded-bl-md"
             } ${hasMention && !mine ? "chat-bubble-mention" : ""}`}
             title={fullTime(msg.created_at)}
             data-testid={`chat-msg-${msg.id}`}
           >
+            {channelMeta ? (
+              <div className="chat-bubble-channel-header">
+                <channelMeta.icon size={13} weight="fill" />
+                <span>{channelMeta.label}</span>
+                {msg.student_name ? (
+                  <span className="ml-auto opacity-70">for {msg.student_name}</span>
+                ) : null}
+              </div>
+            ) : null}
             {renderTextWithMentions(msg.text, peerName)}
           </div>
         ) : null}
         <div className={`text-[10px] flex items-center gap-1 px-1 ${mine ? "text-ink-muted" : "text-ink-muted"}`}>
-          {!mine ? <span className="font-medium">{peerName}</span> : null}
+          {!mine && !isSystem ? <span className="font-medium">{peerName}</span> : null}
           <span>{timeShort(msg.created_at)}</span>
           {mine ? (
             hideReceipt ? null : msg.read_at ? (
@@ -274,6 +313,7 @@ function GroupRow({ group, active, onClick }) {
   );
 }
 
+const SYSTEM_PEER_ID = "system::school-notifications";
 const CHANNEL_META = {
   whatsapp: { icon: WhatsappLogo, label: "WhatsApp", cls: "chat-update-whatsapp" },
   telegram: { icon: TelegramLogo, label: "Telegram", cls: "chat-update-telegram" },
@@ -308,9 +348,6 @@ export default function ChatPage() {
   const { user } = useAuth();
   const [contacts, setContacts] = useState([]);
   const [groups, setGroups] = useState([]);
-  const [updates, setUpdates] = useState([]);
-  const [updatesByStudent, setUpdatesByStudent] = useState({});
-  const [tab, setTab] = useState("chats"); // chats | updates
   const [loadingContacts, setLoadingContacts] = useState(true);
   const [active, setActive] = useState(null); // peer object OR group object (has scope)
   const [messages, setMessages] = useState([]);
@@ -331,6 +368,7 @@ export default function ChatPage() {
   const push = useWebPush(!!user);
 
   const isGroup = !!(active && active.scope);
+  const isSystem = !!(active && (active.is_system || active.id === SYSTEM_PEER_ID));
 
   const loadContacts = useCallback(async () => {
     try {
@@ -348,17 +386,7 @@ export default function ChatPage() {
     }
   }, []);
 
-  const loadUpdates = useCallback(async () => {
-    try {
-      const r = await api.get("/messaging/updates");
-      setUpdates(r.data?.updates || []);
-      setUpdatesByStudent(r.data?.by_student || {});
-      api.post("/messaging/updates/mark-all-read").catch(() => {});
-    } catch (_e) { /* silent */ }
-  }, []);
-
   useEffect(() => { loadContacts(); }, [loadContacts]);
-  useEffect(() => { if (tab === "updates") loadUpdates(); }, [tab, loadUpdates]);
 
   const loadMessages = useCallback(async (target) => {
     try {
@@ -467,6 +495,22 @@ export default function ChatPage() {
         });
         if (m.sender_id !== user?.id) {
           window.dispatchEvent(new Event("scms:chat:refresh-unread"));
+        }
+      } else if (evt.type === "group_pin") {
+        const gid = evt.group_id;
+        setGroups((gs) => gs.map((g) => g.id === gid ? {
+          ...g,
+          pinned_message_id: evt.pinned_message_id || null,
+          pinned_message_text: evt.pinned_message_text || null,
+          pinned_until: evt.pinned_until || null,
+        } : g));
+        if (active && active.scope && active.id === gid) {
+          setActive((p) => p ? {
+            ...p,
+            pinned_message_id: evt.pinned_message_id || null,
+            pinned_message_text: evt.pinned_message_text || null,
+            pinned_until: evt.pinned_until || null,
+          } : p);
         }
       } else if (evt.type === "typing") {
         if (active && evt.from === active.id) {
@@ -581,6 +625,47 @@ export default function ChatPage() {
     } catch (e) { toast.error(formatApiError(e)); }
   };
 
+  const toggleGroupMute = async () => {
+    if (!active || !isGroup) return;
+    const next = !active.muted;
+    try {
+      await api.post(`/messaging/groups/${active.id}/mute`, { muted: next });
+      setActive((p) => p ? { ...p, muted: next } : p);
+      setGroups((gs) => gs.map((g) => g.id === active.id ? { ...g, muted: next } : g));
+      toast.success(next ? "Group muted" : "Group unmuted");
+    } catch (e) { toast.error(formatApiError(e)); }
+  };
+
+  const pinBroadcast = async (msg) => {
+    if (!active || !isGroup || !active.is_owner) return;
+    try {
+      const r = await api.post(`/messaging/groups/${active.id}/pin`, { message_id: msg.id });
+      setActive((p) => p ? {
+        ...p,
+        pinned_message_id: msg.id,
+        pinned_message_text: (msg.text || "").slice(0, 240),
+        pinned_until: r.data?.pinned_until,
+      } : p);
+      setGroups((gs) => gs.map((g) => g.id === active.id ? {
+        ...g,
+        pinned_message_id: msg.id,
+        pinned_message_text: (msg.text || "").slice(0, 240),
+        pinned_until: r.data?.pinned_until,
+      } : g));
+      toast.success("Pinned for 24 hours");
+    } catch (e) { toast.error(formatApiError(e)); }
+  };
+
+  const unpinBroadcast = async () => {
+    if (!active || !isGroup || !active.is_owner) return;
+    try {
+      await api.delete(`/messaging/groups/${active.id}/pin`);
+      setActive((p) => p ? { ...p, pinned_message_id: null, pinned_message_text: null, pinned_until: null } : p);
+      setGroups((gs) => gs.map((g) => g.id === active.id ? { ...g, pinned_message_id: null, pinned_message_text: null, pinned_until: null } : g));
+      toast.success("Unpinned");
+    } catch (e) { toast.error(formatApiError(e)); }
+  };
+
   const insertMention = () => {
     if (!active) return;
     const insertText = `@${active.name} `;
@@ -647,101 +732,62 @@ export default function ChatPage() {
           className={`chat-list panel ${showListMobile ? "is-shown" : ""}`}
           data-testid="chat-contact-list"
         >
-          {/* Tabs */}
-          <div className="chat-tabs" role="tablist">
-            <button
-              type="button"
-              className={`chat-tab ${tab === "chats" ? "is-active" : ""}`}
-              onClick={() => { setTab("chats"); setActive(null); }}
-              data-testid="chat-tab-chats"
-            >
-              <ChatCircleDots size={14} /> Chats
-            </button>
-            <button
-              type="button"
-              className={`chat-tab ${tab === "updates" ? "is-active" : ""}`}
-              onClick={() => { setTab("updates"); setActive(null); setShowListMobile(true); }}
-              data-testid="chat-tab-updates"
-            >
-              <Newspaper size={14} /> Updates
-            </button>
-          </div>
-
-          {tab === "chats" ? (
-            <>
-              <div className="p-3 border-b border-line">
-                <div className="relative">
-                  <MagnifyingGlass size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-muted pointer-events-none" />
-                  <input
-                    className="input !pl-9"
-                    placeholder="Search contacts…"
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    data-testid="chat-search-input"
-                  />
-                </div>
-              </div>
-              <div className="flex-1 overflow-y-auto p-2 space-y-1">
-                {/* Groups section */}
-                {groups.length > 0 ? (
-                  <>
-                    <div className="px-2 pt-1 pb-1 text-[10px] uppercase tracking-wider font-semibold text-ink-muted flex items-center gap-1.5">
-                      <UsersThree size={11} /> Broadcast Groups
-                    </div>
-                    {groups.map((g) => (
-                      <GroupRow
-                        key={g.id}
-                        group={g}
-                        active={isGroup && active?.id === g.id}
-                        onClick={() => openChat({ ...g, scope: g.scope })}
-                      />
-                    ))}
-                    <div className="px-2 pt-3 pb-1 text-[10px] uppercase tracking-wider font-semibold text-ink-muted">
-                      Direct
-                    </div>
-                  </>
-                ) : null}
-
-                {loadingContacts ? (
-                  <>
-                    {[0, 1, 2, 3].map((i) => <div key={i} className="skeleton h-14 w-full" />)}
-                  </>
-                ) : filteredContacts.length === 0 && groups.length === 0 ? (
-                  <div className="p-4">
-                    <Empty
-                      title={search ? "No matches" : "No contacts yet"}
-                      message={search ? "Try a different search." : "Once you're assigned to a class, the people you can chat with will appear here."}
-                    />
-                  </div>
-                ) : (
-                  filteredContacts.map((c) => (
-                    <ContactRow
-                      key={c.id}
-                      contact={c}
-                      active={!isGroup && active?.id === c.id}
-                      onClick={() => openChat(c)}
-                    />
-                  ))
-                )}
-              </div>
-            </>
-          ) : (
-            // Updates tab — read-only feed of WhatsApp/Telegram/SMS/Email mirrors
-            <div className="flex-1 overflow-y-auto p-3 space-y-3" data-testid="chat-updates-list">
-              {updates.length === 0 ? (
-                <div className="p-4">
-                  <Empty
-                    title="No updates yet"
-                    message={user?.role === "parent"
-                      ? "When the school sends attendance, fee, or sick-leave updates by WhatsApp or Telegram, they will appear here. The last 7 per child are kept."
-                      : "Your channel updates will appear here."}
-                  />
-                </div>
-              ) : (
-                updates.map((u) => <UpdateCard key={u.id} upd={u} />)
-              )}
+          {/* Search */}
+          <div className="p-3 border-b border-line">
+            <div className="relative">
+              <MagnifyingGlass size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-muted pointer-events-none" />
+              <input
+                className="input !pl-9"
+                placeholder="Search contacts…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                data-testid="chat-search-input"
+              />
             </div>
-          )}
+          </div>
+          <div className="flex-1 overflow-y-auto p-2 space-y-1">
+            {/* Groups section */}
+            {groups.length > 0 ? (
+              <>
+                <div className="px-2 pt-1 pb-1 text-[10px] uppercase tracking-wider font-semibold text-ink-muted flex items-center gap-1.5">
+                  <UsersThree size={11} /> Broadcast Groups
+                </div>
+                {groups.map((g) => (
+                  <GroupRow
+                    key={g.id}
+                    group={g}
+                    active={isGroup && active?.id === g.id}
+                    onClick={() => openChat({ ...g, scope: g.scope })}
+                  />
+                ))}
+                <div className="px-2 pt-3 pb-1 text-[10px] uppercase tracking-wider font-semibold text-ink-muted">
+                  Direct
+                </div>
+              </>
+            ) : null}
+
+            {loadingContacts ? (
+              <>
+                {[0, 1, 2, 3].map((i) => <div key={i} className="skeleton h-14 w-full" />)}
+              </>
+            ) : filteredContacts.length === 0 && groups.length === 0 ? (
+              <div className="p-4">
+                <Empty
+                  title={search ? "No matches" : "No contacts yet"}
+                  message={search ? "Try a different search." : "Once you're assigned to a class, the people you can chat with will appear here."}
+                />
+              </div>
+            ) : (
+              filteredContacts.map((c) => (
+                <ContactRow
+                  key={c.id}
+                  contact={c}
+                  active={!isGroup && active?.id === c.id}
+                  onClick={() => openChat(c)}
+                />
+              ))
+            )}
+          </div>
         </aside>
 
         {/* Chat window */}
@@ -772,13 +818,16 @@ export default function ChatPage() {
                 </button>
                 {isGroup ? (
                   <div className="chat-group-avatar"><UsersThree size={20} weight="duotone" /></div>
+                ) : isSystem ? (
+                  <Avatar name={active.name} size={36} isSystem />
                 ) : (
                   <Avatar name={active.name} online={active.online} size={36} />
                 )}
                 <div className="min-w-0 flex-1">
                   <div className="font-medium truncate flex items-center gap-1.5">
                     {active.name}
-                    {!isGroup && active.muted ? <BellSimpleSlash size={12} className="text-ink-muted" /> : null}
+                    {!isGroup && !isSystem && active.muted ? <BellSimpleSlash size={12} className="text-ink-muted" /> : null}
+                    {isGroup && active.muted ? <BellSimpleSlash size={12} className="text-ink-muted" /> : null}
                     {isGroup && active.is_owner ? <Megaphone size={12} className="text-primary" /> : null}
                   </div>
                   <div className="text-[11px] text-ink-muted truncate">
@@ -788,6 +837,8 @@ export default function ChatPage() {
                         {` · ${active.member_count} members`}
                         {active.is_owner ? " · You broadcast" : " · Read-only"}
                       </>
+                    ) : isSystem ? (
+                      <>School channel · WhatsApp / Telegram mirror · Read-only · Last 7 shown</>
                     ) : (
                       <>
                         {(ROLE_BADGE[active.role]?.label) || active.role}
@@ -797,9 +848,10 @@ export default function ChatPage() {
                     )}
                   </div>
                 </div>
-                {!isGroup ? (
+                {/* Header action buttons */}
+                {!isSystem ? (
                   <div className="flex items-center gap-1 ml-auto">
-                    {push.supported && !push.isSubscribed ? (
+                    {!isGroup && push.supported && !push.isSubscribed ? (
                       <button
                         type="button"
                         className="btn-ghost p-1.5 chat-icon-btn"
@@ -818,15 +870,49 @@ export default function ChatPage() {
                     <button
                       type="button"
                       className="btn-ghost p-1.5 chat-icon-btn"
-                      onClick={toggleMute}
+                      onClick={isGroup ? toggleGroupMute : toggleMute}
                       title={active.muted ? "Unmute" : "Mute notifications"}
                       data-testid="chat-mute-btn"
                     >
                       {active.muted ? <BellSimpleSlash size={16} className="text-status-warning" /> : <BellSimple size={16} />}
                     </button>
+                    {isGroup && active.is_owner ? (
+                      <button
+                        type="button"
+                        className="btn-ghost p-1.5 chat-icon-btn"
+                        onClick={active.pinned_message_id ? unpinBroadcast : null}
+                        disabled={!active.pinned_message_id}
+                        title={active.pinned_message_id ? "Unpin current broadcast" : "Long-press a message to pin"}
+                        data-testid="chat-unpin-btn"
+                      >
+                        {active.pinned_message_id ? <PushPinSlash size={16} /> : <PushPin size={16} />}
+                      </button>
+                    ) : null}
                   </div>
                 ) : null}
               </header>
+
+              {/* Pinned broadcast banner (groups only) */}
+              {isGroup && active.pinned_message_id && active.pinned_message_text ? (
+                <div className="chat-pin-banner" data-testid="chat-pin-banner">
+                  <PushPin size={14} weight="fill" className="text-status-warning shrink-0" />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[10px] uppercase tracking-wider font-semibold text-ink-muted">Pinned broadcast</div>
+                    <div className="text-sm text-ink truncate">{active.pinned_message_text}</div>
+                  </div>
+                  {active.is_owner ? (
+                    <button
+                      type="button"
+                      className="btn-ghost p-1"
+                      onClick={unpinBroadcast}
+                      data-testid="chat-pin-banner-unpin"
+                      aria-label="Unpin"
+                    >
+                      <XIcon size={14} />
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
 
               <div className="chat-thread" ref={scrollRef} data-testid="chat-thread">
                 {messages.length === 0 ? (
@@ -841,8 +927,10 @@ export default function ChatPage() {
                         key={m.id}
                         msg={m}
                         mine={m.sender_id === user?.id}
-                        peerName={isGroup ? "" : active.name}
-                        hideReceipt={isGroup}
+                        peerName={isGroup ? "" : (isSystem ? "School" : active.name)}
+                        hideReceipt={isGroup || isSystem}
+                        onPin={isGroup && active.is_owner ? pinBroadcast : null}
+                        isPinned={isGroup && active.pinned_message_id === m.id}
                       />
                     ))}
                     {peerTyping ? <TypingDots /> : null}
@@ -883,12 +971,23 @@ export default function ChatPage() {
                 </div>
               ) : null}
 
-              {isGroup && !active.is_owner ? (
+              {(isGroup && !active.is_owner) || isSystem ? (
                 <footer className="chat-composer chat-composer-locked" data-testid="chat-composer-locked">
-                  <Megaphone size={18} className="text-ink-muted" />
-                  <span className="text-xs text-ink-muted">
-                    This is a broadcast group. Only {active.scope === "admin_to_teachers" ? "the school admin" : "your class teacher"} can post here.
-                  </span>
+                  {isSystem ? (
+                    <>
+                      <Newspaper size={18} className="text-ink-muted" />
+                      <span className="text-xs text-ink-muted">
+                        This is a read-only feed of school updates that were also sent via WhatsApp / Telegram.
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <Megaphone size={18} className="text-ink-muted" />
+                      <span className="text-xs text-ink-muted">
+                        This is a broadcast group. Only {active.scope === "admin_to_teachers" ? "the school admin" : "your class teacher"} can post here.
+                      </span>
+                    </>
+                  )}
                 </footer>
               ) : (
                 <footer className="chat-composer">

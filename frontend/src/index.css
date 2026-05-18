@@ -433,3 +433,65 @@ a { color: inherit; text-decoration: none; }
 }
 .chat-update-whatsapp .chat-update-channel { color: #25D366; }
 .chat-update-telegram .chat-update-channel { color: #229ED9; }
+
+/* System "School Notifications" avatar + bubble */
+.chat-avatar-system {
+  background: linear-gradient(135deg, var(--primary), #2f3d22);
+  color: var(--primary-foreground);
+}
+.chat-bubble-system {
+  background: var(--bg-surface);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--ink-muted);
+  color: var(--ink);
+  border-radius: 14px;
+  border-bottom-left-radius: 6px;
+}
+.chat-bubble-system.chat-update-whatsapp { border-left-color: #25D366; }
+.chat-bubble-system.chat-update-telegram { border-left-color: #229ED9; }
+.chat-bubble-system.chat-update-sms      { border-left-color: var(--status-warning); }
+.chat-bubble-system.chat-update-email    { border-left-color: var(--status-info); }
+.chat-bubble-channel-header {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px dashed var(--line);
+}
+.chat-bubble-system.chat-update-whatsapp .chat-bubble-channel-header { color: #25D366; }
+.chat-bubble-system.chat-update-telegram .chat-bubble-channel-header { color: #229ED9; }
+
+/* Pinned broadcast banner */
+.chat-pin-banner {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 16px;
+  background: linear-gradient(90deg, var(--status-warning-bg), transparent);
+  border-bottom: 1px solid var(--line);
+  animation: fadeUp 240ms ease both;
+}
+
+/* Pin button hovering on each group message bubble */
+.chat-msg-wrap .chat-msg-pin-btn {
+  position: absolute;
+  top: -8px;
+  left: -8px;
+  width: 22px; height: 22px;
+  display: grid; place-items: center;
+  border-radius: 999px;
+  background: var(--bg-surface);
+  color: var(--ink-muted);
+  border: 1px solid var(--line);
+  opacity: 0;
+  transform: scale(0.85);
+  transition: opacity 160ms ease, transform 160ms ease, background-color 160ms ease, color 160ms ease;
+  box-shadow: var(--shadow-soft);
+  z-index: 2;
+}
+.chat-msg-wrap:hover .chat-msg-pin-btn { opacity: 1; transform: scale(1); }
+.chat-msg-pin-btn:hover { background: var(--status-warning-bg); color: var(--status-warning); }
+.chat-msg-pin-btn:disabled { opacity: 1; transform: scale(1); color: var(--status-warning); background: var(--status-warning-bg); cursor: default; }
+
+/* Subtle background on the system contact row */
+.chat-contact-system { background: linear-gradient(90deg, var(--primary-light), transparent); }

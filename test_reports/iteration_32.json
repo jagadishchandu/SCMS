@@ -1,0 +1,44 @@
+{
+  "summary": "Iter 32 — System 'School Notifications' virtual peer + group mute + group pin, plus full chat regression (iter29/30/31) and broad app regression across auth/students/attendance/fees/sick_leaves/holidays/academic/notifications/trips/uploads. Backend: 67/67 pass — 52/52 across all four messaging suites (test_messaging.py 12, test_iter30_messaging_v2.py 10, test_iter31_groups_updates.py 14, test_iter32_system_peer_pin_mute.py 16) and 15/15 broad regression (test_iter32_app_regression.py). Frontend (parent+teacher+admin): single-pane chat list (NO Updates tab, role='tab' count=0 for all 3 roles), 'School Notifications' rendered as a direct contact at top with school building avatar (chat-avatar-system), opening it shows TELEGRAM channel header bubbles + 'School channel · WhatsApp / Telegram mirror · Read-only · Last 7 shown' subheader + locked composer; teacher opening Grade 5 A — Parents group shows send button + input + mute button + pin button + pin banner; admin sees All Teachers (Broadcast) group + School Notifications + 3 teacher direct contacts; 0 page errors across 3 dashboards.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter32_system_peer_pin_mute.py",
+    "/app/backend/tests/test_iter32_app_regression.py",
+    "/app/backend/tests/test_iter31_groups_updates.py",
+    "/app/backend/tests/test_iter30_messaging_v2.py",
+    "/app/backend/tests/test_messaging.py",
+    "/app/test_reports/pytest/iter32_chat_full.xml",
+    "/app/test_reports/pytest/iter32_app_regression.xml"
+  ],
+  "action_items": [
+    "(nit, carry-over from iter31) routes/messaging.py send_message has an unreachable duplicate 'return out_msg' near line 613 — harmless dead code, worth tidying when next touched.",
+    "(nit) routes/messaging.py /groups/{id}/mute and /pin endpoints share a permission check pattern with the conversation-level mute — consider extracting an _assert_group_member helper to DRY the 5 callsites.",
+    "(nit) The /api/calendar route from frontend nav was not wired for teacher dashboard side-nav and silently routed back to /teacher (no error, no broken UI). Verify that teacher Calendar is intentionally hidden from sidebar or wire the link if expected."
+  ],
+  "critical_code_review_comments": [
+    "messaging.py SYSTEM_PEER_ID constant is the string 'system::school-notifications'. _system_contact() / _chat_update_to_message() / list_contacts / list_messages / mark_read / get_conv_settings all key off this single constant — clean single source of truth. Verified that the conv_id on synthesized messages echoes SYSTEM_PEER_ID, sender_id is also SYSTEM_PEER_ID, channel field is preserved end-to-end (telegram/whatsapp/email/sms).",
+    "messaging.py list_messages for the system peer marks chat_updates as read inside the same handler. Behaviour is correct (mirrors how the user opens the thread) but it means a passive GET has a write side-effect. Acceptable for an in-app inbox; just be aware of it for any future polling.",
+    "messaging.py POST /groups/{id}/pin uses Pydantic Field(ge=1, le=168) so hours=0/-1/200 correctly return 422. pinned_until is computed as utc_now() + timedelta(hours=hours) and serialised via .isoformat() — verified delta is within (23.5, 24.5)h for default. After unpin the $unset removes all 6 pin keys cleanly.",
+    "messaging.py group pin/unpin broadcasts type='group_pin' to every member via manager.send_to_user. Owner is double-sent (once in members loop, once explicit) — harmless but mildly wasteful for very small groups. Not a bug.",
+    "messaging.py list_groups auto-clears expired pins via pin_until < now check on every read — confirmed by code inspection at line 1138 (no separate cron needed).",
+    "core/notify.py queue_notification mirror path correctly imports messaging.manager + SYSTEM_PEER_ID + _chat_update_to_message INSIDE the try block (avoiding circular import at module load) and dispatches the WS 'message' event with sender_id=SYSTEM_PEER_ID. Verified via end-to-end direct call (test_mirror_inserts_chat_update_and_dispatches_ws_message).",
+    "students.py upload_photo still expects multipart/form-data 'file' UploadFile, validates size, base64-encodes into a data URL, and stores in tdb.students.photo. No Azure/object storage. Test harness updated to send multipart accordingly.",
+    "ChatPage.jsx: tabs are completely removed (role='tab' count==0 for parent/teacher/admin). 'School Notifications' is shown as a direct contact with chat-avatar-system styling; bubbles show TELEGRAM channel header inside (chat-bubble-channel-header); composer is locked (chat-composer-locked). Pin banner (chat-pin-banner) and mute toggle visible in teacher's group header."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter32_system_peer_pin_mute.py",
+    "/app/backend/tests/test_iter32_app_regression.py"
+  ],
+  "success_rate": {"backend": "100% (67/67 incl 52 messaging + 15 broad regression)", "frontend": "100% on the parent/teacher/admin chat + dashboard smokes; 0 page errors"},
+  "test_credentials": "Same as iter31. principal@sunrise.edu/School@123 (School Super Admin), priya@sunrise.edu/Teacher@123 (Teacher), rohit@sunrise.edu/Teacher@123 (Teacher), parent.stu-00001@sunrise.edu/Parent@123 (Parent), accounts@sunrise.edu/Accounts@123 (Accounts), jagadishchandu789@gmail.com/Manasa@123 (platform_admin). Login: select_option(label=ROLE) on [data-testid=login-role-select] then fill email/password and click [data-testid=login-submit-btn].",
+  "seed_data_creation": "Sent N TEST_pin_msg_<ts> messages in priya's Grade 5 A — Parents group (multiple, used as pin targets) and pinned/unpinned several. Inserted 1 chat_updates row TEST_iter32_mirror_<ts> for parent.stu-00001 via direct queue_notification call (channel=telegram). Toggled parent.stu-00001's mute on priya's group on then off (clean state). All TEST_-prefixed and bounded by the per-conv history-cap of 10 and per-recipient updates-cap of 7.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Four messaging backend test files now exist and should be run together as the chat-feature regression: test_messaging.py (iter29, 12), test_iter30_messaging_v2.py (iter30, 10), test_iter31_groups_updates.py (iter31, 14), test_iter32_system_peer_pin_mute.py (iter32, 16). The system peer id is the literal string 'system::school-notifications' — do not URL-encode the colons, requests/FastAPI handle them fine. The mirror test (TestMirrorWsFire) imports from /app/backend directly and uses load_dotenv('/app/backend/.env'); it only works from inside the pod. queue_notification's signature is (school_id, recipient_type, recipient_id, phone, channel, template, message, context=None, email=None, subject=None, telegram_chat_id=None) — DO NOT pass 'body=' (I made that mistake first run; fixed). Pin endpoint accepts hours in [1, 168]; 0/-1/200 return 422 (Pydantic). For the broad app regression note that holidays live at /api/holidays (not /api/calendar/holidays), classes live at /api/academic/classes, notifications log at /api/notifications. Student photo upload is multipart/form-data with field name 'file' (not JSON 'photo'). Frontend: tabs are entirely removed — checking for role='tab' length 0 is the cleanest assertion that no Updates tab exists. Use page.context.clear_cookies() between different role logins or playwright keeps the previous session.",
+  "rca of the issue": "No issues. All 67 backend tests pass; all chat UI flows verified for parent + teacher + admin with 0 page errors."
+}
