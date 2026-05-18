@@ -309,3 +309,51 @@ ordering, read receipts/unread-count, typing auth, full WS round-trip.
   suites: **66/66** when each is run as a separate pytest process
   (motor's first-touched event-loop binding prevents bundling — already
   the documented regression mode).
+
+## Iteration — 2026-01 (current session, part 9)
+**Chat: expanded contact matrix + smart-action follow-through**
+
+### Backend (`/app/backend/routes/messaging.py`)
+- **Expanded `_is_allowed_peer` matrix** — symmetric OPEN_PAIRS:
+  `school_admin↔teacher`, `school_admin↔parent`, `school_admin↔accounts`,
+  `accounts↔parent`. `teacher↔parent` still gated by `class_teacher_map`.
+- **`list_contacts` per role**:
+  - `school_admin` → teachers + accounts + parents
+  - `teacher` → school_admins + parents-of-own-class (existing)
+  - `parent` → principal(s) + class teacher(s) + accounts (with `context`
+    labels for triage)
+  - `accounts` → school_admins + ALL parents (enriched with child-name
+    context "Parent of <Name> (<UID>), <Name> (<UID>) +N more")
+- **Accounts role enabled** for chat throughout (was previously excluded).
+- **Smart actions embedded on `/system/reply`** — the 1-1 message persisted
+  to the recipient carries `smart_actions: [...]` derived from the source
+  update's kind + the parent's chosen reply phrase:
+  - attendance/sick + "unwell" → mark_absent_today, approve_sick_leave (3d),
+    send_wellness_check
+  - attendance/sick + "tomorrow/be there" → mark_absent_today
+  - fee + "pay today" → send_payment_link, acknowledge_reply
+  - fee + "extension" → grant_fee_extension (7d), acknowledge_reply
+- **`POST /messaging/messages/{id}/smart-action`** — recipient executes one
+  of the suggestions. Role-gated via `_SMART_ACTION_ROLES`. Idempotent via
+  `smart_action_done` stamp (409 on dup). Outcomes:
+  - `mark_absent_today` → upsert `attendance` row for today, status=absent
+  - `approve_sick_leave` → insert approved `sick_leaves` row from today
+    spanning N days
+  - `send_wellness_check` → enqueue in `wellness_checks` collection
+  - `send_payment_link` → sends a follow-up 1-1 message to parent with the
+    `/parent/fees` URL (env-based base)
+  - `grant_fee_extension` → 1-1 follow-up granting N-day extension
+  - `acknowledge_reply` → simple "Got it, thanks" follow-up
+- **WS event `type='smart_action_done'`** fanned to every conv participant
+  so the parent sees the outcome live without refresh.
+
+### Frontend (`pages/shared/ChatPage.jsx`)
+- `MessageBubble` now renders an orange dashed "⚡ Suggested actions" row
+  under any quick-reply bubble received by staff. Tap → toast w/ outcome,
+  bubble collapses to a green `chat-smart-action-done` outcome line.
+- WS listener for `smart_action_done` keeps remote tabs in sync.
+- Updated CSS (`.chat-smart-actions`, `.chat-smart-action`, …).
+
+### Tests (`tests/test_iter34_contacts_smart_actions.py`, 15 new)
+- Combined across 6 chat suites: **81/81 pass** (each run as separate
+  pytest invocation per motor-loop binding).

@@ -1849,9 +1849,12 @@ async def run_smart_action(message_id: str, payload: SmartActionIn, user: dict =
         outcome_text = f"✅ Scheduled a wellness check for {student['name'] if student else 'student'} tomorrow."
 
     elif action == "send_payment_link":
+        public_url = os.environ.get("FRONTEND_PUBLIC_URL") or os.environ.get("REACT_APP_BACKEND_URL") or ""
+        base = public_url.rstrip("/") if public_url else ""
+        url = f"{base}/parent/fees" if base else "/parent/fees"
         await _send_followup_to_parent(
             tdb, school_id, user, msg.get("sender_id"),
-            "You can pay the pending fees here: https://classroom-messenger-1.preview.emergentagent.com/parent/fees",
+            f"You can pay the pending fees here: {url}",
         )
         outcome_text = "✅ Payment link sent to the parent."
 
