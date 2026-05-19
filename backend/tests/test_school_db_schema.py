@@ -23,7 +23,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 BASE_URL = os.environ.get(
     "REACT_APP_BACKEND_URL",
-    "https://case-insensitive-id.preview.emergentagent.com",
+    "https://class-roster-77.preview.emergentagent.com",
 ).rstrip("/")
 API = f"{BASE_URL}/api"
 
