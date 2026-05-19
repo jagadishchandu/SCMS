@@ -1,0 +1,32 @@
+{
+  "summary": "Iteration 37 — P1 DatePicker swap + P2 absentees Mongo aggregation. Backend 48/48 pytest pass (9 new iter37 absentees-aggregation tests covering shape/keys/sort/filters/empty/RBAC + 14 iter36 + 25 iter35 full regression). Frontend Playwright on AttendancePage (Mark students, Absentees day+month modes, Teacher attendance) and TimetablePage all confirmed: native input[type=date] is gone everywhere, DatePicker trigger/popover/today/day/month testids work, label renders as 'Tue, May 19, 2026' / 'January 2026', picking a date triggers a reload (network call observed and trigger label updates), absentees DatePicker correctly flips between day-grid (31 cells) and month-grid (12 cells) based on the Day/Week/Month period toggle.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter37_absentees_aggregation.py",
+    "/app/backend/tests/test_iter36_teacher_attendance.py",
+    "/app/backend/tests/test_iter35_login_parent_toggle.py",
+    "/app/test_reports/pytest/iter37.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "teacher_attendance.py list_absentees: aggregation looks correct, but the last_absent_status enrichment performs N+1 find_one() calls (one per matched absentee). For the demo this is negligible; at scale (hundreds of absentees per month) consider folding it into the same pipeline using $push of {date,status} pairs and computing the max-by-date in $reduce, or doing a single $in lookup keyed by (student_id,date) after the aggregation.",
+    "DatePicker.jsx: outside-click handler attaches on mousedown on document — works, but the popover is positioned with absolute + z-50; inside modal/drawer contexts it could be clipped by overflow:hidden ancestors. Not an issue on these three pages, just noting for future reuse.",
+    "DatePicker.jsx month mode does not honor minDate/maxDate (documented in the prop comment but worth a runtime guard or doc note in the picker).",
+    "$match expr stage uses {$gt: [{$add: [absent_days,sick_days]}, 0]} — fine, but a simpler {$or:[{absent_days:{$gt:0}},{sick_days:{$gt:0}}]} would let Mongo use field stats. Micro-optimisation only."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter37_absentees_aggregation.py"
+  ],
+  "success_rate": {"backend": "100% (48/48)", "frontend": "100% (all DatePicker flows verified across 4 instances)"},
+  "test_credentials": "principal@sunrise.edu / School@123 (school_admin), accounts@sunrise.edu / Accounts@123, parent.stu-00001@sunrise.edu / Parent@123 — from /app/memory/test_credentials.md",
+  "seed_data_creation": "None. Tests reuse DEMO seed. iter36 cleanup task restores all teachers to 'present' at end of run.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "DatePicker testids: trigger='{root}-trigger', popover='{root}-popover', day='{root}-day-YYYY-MM-DD', month='{root}-month-YYYY-MM', today='{root}-today', close='{root}-close', prev/next='{root}-prev/-next'. Four roots in use: att-date, absentees-date (mode flips with absentees-period-day/-week/-month), teacher-att-date, timetable-tint-date. Absentees endpoint /api/attendance/absentees returns identical shape as before iter36 (verified by reusing iter36 tests). last_absent_status always 'absent' or 'sick' (never 'present') when last_absent_date is non-null. Empty period returns absentees=[] with summary zeros (no 500). Login is cookie-based (POST /api/auth/login -> Set-Cookie); reuse requests.Session().",
+  "rca of the issue": "N/A — no bugs found. Both P1 (DatePicker visual consistency) and P2 (aggregation pipeline) refactors land cleanly."
+}

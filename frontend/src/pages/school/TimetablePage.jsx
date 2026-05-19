@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../../lib/api";
 import { PageHeader, Section, Empty } from "../../components/Primitives";
+import DatePicker from "../../components/DatePicker";
 
 const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat"];
 const DAY_LABEL = { mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat" };
@@ -100,10 +101,11 @@ export default function TimetablePage() {
         </select>
         <div className="ml-auto flex items-center gap-2">
           <label className="text-xs text-ink-muted">Color cells for</label>
-          <input
-            className="input w-40" type="date" value={tintDate}
-            onChange={(e) => setTintDate(e.target.value)}
-            data-testid="timetable-tint-date"
+          <DatePicker
+            value={tintDate}
+            onChange={(v) => setTintDate(v)}
+            testId="timetable-tint-date"
+            className="w-52"
           />
         </div>
       </div>

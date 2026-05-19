@@ -3,6 +3,7 @@ import { api, formatApiError } from "../../lib/api";
 import { useAuth } from "../../contexts/AuthContext";
 import { PageHeader, Section, Empty, KPI } from "../../components/Primitives";
 import { ATTENDANCE_STATUSES } from "../../lib/utils";
+import DatePicker from "../../components/DatePicker";
 import toast from "react-hot-toast";
 
 const TODAY = () => new Date().toISOString().slice(0, 10);
@@ -104,7 +105,12 @@ function MarkStudentsTab() {
           <option value="">Section…</option>
           {sections.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
-        <input className="input w-44" type="date" value={sel.date} onChange={(e) => setSel({ ...sel, date: e.target.value })} data-testid="att-date" />
+        <DatePicker
+          value={sel.date}
+          onChange={(v) => setSel({ ...sel, date: v })}
+          testId="att-date"
+          className="w-52"
+        />
         {students.length > 0 && (
           <>
             <button className="btn-secondary" onClick={() => setAll("present")} data-testid="att-all-present">Mark all present</button>
@@ -208,14 +214,12 @@ function AbsenteesTab() {
             >{p.label}</button>
           ))}
         </div>
-        <input
-          className="input w-48" type={period === "month" ? "month" : "date"}
+        <DatePicker
+          mode={period === "month" ? "month" : "day"}
           value={period === "month" ? (date || "").slice(0, 7) : date}
-          onChange={(e) => {
-            const v = e.target.value;
-            setDate(period === "month" ? `${v}-01` : v);
-          }}
-          data-testid="absentees-date"
+          onChange={(v) => setDate(period === "month" ? `${v}-01` : v)}
+          testId="absentees-date"
+          className="w-56"
         />
         <select className="input w-44" value={classId} onChange={(e) => { setClassId(e.target.value); setSection(""); }} data-testid="absentees-class">
           <option value="">All classes</option>
@@ -340,10 +344,11 @@ function TeacherAttendanceTab() {
   return (
     <>
       <div className="flex flex-wrap items-end gap-3 mb-4">
-        <input
-          className="input w-48" type="date"
-          value={date} onChange={(e) => setDate(e.target.value)}
-          data-testid="teacher-att-date"
+        <DatePicker
+          value={date}
+          onChange={(v) => setDate(v)}
+          testId="teacher-att-date"
+          className="w-56"
         />
         <button className="btn-secondary" onClick={() => setAll("present")} data-testid="teacher-att-all-present">Mark all present</button>
         <button className="btn-secondary" onClick={() => setAll("absent")} data-testid="teacher-att-all-absent">Mark all absent</button>
