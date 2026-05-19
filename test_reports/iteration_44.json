@@ -1,0 +1,43 @@
+{
+  "summary": "v44 follow-up: cross-section _repair_same_grade_collisions() pass FIXES the previously failing v44 tests. 8/8 v44 tests pass deterministically across 4 consecutive runs (was 6/8 in iter 43, both same-grade-uniqueness failures now green). conflict_summary.same_grade_collisions_repaired field added and is an int >= 0. All 35 v40+v41+v43 regression tests still pass (1 pre-existing skip). One minor RCA-confirmed edge-case found in the new repair pass: when lunch_break_period == periods_per_day (lunch occupies the last slot), the no_last_period_subjects guard inside the swap uses the wrong index and lets the swap place a no-last-period subject at the actual last instructional period without emitting a warning.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "/api/timetable/suggest-batch (_repair_same_grade_collisions)",
+        "issue": "no_last_period_subjects soft rule bypassed by the swap when lunch_break_period == periods_per_day. The function compares period == periods_per_day at lines 1450-1454 of /app/backend/routes/timetable.py, but the LAST INSTRUCTIONAL period in that config is periods_per_day - 1 (since the trailing slot is the lunch break). Result: with payload {periods_per_day:6, lunch_break_period:6, no_last_period_subjects:[X], max_periods_per_day_per_teacher:4}, subject X ends up at period 5 across multiple days in Grade 5·B with no warning. Reproduced 3/3 runs. Suggested fix: derive last_instructional_period = periods_per_day - 1 if lunch_break_period == periods_per_day else periods_per_day, and use that in the two guards. Also consider emitting a warning when the guard rejects a swap so callers know capacity is short."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_v44_class_subjects_same_grade_unique.py",
+    "/app/backend/tests/test_v44_repair_contract.py",
+    "/app/test_reports/pytest/v44_iter44.xml",
+    "/app/test_reports/pytest/v44_repair_contract.xml",
+    "/app/test_reports/pytest/regression_iter44.xml"
+  ],
+  "action_items": [
+    "MINOR: Fix /app/backend/routes/timetable.py _repair_same_grade_collisions lines 1450-1454 — use last_instructional_period (= periods_per_day - 1 when lunch is at the end) instead of periods_per_day for the no_last_period_subjects guard. Re-run test_v44_repair_contract.py::TestRepairRespectsNoLastPeriod after fix.",
+    "OPTIONAL: emit a warning string when the repair pass refuses a swap due to no_last_period_subjects, similar to the existing 'Same-grade uniqueness relaxed' style warning."
+  ],
+  "critical_code_review_comments": [
+    "The new _repair_same_grade_collisions() pass works correctly for the main contract — same-grade subject uniqueness is now 100% honoured across 4 deterministic runs of the 5-subjects/4-sections scenario; max_periods_per_day_per_teacher cap also still respected after swap (verified with cap=4, no teacher exceeds 4/day).",
+    "conflict_summary['same_grade_collisions_repaired'] is correctly populated as an int; field is present even when value is 0 — good defensive default.",
+    "BUG (minor): _repair_same_grade_collisions(no_last_period_subjects, periods_per_day) treats periods_per_day as the last instructional period. When lunch_break_period == periods_per_day, the real last instructional period is periods_per_day - 1, and the soft rule is silently bypassed. The same logic should be applied as in _generate_section_schedule (which already handles this correctly).",
+    "class_subjects per-teacher restriction VERIFIED working: constrained teacher (Grade 5 + Math only) was never placed in Grade 6 or non-Math Grade 5 slots. Legacy teachers without class_subjects still appear across both grades (Priya/Rohit/Kavita verified)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_v44_repair_contract.py (NEW, 3 contract tests for same_grade_collisions_repaired field, cap preservation, no_last_period preservation)"
+  ],
+  "success_rate": {
+    "backend": "v44 main suite: 100% (8/8) deterministic across 4 runs. v40+v41+v43 regression: 100% (35/35 passed, 1 pre-existing SKIP unrelated). Repair-contract follow-up: 2/3 (no_last_period edge case fails).",
+    "frontend": "n/a (backend only)"
+  },
+  "test_credentials": "principal@sunrise.edu / School@123 (from /app/memory/test_credentials.md). Uses Anita Sharma seed (anita@sunrise.edu / Teacher@123).",
+  "seed_data_creation": "Fresh v44-* / v44p-* / v44c-* teachers per test run with unique uuid emails (class-restricted, do not interfere with subsequent runs).",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "PRIMARY contract (same-grade subject uniqueness across sibling sections) is FIXED and 100% deterministic. Use /app/backend/tests/test_v44_class_subjects_same_grade_unique.py as the canonical 8-test v44 suite, and /app/backend/tests/test_v44_repair_contract.py as the 3-test follow-up that validates conflict_summary field + cap + no-last-period guards. After fix to lines 1450-1454 of timetable.py, all 11 tests should pass. Also note: /app/backend/tests/test_v39_teacher_leaves_and_timetable_conflicts.py has an import-time crash if REACT_APP_BACKEND_URL isn't exported in the shell env — exclude it from regression OR export the env var first. Not v44-related.",
+  "rca of the issue": "Edge case: _repair_same_grade_collisions in /app/backend/routes/timetable.py lines 1450-1454 reads:\n    if no_last_period_subjects:\n        if o_sid in no_last_period_subjects and period == periods_per_day: continue\n        if subj_id in no_last_period_subjects and o_period == periods_per_day: continue\nWhen the caller passes lunch_break_period == periods_per_day (e.g. ppd=6, lunch=6 — lunch occupies the final slot), the last INSTRUCTIONAL period is actually periods_per_day - 1 = 5. The greedy phase respects this correctly; the repair swap does not, so a subject in no_last_period_subjects can be swapped INTO period 5 without warning. Reproduction (3/3): suggest-batch with periods_per_day=6, lunch_break_period=6, no_last_period_subjects=[Math], max_periods_per_day_per_teacher=4 ⇒ Grade 5·B gets Math at TUE/WED/FRI P5. Mitigation: compute last_instructional_period inside the function (or pass it in from /suggest-batch which already knows lunch_break_period) and use that in both guards. Also emit a warning when a candidate swap is rejected for this reason so users see capacity pressure."
+}

@@ -1332,9 +1332,40 @@ async def suggest_timetable_batch(
         section_results.append(res)
         all_slots.extend(res["slots"])
 
+    # ---- Cross-section repair: fix any same-grade subject collisions ----
+    # Aggregate the constraints across sections (the defaults are the source of truth;
+    # per-section overrides are also considered for the strongest constraint).
+    no_last_set: set[str] = set()
+    max_ppd_teacher = None
+    max_periods_per_day_overall = 1
+    for sec in payload.sections:
+        merged = _merge_section_request(payload.defaults, sec)
+        if merged.no_last_period_subjects:
+            no_last_set |= set(merged.no_last_period_subjects)
+        if merged.max_periods_per_day_per_teacher and (
+            max_ppd_teacher is None or merged.max_periods_per_day_per_teacher < max_ppd_teacher
+        ):
+            max_ppd_teacher = merged.max_periods_per_day_per_teacher
+        max_periods_per_day_overall = max(max_periods_per_day_overall, merged.periods_per_day)
+
+    collisions_fixed = _repair_same_grade_collisions(
+        section_results=section_results, subjects=subjects,
+        subject_to_teachers=subject_to_teachers, busy=busy,
+        teacher_day_load=teacher_day_load, teachers_on_leave_per_day=teachers_on_leave_per_day,
+        allowed_periods_by_section={},
+        max_periods_per_day_per_teacher=max_ppd_teacher,
+        no_last_period_subjects=no_last_set,
+        periods_per_day=max_periods_per_day_overall,
+    )
+    if collisions_fixed:
+        # all_slots was a flat copy; rebuild from section_results so downstream views
+        # (teacher_view + conflict_summary) reflect the post-repair state.
+        all_slots = [sl for r in section_results for sl in r["slots"]]
+
     teacher_view = _build_teacher_view(all_slots, teachers, subjects, classes)
     conflict_summary = _build_conflict_summary(section_results, subjects, teachers)
     optimization_suggestions = _build_optimization_suggestions(conflict_summary, subjects, teachers, subject_to_teachers)
+    conflict_summary["same_grade_collisions_repaired"] = collisions_fixed
 
     return {
         "sections": section_results,
@@ -1342,6 +1373,173 @@ async def suggest_timetable_batch(
         "conflict_summary": conflict_summary,
         "optimization_suggestions": optimization_suggestions,
     }
+
+
+def _repair_same_grade_collisions(
+    *, section_results: list, subjects: list, subject_to_teachers: dict,
+    busy: set, teacher_day_load: dict, teachers_on_leave_per_day: dict,
+    allowed_periods_by_section: dict,
+    max_periods_per_day_per_teacher: Optional[int] = None,
+    no_last_period_subjects: Optional[set[str]] = None,
+    periods_per_day: int = 12,
+) -> int:
+    """Detect cases where two sections of the SAME class_id end up with the same
+    subject at the same (day, period). Resolve by intra-section swap.
+
+    Honours: teacher availability, daily cap, leave, no-last-period soft rule,
+    cross-section uniqueness must not be re-introduced by the swap.
+    """
+    fixed = 0
+    no_last_period_subjects = no_last_period_subjects or set()
+    keyed: dict[tuple, list] = {}
+    for ri, res in enumerate(section_results):
+        for si, sl in enumerate(res["slots"]):
+            if sl.get("is_break") or not sl.get("subject_id"):
+                continue
+            keyed.setdefault((res["class_id"], sl["day"], sl["period"]), []).append((ri, si, sl["subject_id"]))
+
+    def _teacher_free(tid, d, p):
+        if (d, p, tid) in busy:
+            return False
+        if tid in teachers_on_leave_per_day.get(d, set()):
+            return False
+        if max_periods_per_day_per_teacher and teacher_day_load.get((tid, d), 0) >= max_periods_per_day_per_teacher:
+            return False
+        return True
+
+    for key, entries in keyed.items():
+        # Group by subject_id; any group with >1 entry is a collision.
+        by_subj: dict[str, list] = {}
+        for e in entries:
+            by_subj.setdefault(e[2], []).append(e)
+        for subj_id, dupes in by_subj.items():
+            if len(dupes) <= 1:
+                continue
+            # Try to repair every duplicate beyond the first
+            for victim in dupes[1:]:
+                ri, si, _ = victim
+                res = section_results[ri]
+                sl = res["slots"][si]
+                if sl.get("is_class_teacher_pin") or sl.get("is_locked"):
+                    continue
+                day, period = sl["day"], sl["period"]
+                v_tid = sl.get("teacher_id")
+                # Search section's other slots for a swap candidate
+                swapped = False
+                for j, other in enumerate(res["slots"]):
+                    if j == si:
+                        continue
+                    if other.get("is_break") or other.get("is_class_teacher_pin") or other.get("is_locked"):
+                        continue
+                    if not other.get("subject_id"):
+                        continue
+                    o_sid = other["subject_id"]
+                    o_day, o_period = other["day"], other["period"]
+                    o_tid = other.get("teacher_id")
+                    # Don't swap if it would create the same kind of conflict in the destination
+                    # i.e. ensure no sibling section has o_sid at (day, period) OR subj_id at (o_day, o_period)
+                    others_at_dest = {
+                        e[2] for e in keyed.get((res["class_id"], day, period), []) if e[1] != si
+                    }
+                    others_at_src = {
+                        e[2] for e in keyed.get((res["class_id"], o_day, o_period), []) if e[1] != j
+                    }
+                    if o_sid in others_at_dest or subj_id in others_at_src:
+                        continue
+                    # Respect "no last period" soft rule: don't place those subjects at the last period
+                    if no_last_period_subjects:
+                        if o_sid in no_last_period_subjects and period == periods_per_day:
+                            continue
+                        if subj_id in no_last_period_subjects and o_period == periods_per_day:
+                            continue
+                    # Teachers must remain valid:
+                    #   v_tid moves to (o_day, o_period) — needs to teach o_sid AND be free there
+                    #   o_tid moves to (day, period) — needs to teach subj_id AND be free there
+                    # If teachers cannot stay (different subjects), we instead try to find a
+                    # NEW pair of teachers: pool of o_sid free at (o_day, o_period) when v_tid
+                    # vacates, and pool of subj_id free at (day, period) when o_tid vacates.
+                    # For simplicity: keep v_tid only if v_tid teaches o_sid; otherwise find a new teacher.
+                    # Likewise for o_tid.
+                    new_tid_for_o = None
+                    if v_tid and o_sid in {t["id"] for t in (subject_to_teachers.get(o_sid) or []) if t["id"] == v_tid}:
+                        # v_tid teaches o_sid AND will be free at (o_day, o_period) once o_tid moves
+                        # We need to check teacher_free at (o_day, o_period) after o_tid is removed
+                        if _teacher_free(v_tid, o_day, o_period) or (o_day, o_period, v_tid) == (o_day, o_period, o_tid):
+                            new_tid_for_o = v_tid
+                    if new_tid_for_o is None:
+                        # Pick a fresh teacher of o_sid free at (o_day, o_period)
+                        # The current o_tid would vacate, so include o_tid as "moving away"
+                        for t in (subject_to_teachers.get(o_sid) or []):
+                            if t["id"] == o_tid:
+                                continue  # they're moving to (day, period)
+                            if _teacher_free(t["id"], o_day, o_period):
+                                new_tid_for_o = t["id"]
+                                break
+                    new_tid_for_sub = None
+                    if o_tid and subj_id in {t["id"] for t in (subject_to_teachers.get(subj_id) or []) if t["id"] == o_tid}:
+                        if _teacher_free(o_tid, day, period) or (day, period, o_tid) == (day, period, v_tid):
+                            new_tid_for_sub = o_tid
+                    if new_tid_for_sub is None:
+                        for t in (subject_to_teachers.get(subj_id) or []):
+                            if t["id"] == v_tid:
+                                continue
+                            if _teacher_free(t["id"], day, period):
+                                new_tid_for_sub = t["id"]
+                                break
+                    if new_tid_for_o is None or new_tid_for_sub is None:
+                        # Last resort: keep ANY teacher (cross-subject substitute) — needed
+                        # only when no qualified teacher is free. We bias toward swap with
+                        # lowest impact: any free teacher of any subject.
+                        any_teachers = {t["id"]: t for tlist in subject_to_teachers.values() for t in tlist}
+                        if new_tid_for_o is None:
+                            for t in any_teachers.values():
+                                if t["id"] in (v_tid, o_tid):
+                                    continue
+                                if _teacher_free(t["id"], o_day, o_period):
+                                    new_tid_for_o = t["id"]
+                                    break
+                        if new_tid_for_sub is None:
+                            for t in any_teachers.values():
+                                if t["id"] in (v_tid, o_tid):
+                                    continue
+                                if _teacher_free(t["id"], day, period):
+                                    new_tid_for_sub = t["id"]
+                                    break
+                    if new_tid_for_o is None or new_tid_for_sub is None:
+                        continue
+                    # Perform the swap
+                    if o_tid:
+                        busy.discard((o_day, o_period, o_tid))
+                        teacher_day_load[(o_tid, o_day)] = max(0, teacher_day_load.get((o_tid, o_day), 1) - 1)
+                    if v_tid:
+                        busy.discard((day, period, v_tid))
+                        teacher_day_load[(v_tid, day)] = max(0, teacher_day_load.get((v_tid, day), 1) - 1)
+                    res["slots"][si] = {**sl, "subject_id": o_sid, "teacher_id": new_tid_for_sub,
+                                        "swapped_from": {"day": o_day, "period": o_period}}
+                    res["slots"][j] = {**other, "subject_id": subj_id, "teacher_id": new_tid_for_o}
+                    busy.add((day, period, new_tid_for_sub))
+                    busy.add((o_day, o_period, new_tid_for_o))
+                    teacher_day_load[(new_tid_for_sub, day)] = teacher_day_load.get((new_tid_for_sub, day), 0) + 1
+                    teacher_day_load[(new_tid_for_o, o_day)] = teacher_day_load.get((new_tid_for_o, o_day), 0) + 1
+                    # Refresh keyed for the affected entries
+                    keyed[(res["class_id"], day, period)] = [
+                        (rr, ss, sub) for (rr, ss, sub) in keyed.get((res["class_id"], day, period), [])
+                        if not (rr == ri and ss == si)
+                    ] + [(ri, si, o_sid)]
+                    keyed[(res["class_id"], o_day, o_period)] = [
+                        (rr, ss, sub) for (rr, ss, sub) in keyed.get((res["class_id"], o_day, o_period), [])
+                        if not (rr == ri and ss == j)
+                    ] + [(ri, j, subj_id)]
+                    fixed += 1
+                    swapped = True
+                    res.setdefault("warnings", []).append(
+                        f"[{res['class_name']}·{res['section']}] Same-grade collision repaired: "
+                        f"{subj_id[-6:]}/{day.upper()} P{period} ↔ {o_sid[-6:]}/{o_day.upper()} P{o_period}."
+                    )
+                    break
+                if swapped:
+                    continue
+    return fixed
 
 
 class SaveBatchSection(BaseModel):
