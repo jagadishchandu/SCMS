@@ -210,30 +210,21 @@ export default function TimetableBuilderPage() {
     if (sections.length === 0) return;
     setRebalancing(true);
     try {
-      // Re-run generate with a stricter per-day cap derived from the current
-      // workload max-1, so the engine is forced to redistribute toward under-loaded teachers.
       const wv = result?.teacher_view;
       const currentMax = wv?.workload_max || 0;
       const currentMin = wv?.workload_min || 0;
-      const totalDays = cfg.days.length || 5;
-      // Target avg load per day after rebalance ≈ existing avg, but lower max ceiling.
-      const targetAvgPerDay = Math.max(1, Math.ceil((currentMax + currentMin) / (2 * totalDays)));
-      const tightenedCap = Math.max(
-        1,
-        Math.min(
-          cfg.max_periods_per_day_per_teacher
-            ? Number(cfg.max_periods_per_day_per_teacher) - 1
-            : targetAvgPerDay,
-          targetAvgPerDay + 1,
-        ),
-      );
       const body = buildPayload();
-      body.defaults.max_periods_per_day_per_teacher = tightenedCap;
+      // Ask the engine to prefer under-loaded teachers when picking candidates
+      // (instead of the default round-robin). This is the real "rebalance".
+      body.defaults = { ...(body.defaults || {}), prefer_underloaded_teachers: true };
       const { data } = await api.post("/timetable/suggest-batch", body);
       setResult(data);
       const nw = data?.teacher_view;
+      const newGap = (nw?.workload_max || 0) - (nw?.workload_min || 0);
+      const oldGap = currentMax - currentMin;
+      const delta = newGap < oldGap ? `gap ${oldGap} → ${newGap}` : `gap unchanged at ${newGap}`;
       toast.success(
-        `Rebalanced — workload range ${nw?.workload_min}–${nw?.workload_max} (was ${currentMin}–${currentMax}). Daily cap set to ${tightenedCap}.`,
+        `Rebalanced — range ${nw?.workload_min}–${nw?.workload_max} (${delta}).`,
       );
     } catch (err) {
       toast.error(formatApiError(err));

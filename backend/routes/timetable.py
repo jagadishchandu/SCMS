@@ -336,6 +336,10 @@ class SuggestTimetableRequest(BaseModel):
     # v41 constraints
     max_periods_per_day_per_teacher: Optional[int] = Field(default=None, ge=1, le=12)
     locked_assignments: Optional[List[LockedAssignment]] = None
+    # v45: when True, the greedy phase prefers teachers with the lowest
+    # weekly+daily load so far (instead of round-robin). Used by the
+    # admin "Rebalance" button to smooth uneven workloads.
+    prefer_underloaded_teachers: bool = False
     # Optional ISO date (YYYY-MM-DD) of the Monday of the week this timetable is
     # being generated for. If provided, the engine will skip any teacher that
     # has an APPROVED leave covering that weekday.
@@ -833,18 +837,45 @@ def _generate_section_schedule(
             chosen = None
             if candidates_t:
                 n = len(candidates_t)
-                start = rr_index.get(sid, 0)
-                for k in range(n):
-                    idx = (start + k) % n
-                    t = candidates_t[idx]
-                    if (day, period, t["id"]) in busy:
-                        continue
-                    # Enforce per-teacher daily cap
-                    if max_ppd_teacher and teacher_day_load.get((t["id"], day), 0) >= max_ppd_teacher:
-                        continue
-                    chosen = t
-                    rr_index[sid] = (idx + 1) % n
-                    break
+                if payload.prefer_underloaded_teachers:
+                    # Rebalance mode: sort by (week_load, day_load, name) ascending
+                    # and pick the first free teacher. This biases new assignments
+                    # toward teachers with lighter overall workload.
+                    def _week_load(tid: str) -> int:
+                        return sum(teacher_day_load.get((tid, d), 0) for d in DAYS_ORDER)
+                    ranked = sorted(
+                        candidates_t,
+                        key=lambda t: (
+                            _week_load(t["id"]),
+                            teacher_day_load.get((t["id"], day), 0),
+                            t.get("name", ""),
+                        ),
+                    )
+                    for t in ranked:
+                        if (day, period, t["id"]) in busy:
+                            continue
+                        if max_ppd_teacher and teacher_day_load.get((t["id"], day), 0) >= max_ppd_teacher:
+                            continue
+                        chosen = t
+                        # advance rr_index so non-rebalance future picks remain stable
+                        try:
+                            rr_index[sid] = (candidates_t.index(t) + 1) % n
+                        except ValueError:
+                            pass
+                        break
+                else:
+                    start = rr_index.get(sid, 0)
+                    for k in range(n):
+                        idx = (start + k) % n
+                        t = candidates_t[idx]
+                        if (day, period, t["id"]) in busy:
+                            continue
+                        # Enforce per-teacher daily cap
+                        if max_ppd_teacher and teacher_day_load.get((t["id"], day), 0) >= max_ppd_teacher:
+                            continue
+                        chosen = t
+                        rr_index[sid] = (idx + 1) % n
+                        break
                 if chosen is None:
                     on_leave_here = any(t["id"] in teachers_on_leave_per_day.get(day, set()) for t in candidates_t)
                     capped = max_ppd_teacher and all(
@@ -990,7 +1021,16 @@ def _generate_section_schedule(
         any_teachers = {t["id"]: t for tlist in subject_to_teachers.values() for t in tlist}
         candidates = [t for t in any_teachers.values() if _is_free(t["id"], day, period)]
         if candidates:
-            candidates.sort(key=lambda t: (teacher_day_load.get((t["id"], day), 0), t.get("name", "")))
+            if payload.prefer_underloaded_teachers:
+                candidates.sort(
+                    key=lambda t: (
+                        sum(teacher_day_load.get((t["id"], d), 0) for d in DAYS_ORDER),
+                        teacher_day_load.get((t["id"], day), 0),
+                        t.get("name", ""),
+                    ),
+                )
+            else:
+                candidates.sort(key=lambda t: (teacher_day_load.get((t["id"], day), 0), t.get("name", "")))
             sub = candidates[0]
             slots[idx] = {
                 **sl,
@@ -1100,6 +1140,7 @@ class BatchSectionRequest(BaseModel):
     class_teacher: Optional[ClassTeacherPin] = None
     max_periods_per_day_per_teacher: Optional[int] = None
     locked_assignments: Optional[List[LockedAssignment]] = None
+    prefer_underloaded_teachers: Optional[bool] = None
     student_count: Optional[int] = None  # informational; surfaced in conflict summary
 
 

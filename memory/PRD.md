@@ -1,5 +1,30 @@
 # SCMS — Product Requirements (running log)
 
+## Iteration — 2026-02 (current session, v45) — Real "Rebalance" + Workload visualizer wired to backend
+**User asks delivered:**
+1. **"Add Teacher" inside the Timetable Builder no longer creates new users** — it now opens `AssignTeacherModal`, which only *reassigns* existing teachers to grades/subjects (PATCH `/api/users/{id}`). A clear pointer to **Staff & Roles** is shown for onboarding new staff. `AddTeacherModal.jsx` was removed.
+2. **Teacher Workload visualizer** — new "Workload" tab on the Timetable Builder shows each teacher's weekly total + a bar-per-day. KPI tiles surface avg load, min–max, and the range-gap (colour-coded — perfectly balanced ⚖ / well-balanced / imbalanced).
+3. **One-click "Rebalance"** — visible in the Workload tab. Now backed by a proper engine flag `prefer_underloaded_teachers` instead of the earlier cap-tightening hack.
+
+**Backend**
+- New field `SuggestTimetableRequest.prefer_underloaded_teachers: bool = False`; same field added on `BatchSectionRequest` (optional override). Merges through `_merge_section_request` so it's honoured per-section if set on `defaults`.
+- `_generate_section_schedule` greedy candidate-selection updated: when the flag is on, teachers are picked by `(week_load, day_load, name)` ascending instead of round-robin. Falls back gracefully if the lowest-loaded option violates `busy` / `max_periods_per_day_per_teacher`.
+- The cross-subject substitute repair pass (`Step 2`) also ranks by weekly load when the flag is on.
+- Hard constraints (no double-booking, no overshoot of per-day cap, same-grade subject uniqueness) all still hold during rebalance.
+
+**Frontend**
+- `pages/school/TimetableBuilderPage.jsx`:
+  - `rebalance()` now POSTs to `/timetable/suggest-batch` with `defaults.prefer_underloaded_teachers=true`. Toast reports the gap delta (e.g. "gap 9 → 4").
+  - `WorkloadView` renders one bar-row per teacher: name + total + peak/day, a 5/6-bar mini chart (colour by peak intensity), and a right-side total badge tinted by min/max position.
+  - "Workload" added to the view tab strip; Rebalance button only visible in this tab. Both have full tooltips/help-text.
+- `components/AssignTeacherModal.jsx` (new) is the single source-of-truth for reassigning existing teachers — picks teacher, ticks global subjects, and optionally toggles a per-grade matrix.
+
+**Tests**
+- `tests/test_v45_prefer_underloaded.py` — 3 new tests: flag accepted, rebalance never widens the gap, rebalance respects per-day cap.
+- Full timetable suite re-run: **67 passed / 1 skipped**, no regressions across v39 → v45.
+
+
+
 ## Original problem statement (2026-01)
 > Build a mobile app: read my repo understand my code.
 > In my code there is a bug where in school admin subscription when he added number of children he is not able to see the updates values charge — fix it.
