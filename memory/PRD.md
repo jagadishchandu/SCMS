@@ -1,5 +1,32 @@
 # SCMS — Product Requirements (running log)
 
+## Iteration — 2026-02 (current session, v46) — Rebalance · Save · Publish CTA + Workload-aware substitutes + Per-school rebalance default
+**User asks delivered:**
+1. **One-tap "Rebalance · Save · Publish"** combined CTA in the Workload tab — regenerates with rebalance bias → confirms if unfilled slots remain → saves → optionally publishes Telegram PDFs. ONE summary toast at the end (e.g. "Rebalanced gap → 4 · saved 120 slots · published teachers 12/12, parents 80/85").
+2. **Workload-aware substitute suggestions** — `/substitute-suggest` now returns `weekly_load` + `low_load` for each candidate and ranks by `(on_leave, !teaches_subject, weekly_load, daily_load, name)`. Under-loaded teachers of the requested subject are now the top suggestion. UI shows a 🌱 badge for under-loaded picks and the "(daily/d · weekly/wk)" load tooltip.
+3. **Per-school rebalance default** — new `default_prefer_underloaded_teachers` flag on the `schools` doc, edited via `GET/PATCH /api/schools/{id}/timetable-settings` (school_admin + platform_admin). The Timetable Builder pre-checks the Step-1 "Prefer under-loaded teachers" checkbox from this default and exposes a "Save as school default" button to persist the current choice. The toggle still works per-run.
+
+**Backend**
+- `routes/schools.py` → new `GET/PATCH /schools/{id}/timetable-settings`, validated via `TimetableSettingsPayload`. School-admin RBAC: must own the school.
+- `routes/timetable.py::substitute_suggest` → loads the full week's `timetable` rows, builds `weekly_load`, computes a median-based `low_threshold` (70% of median weekly load). Every suggestion carries `daily_load`, `weekly_load`, `low_load`. Ranking key updated to put `weekly_load` ahead of `daily_load`.
+- No changes to hard constraints — purely a ranking + new fields.
+
+**Frontend (`pages/school/TimetableBuilderPage.jsx`)**
+- New state: `preferUnderloaded`, `savingDefault`, `rebalanceSavePub`, `me`. On mount, reads `/auth/me` then `/schools/{id}/timetable-settings` to pre-check the toggle.
+- `buildPayload` now includes `defaults.prefer_underloaded_teachers` when the toggle is on.
+- New combined action `rebalanceSaveAndPublish()` — confirm dialog → suggest-batch with bias → confirms on unfilled → save-batch → optionally publish → single composite toast.
+- New `saveSchoolDefault()` PATCHes the school setting.
+- New UI:
+  - Step 1: 4-col-spanning card with the `⚖ Prefer under-loaded teachers` checkbox + dynamic helper text + "Save as school default" link.
+  - Workload tab toolbar: `⚖ Rebalance` (existing) + `⚡ Rebalance · Save · Publish` (new primary CTA).
+  - Substitute list row: 🌱 "Low load" badge + "(N/d · N/wk)" load chip.
+
+**Tests**
+- `tests/test_v46_timetable_settings.py` — 4 new tests: GET defaults to False, PATCH sets+reads-back, teacher cannot PATCH (403), substitute-suggest emits `weekly_load`/`low_load`/`daily_load` and never tops with on-leave teachers.
+- Full timetable suite re-run: **71 passed / 4 skipped / 1 pre-existing brittle test still failing** (`test_v43_timetable_substitute.py::TestCoverage::test_coverage_nonzero_after_intentionally_unfillable_save` — pre-existing, unrelated; fails on baseline too because the v43 repair pass fills slots better than the assertion expects).
+
+
+
 ## Iteration — 2026-02 (current session, v45) — Real "Rebalance" + Workload visualizer wired to backend
 **User asks delivered:**
 1. **"Add Teacher" inside the Timetable Builder no longer creates new users** — it now opens `AssignTeacherModal`, which only *reassigns* existing teachers to grades/subjects (PATCH `/api/users/{id}`). A clear pointer to **Staff & Roles** is shown for onboarding new staff. `AddTeacherModal.jsx` was removed.

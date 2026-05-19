@@ -58,6 +58,10 @@ export default function TimetableBuilderPage() {
   const [publishResult, setPublishResult] = useState(null);
   const [addTeacherOpen, setAddTeacherOpen] = useState(false);
   const [rebalancing, setRebalancing] = useState(false);
+  const [rebalanceSavePub, setRebalanceSavePub] = useState(false);
+  const [preferUnderloaded, setPreferUnderloaded] = useState(false); // current run's choice
+  const [savingDefault, setSavingDefault] = useState(false);
+  const [me, setMe] = useState(null);
 
   const refreshTeachers = () =>
     api.get("/users", { params: { role: "teacher" } }).then((r) => setTeachers(r.data || [])).catch(() => {});
@@ -74,8 +78,9 @@ export default function TimetableBuilderPage() {
       api.get("/academic/classes").then((r) => r.data),
       api.get("/academic/subjects").then((r) => r.data),
       api.get("/users", { params: { role: "teacher" } }).then((r) => r.data),
-    ]).then(([c, s, t]) => {
-      setClasses(c); setSubjects(s); setTeachers(t);
+      api.get("/auth/me").then((r) => r.data).catch(() => null),
+    ]).then(([c, s, t, meData]) => {
+      setClasses(c); setSubjects(s); setTeachers(t); setMe(meData);
       // Default: include every class+section once
       const initial = [];
       for (const cls of c) {
@@ -84,6 +89,12 @@ export default function TimetableBuilderPage() {
         }
       }
       setSections(initial);
+      // Read the school's default rebalance preference and pre-check.
+      if (meData?.school_id) {
+        api.get(`/schools/${meData.school_id}/timetable-settings`)
+          .then((r) => setPreferUnderloaded(!!r.data?.default_prefer_underloaded_teachers))
+          .catch(() => {});
+      }
     });
   }, []);
 
@@ -161,6 +172,7 @@ export default function TimetableBuilderPage() {
         Object.keys(cfg.subject_day_pins).length
           ? Object.fromEntries(Object.entries(cfg.subject_day_pins).filter(([, v]) => v && v.length))
           : undefined,
+      prefer_underloaded_teachers: preferUnderloaded || undefined,
     };
     const sectionPayload = sections.map((s) => {
       const out = {
@@ -234,7 +246,7 @@ export default function TimetableBuilderPage() {
   };
 
   const saveAll = async () => {
-    if (!result) return;
+    if (!result) return null;
     setSaving(true);
     try {
       const payload = {
@@ -246,15 +258,17 @@ export default function TimetableBuilderPage() {
       };
       const { data } = await api.post("/timetable/save-batch", payload);
       toast.success(`Saved ${data.inserted} slots across ${data.sections_saved} sections`);
+      return data;
     } catch (err) {
       toast.error(formatApiError(err));
+      return null;
     } finally {
       setSaving(false);
     }
   };
 
-  const publishToTelegram = async () => {
-    if (!window.confirm("Publish the saved timetable as a PDF to teachers and parents via Telegram?")) return;
+  const publishToTelegram = async (silent = false) => {
+    if (!silent && !window.confirm("Publish the saved timetable as a PDF to teachers and parents via Telegram?")) return null;
     setPublishing(true);
     setPublishResult(null);
     try {
@@ -264,10 +278,92 @@ export default function TimetableBuilderPage() {
       const ts = data.teachers_sent || 0, tt = data.teachers_total || 0;
       const ps = data.parents_sent || 0, pt = data.parents_total || 0;
       toast.success(`Published — teachers ${ts}/${tt}, parents ${ps}/${pt}`);
+      return data;
+    } catch (err) {
+      toast.error(formatApiError(err));
+      return null;
+    } finally {
+      setPublishing(false);
+    }
+  };
+
+  // One-click combined flow: rebalance the schedule, save it, then publish to
+  // Telegram. Shows ONE summary toast at the end and surfaces conflicts early.
+  const rebalanceSaveAndPublish = async () => {
+    if (sections.length === 0) return;
+    const wantPublish = window.confirm(
+      "Run Rebalance → Save → Publish in one shot?\n\n" +
+      "1. Regenerate the schedule biased to under-loaded teachers.\n" +
+      "2. Save the new schedule for every selected section.\n" +
+      "3. Publish PDFs to teachers + parents via Telegram (cancel to stop after Save).",
+    );
+    setRebalanceSavePub(true);
+    try {
+      // 1. Rebalance
+      const body = buildPayload();
+      body.defaults = { ...(body.defaults || {}), prefer_underloaded_teachers: true };
+      const { data: gen } = await api.post("/timetable/suggest-batch", body);
+      setResult(gen);
+      const nw = gen?.teacher_view;
+      const newGap = (nw?.workload_max || 0) - (nw?.workload_min || 0);
+      const unfilled = (gen?.conflict_summary?.unfilled_slots || []).length;
+      if (unfilled > 0) {
+        const ok = window.confirm(
+          `Rebalance produced ${unfilled} unfilled slot(s). Save anyway? Click Cancel to review first.`,
+        );
+        if (!ok) return;
+      }
+      // 2. Save (in-line, mirrors saveAll without re-toasting separately)
+      const savePayload = {
+        sections: gen.sections.map((s) => ({
+          class_id: s.class_id,
+          section: s.section,
+          slots: s.slots.filter((sl) => sl.is_break || sl.teacher_id),
+        })),
+      };
+      setSaving(true);
+      const saved = await api.post("/timetable/save-batch", savePayload).then((r) => r.data).finally(() => setSaving(false));
+      // 3. Publish if user asked
+      let pub = null;
+      if (wantPublish) {
+        pub = await publishToTelegram(true);
+      }
+      // Final summary toast
+      const parts = [
+        `Rebalanced gap → ${newGap}`,
+        `saved ${saved?.inserted ?? 0} slots`,
+      ];
+      if (pub) {
+        parts.push(`published teachers ${pub.teachers_sent || 0}/${pub.teachers_total || 0}, parents ${pub.parents_sent || 0}/${pub.parents_total || 0}`);
+      } else if (wantPublish) {
+        parts.push("publish failed");
+      } else {
+        parts.push("not published");
+      }
+      toast.success(parts.join(" · "));
     } catch (err) {
       toast.error(formatApiError(err));
     } finally {
-      setPublishing(false);
+      setRebalanceSavePub(false);
+    }
+  };
+
+  const saveSchoolDefault = async () => {
+    if (!me?.school_id) return;
+    setSavingDefault(true);
+    try {
+      await api.patch(`/schools/${me.school_id}/timetable-settings`, {
+        default_prefer_underloaded_teachers: preferUnderloaded,
+      });
+      toast.success(
+        preferUnderloaded
+          ? "Saved — Rebalance bias will be ON by default for every future generation."
+          : "Saved — Rebalance bias will be OFF by default.",
+      );
+    } catch (err) {
+      toast.error(formatApiError(err));
+    } finally {
+      setSavingDefault(false);
     }
   };
 
@@ -429,6 +525,38 @@ export default function TimetableBuilderPage() {
                 const teaching = Math.max(0, cfg.periods_per_day - (cfg.lunch_break_period ? breaks : breaks - 1));
                 return ` → ${teaching * cfg.days.length} teaching slots/week per section.`;
               })()}
+            </div>
+          </div>
+
+          {/* Rebalance preference */}
+          <div className="md:col-span-4">
+            <div className="border border-line rounded-md p-3 bg-bg-subtle">
+              <label className="inline-flex items-center gap-2 text-sm font-medium cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={preferUnderloaded}
+                  onChange={(e) => setPreferUnderloaded(e.target.checked)}
+                  data-testid="cfg-prefer-underloaded"
+                />
+                ⚖ Prefer under-loaded teachers when generating
+              </label>
+              <div className="text-[11px] text-ink-muted mt-1 flex flex-wrap items-center gap-2">
+                <span>
+                  {preferUnderloaded
+                    ? "ON — the engine will pick the teacher with the lowest weekly load whenever multiple candidates can teach a subject. Best for fair workload distribution."
+                    : "OFF (default round-robin) — candidates rotate evenly across the week. Toggle ON to bias new schedules toward under-loaded teachers."}
+                </span>
+                <button
+                  type="button"
+                  onClick={saveSchoolDefault}
+                  disabled={savingDefault || !me?.school_id}
+                  className="ml-auto text-[11px] text-primary underline disabled:opacity-50"
+                  data-testid="cfg-save-default-rebalance"
+                  title="Persist this checkbox as the school's default for every future generation."
+                >
+                  {savingDefault ? "Saving…" : "Save as school default"}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -626,11 +754,19 @@ export default function TimetableBuilderPage() {
                 </button>
               ))}
               {view === "workload" && (
-                <button onClick={rebalance} disabled={rebalancing} className="btn-ghost text-xs px-3 py-1"
-                  data-testid="builder-rebalance-btn"
-                  title="Re-run the engine biased to prefer the under-loaded teachers, smoothing the workload gap.">
-                  {rebalancing ? "Rebalancing…" : "⚖ Rebalance"}
-                </button>
+                <>
+                  <button onClick={rebalance} disabled={rebalancing || rebalanceSavePub} className="btn-ghost text-xs px-3 py-1"
+                    data-testid="builder-rebalance-btn"
+                    title="Re-run the engine biased to prefer the under-loaded teachers, smoothing the workload gap.">
+                    {rebalancing ? "Rebalancing…" : "⚖ Rebalance"}
+                  </button>
+                  <button onClick={rebalanceSaveAndPublish} disabled={rebalancing || rebalanceSavePub || saving || publishing}
+                    className="text-xs px-3 py-1 rounded-md bg-primary text-primary-foreground border border-primary"
+                    data-testid="builder-rebalance-save-publish-btn"
+                    title="One tap: rebalance the schedule → save it → optionally publish PDFs to teachers and parents.">
+                    {rebalanceSavePub ? "Working…" : "⚡ Rebalance · Save · Publish"}
+                  </button>
+                </>
               )}
             </div>
           }
@@ -939,10 +1075,15 @@ function SectionGrid({ sec, subjectMap, teacherMap, teachers, subjects, locks, s
                                 {subSuggestions[cellKey].slice(0, 5).map((s) => (
                                   <div key={s.teacher_id} className="flex items-center justify-between gap-1">
                                     <div className="text-[10px]">
-                                      {s.teaches_subject && <span title="Teaches this subject">⭐</span>}
+                                      {s.teaches_subject && <span title="Teaches this subject" className="mr-0.5">⭐</span>}
+                                      {s.low_load && !s.on_leave_today && (
+                                        <span title="Under-loaded — rebalance pick" className="mr-0.5 text-status-success font-semibold">🌱</span>
+                                      )}
                                       {s.on_leave_today && <span title="On leave today">🌴</span>}
                                       <span className={s.on_leave_today ? "line-through" : ""}>{s.teacher_name}</span>
-                                      <span className="text-ink-muted ml-1">({s.daily_load})</span>
+                                      <span className="text-ink-muted ml-1" title={`Daily load · weekly ${s.weekly_load ?? 0}`}>
+                                        ({s.daily_load}/d · {s.weekly_load ?? 0}/wk)
+                                      </span>
                                     </div>
                                     <button
                                       onClick={() => applySub(d, p, sl.subject_id, s.teacher_id)}

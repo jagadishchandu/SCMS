@@ -2045,6 +2045,23 @@ async def substitute_suggest(
     for s in same_day:
         load[s["teacher_id"]] = load.get(s["teacher_id"], 0) + 1
 
+    # Weekly (5-day) load — used so the suggestion ranking prefers the
+    # under-loaded teacher of the requested subject (not just the day-balanced one).
+    same_week = await tdb.timetable.find(
+        {"school_id": user["school_id"], "teacher_id": {"$nin": ["", None]}},
+        {"_id": 0, "teacher_id": 1},
+    ).to_list(100000)
+    weekly_load: dict = {}
+    for s in same_week:
+        weekly_load[s["teacher_id"]] = weekly_load.get(s["teacher_id"], 0) + 1
+    # Threshold for "low load" badge: <= 70% of the median weekly load.
+    if weekly_load:
+        sorted_loads = sorted(weekly_load.values())
+        median_load = sorted_loads[len(sorted_loads) // 2]
+        low_threshold = max(0, int(median_load * 0.7))
+    else:
+        low_threshold = 0
+
     from datetime import date as _date
     today = _date.today().isoformat()
     leaves = await tdb.teacher_leaves.find(
@@ -2059,14 +2076,29 @@ async def substitute_suggest(
         if t["id"] in busy_ids:
             continue
         teaches_subject = bool(payload.prefer_subject_id and payload.prefer_subject_id in (t.get("subjects") or []))
+        wl = weekly_load.get(t["id"], 0)
         suggestions.append({
             "teacher_id": t["id"],
             "teacher_name": t.get("name"),
             "teaches_subject": teaches_subject,
             "daily_load": load.get(t["id"], 0),
+            "weekly_load": wl,
+            "low_load": wl <= low_threshold,
             "on_leave_today": t["id"] in on_leave_now,
         })
-    suggestions.sort(key=lambda s: (not s["teaches_subject"], s["on_leave_today"], s["daily_load"], s["teacher_name"] or ""))
+    # Ranking (lower is better in each tuple slot):
+    #   1. on-leave teachers last
+    #   2. teachers of the subject first
+    #   3. under-loaded weekly (rebalance bias)
+    #   4. lower daily load
+    #   5. name (stable)
+    suggestions.sort(key=lambda s: (
+        s["on_leave_today"],
+        not s["teaches_subject"],
+        s["weekly_load"],
+        s["daily_load"],
+        s["teacher_name"] or "",
+    ))
     return {"suggestions": suggestions[:20]}
 
 

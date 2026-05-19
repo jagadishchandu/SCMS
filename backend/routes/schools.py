@@ -487,3 +487,59 @@ async def set_parent_login_flag(
         {"enabled": bool(payload.enabled)},
     )
     return {"ok": True, "school_id": school_id, "enabled": bool(payload.enabled)}
+
+
+
+class TimetableSettingsPayload(BaseModel):
+    default_prefer_underloaded_teachers: bool = False
+
+
+@router.get("/{school_id}/timetable-settings")
+async def get_timetable_settings(school_id: str, user: dict = Depends(get_current_user)):
+    """Per-school timetable defaults (e.g. rebalance bias pre-checked in the
+    Timetable Builder). Visible to platform admin + the school's own school
+    admin."""
+    if user["role"] != "platform_admin" and user.get("school_id") != school_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    db = get_db()
+    s = await db.schools.find_one(
+        {"id": school_id},
+        {"_id": 0, "default_prefer_underloaded_teachers": 1},
+    )
+    if s is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {
+        "school_id": school_id,
+        "default_prefer_underloaded_teachers": bool(
+            s.get("default_prefer_underloaded_teachers", False)
+        ),
+    }
+
+
+@router.patch("/{school_id}/timetable-settings")
+async def set_timetable_settings(
+    school_id: str,
+    payload: TimetableSettingsPayload,
+    user: dict = Depends(require_roles("school_admin", "platform_admin")),
+):
+    """Persist a school-wide default for the Timetable Builder. Today: only the
+    Rebalance ("prefer under-loaded teachers") toggle."""
+    if user["role"] != "platform_admin" and user.get("school_id") != school_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    db = get_db()
+    res = await db.schools.update_one(
+        {"id": school_id},
+        {"$set": {"default_prefer_underloaded_teachers": bool(payload.default_prefer_underloaded_teachers)}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    await log_action(
+        user["id"], user["role"], school_id,
+        "set_timetable_settings", "school", school_id,
+        {"default_prefer_underloaded_teachers": bool(payload.default_prefer_underloaded_teachers)},
+    )
+    return {
+        "ok": True,
+        "school_id": school_id,
+        "default_prefer_underloaded_teachers": bool(payload.default_prefer_underloaded_teachers),
+    }
