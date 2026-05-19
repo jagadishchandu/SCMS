@@ -41,6 +41,7 @@ const NAV_BY_ROLE = {
     { to: "/school/fees", label: "Fee Structures", icon: Receipt },
     { to: "/school/fee-tracker", label: "Fee Tracker", icon: ChartPieSlice },
     { to: "/school/timetable", label: "Timetable", icon: Calendar },
+    { to: "/school/timetable-builder", label: "Timetable Builder", icon: Calendar },
     { to: "/school/activities", label: "Activities", icon: ChartLineUp },
     { to: "/school/trips", label: "Educational Trips", icon: Bus },
     { to: "/school/sick-leaves", label: "Sick Leaves", icon: Heartbeat },

@@ -39,6 +39,7 @@ import SyllabusPage from "./pages/school/SyllabusPage";
 import HolidaysPage from "./pages/school/HolidaysPage";
 import FeesPage from "./pages/school/FeesPage";
 import TimetablePage from "./pages/school/TimetablePage";
+import TimetableBuilderPage from "./pages/school/TimetableBuilderPage";
 import TeacherPerformancePage from "./pages/school/TeacherPerformancePage";
 import UploadsPage from "./pages/school/UploadsPage";
 import ActivitiesPage from "./pages/school/ActivitiesPage";
@@ -114,6 +115,7 @@ export default function App() {
       <Route path="/school/fee-tracker" element={<ProtectedRoute allow={["school_admin","accounts"]}>{withLayout(FeeTrackerPage)}</ProtectedRoute>} />
       <Route path="/school/teacher-duties" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(TeacherDutiesPage)}</ProtectedRoute>} />
       <Route path="/school/timetable" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(TimetablePage)}</ProtectedRoute>} />
+      <Route path="/school/timetable-builder" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(TimetableBuilderPage)}</ProtectedRoute>} />
       <Route path="/school/performance" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(TeacherPerformancePage)}</ProtectedRoute>} />
       <Route path="/school/notifications" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(NotificationsLog)}</ProtectedRoute>} />
       <Route path="/school/uploads" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(UploadsPage)}</ProtectedRoute>} />
