@@ -1,0 +1,39 @@
+{
+  "summary": "v43 timetable repair-pass + substitute backend tests — 12/12 new pytest tests pass + 24/24 prior v40+v41 regression all pass (36/36 total). Verified: (1) /suggest-batch reaches 0 unfilled with 4-teacher setup over 5 subjects × 5 days × 5 teaching periods × 4 sections; (2) every section returns repair_stats={attempts, swap_repairs, substitute_repairs}; (3) substitute repairs produce slots with is_substitute=true AND non-empty teacher_id; (4) swap repairs produce swapped_from={day, period}; (5) ZERO teacher double-bookings across the full batch (verified by walking all (day, period, teacher_id) tuples); (6) /save-batch persists unfilled rows (teacher_id='' with a subject_id) — verified via GET /api/timetable; (7) GET /api/timetable/coverage returns {sections_with_unfilled, total_unfilled, details[]} = 0/0/[] after fully-repaired save, and >0 with details list when cap=1 forces unfillable; (8) POST /substitute-suggest returns items with {teacher_id, teacher_name, teaches_subject, daily_load, on_leave_today}, teachers who teach prefer_subject_id rank FIRST, and busy teachers at (day, period) are excluded; (9) /substitute-apply persists is_substitute=true on existing unfilled slot and returns {ok:true, slot_id}; (10) /substitute-apply returns HTTP 409 with conflict_with={class_id, section, subject_id} when chosen teacher is double-booked.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/timetable/suggest-batch", "issue": "defaults.lunch_break_period validator is ge=1 — there is no way to omit lunch entirely from the schedule. Workaround used in tests: put lunch on the last period (e.g. periods_per_day=6, lunch_break_period=6) so 5 teaching periods × 5 days = 25/section. Consider allowing 0/None to mean 'no lunch'."},
+      {"endpoint": "/api/timetable/substitute-apply", "issue": "When notify=true and the teacher has no telegram_chat_id, the queue_notification side-effect is wrapped in try/except Exception: pass — silent. Logging at WARN would help debugging non-delivery. Non-blocking."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_v43_timetable_substitute.py",
+    "/app/test_reports/pytest/v43_timetable.xml",
+    "/app/test_reports/pytest/v43_full_regression.xml"
+  ],
+  "action_items": [
+    "(Optional) Allow lunch_break_period=0 or null to mean 'no lunch break' in SuggestBatchDefaults — currently ge=1 forces callers to consume a period for lunch even when they don't want one.",
+    "(Optional, repeat from v41) /app/backend/routes/timetable.py is now 1840 lines — past the 700-line guideline. Strong refactor candidate: split into timetable_suggest.py / timetable_save.py / timetable_publish.py / timetable_coverage.py / timetable_substitute.py."
+  ],
+  "critical_code_review_comments": [
+    "/app/backend/routes/timetable.py grew from 1488 → 1840 lines with v43. Strongly recommend modularizing per route group.",
+    "Repair pass (lines ~808-920): intra-section swap then cross-subject substitute. Correctly updates `busy` set and `teacher_day_load` after every swap/sub, preventing internal double-booking. swap_done short-circuits via 'break' to avoid double-fixing. Good.",
+    "/coverage (lines 1641-1658): correctly aggregates rows where teacher_id IN ('', None). Uses tenant_db. Allows both school_admin and teacher roles — teacher access is reasonable for awareness but consider whether teachers should see the coverage of OTHER sections.",
+    "/substitute-apply 409 logic (line 1749-1763): uses $nor over (class_id, section) — correctly excludes the SAME slot being applied to, so a re-apply of substitute on the SAME slot won't 409. Good.",
+    "/substitute-suggest (line 1715): teaches_subject is derived from `t.subjects` list which is stored in ROOT users collection. If a school admin later edits subjects via PATCH /api/users/{id}, the suggestion will reflect that — verified working in tests via Anita seed/patch path.",
+    "save-batch (line 1392): inserted_total only counts FILLED rows; this is intentional per the problem statement but the response field name 'inserted' is misleading — consider renaming to 'inserted_filled' OR returning both 'inserted_filled' and 'inserted_unfilled' counts so the UI can show 'persisted 76 filled + 24 empty slots'. Non-blocking.",
+    "Repair pass uses allowed_periods constraints during swap candidate filtering (line 863-870) — good. However it does NOT re-check max_consecutive_heavy or subject_categories='heavy' during the swap, so a swap could create a 3-in-a-row heavy block when max_consecutive_heavy=2. Edge case; not tested in v43 but worth noting for hardening."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_v43_timetable_substitute.py (NEW, 12 tests covering all 10 listed cases + 2 additional ranking/exclusion assertions)"
+  ],
+  "success_rate": {"backend": "100% (36/36 v40+v41+v43)", "frontend": "n/a (skipped per request)"},
+  "test_credentials": "principal@sunrise.edu / School@123 (school_admin). v43 fixture auto-seeds 'anita@sunrise.edu / Teacher@123' (Anita Sharma) teaching all 5 subjects so the demo school can reach 0% unfilled.",
+  "seed_data_creation": "Anita Sharma teacher created/updated automatically in v43 fixture school_data (idempotent via POST /api/users + 400-already-exists fallback). Her subjects list is patched to cover all 5 demo subjects each run.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "test_v43_timetable_substitute.py is canonical v43 regression. The school's saved timetable is rewritten across tests (reset_existing=True + delete_many in save-batch). To reach 100 teaching slots with the existing validators, use periods_per_day=6 + lunch_break_period=6 (lunch on last period → 5 teaching periods × 5 days × 4 sections = 100). To deterministically force unfilled rows in repair scenarios, set max_periods_per_day_per_teacher=1 (the cap is tight enough that 4 teachers × 1 period/day < 5 needed daily slots/section even after the substitute pass). The 409 conflict scenario for substitute-apply requires finding an unfilled slot at the SAME (day, period) as a filled slot in a different section — under cap=1, this naturally exists because the engine picks at most one teacher per (day, period) across all sections.",
+  "rca of the issue": "No bugs found. v43 features (repair pass, persisted unfilled rows, /coverage, /substitute-suggest, /substitute-apply) all work to spec. Initial test failures were due to my test using lunch_break_period=0 (validator requires >=1); fixed by moving lunch to last period."
+}

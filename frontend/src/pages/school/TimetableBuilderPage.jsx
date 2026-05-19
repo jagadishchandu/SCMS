@@ -576,7 +576,6 @@ function FixedBreakAdder({ onAdd, maxPeriod }) {
 }
 
 function SectionGrid({ sec, subjectMap, teacherMap, teachers, subjects, locks, setLock, clearLock }) {
-  // Group by day -> period -> slot
   const periods = Array.from(new Set(sec.slots.map((s) => s.period))).sort((a, b) => a - b);
   const grid = {};
   for (const sl of sec.slots) {
@@ -586,18 +585,62 @@ function SectionGrid({ sec, subjectMap, teacherMap, teachers, subjects, locks, s
   const days = Object.keys(grid);
   const dayOrder = ["mon", "tue", "wed", "thu", "fri", "sat"];
   const orderedDays = dayOrder.filter((d) => days.includes(d));
+
+  const [subBusyKey, setSubBusyKey] = useState(null);
+  const [subSuggestions, setSubSuggestions] = useState({}); // {`${d}|${p}`: [{teacher_id, teacher_name, …}]}
+
+  const fetchSuggestions = async (d, p, subj_id) => {
+    const k = `${d}|${p}`;
+    setSubBusyKey(k);
+    try {
+      const { data } = await api.post("/timetable/substitute-suggest", {
+        class_id: sec.class_id, section: sec.section,
+        day: d, period: p, prefer_subject_id: subj_id || undefined,
+      });
+      setSubSuggestions((prev) => ({ ...prev, [k]: data.suggestions || [] }));
+    } catch (err) {
+      toast.error(formatApiError(err));
+    } finally {
+      setSubBusyKey(null);
+    }
+  };
+
+  const applySub = async (d, p, subj_id, teacher_id) => {
+    try {
+      await api.post("/timetable/substitute-apply", {
+        class_id: sec.class_id, section: sec.section,
+        day: d, period: p, teacher_id, subject_id: subj_id || undefined, notify: true,
+      });
+      toast.success("Substitute applied & notified");
+      // Patch local view so the cell updates without a regenerate
+      const sl = grid[d][p];
+      if (sl) {
+        sl.teacher_id = teacher_id;
+        sl.is_substitute = true;
+      }
+      setSubSuggestions((prev) => ({ ...prev, [`${d}|${p}`]: [] }));
+    } catch (err) {
+      toast.error(formatApiError(err));
+    }
+  };
+
   return (
     <div data-testid={`section-grid-${sec.class_id}-${sec.section}`}>
       <div className="flex items-baseline gap-3 mb-2">
         <div className="font-display text-lg font-medium">{sec.class_name} · Section {sec.section}</div>
         <div className="text-xs text-ink-muted">{sec.total_teaching_slots} teaching slots</div>
         {sec.student_count != null && <div className="text-xs text-ink-muted">{sec.student_count} students</div>}
+        {sec.repair_stats && (sec.repair_stats.swap_repairs || sec.repair_stats.substitute_repairs) ? (
+          <div className="text-[11px] text-status-info" data-testid={`sec-repair-${sec.class_id}-${sec.section}`}>
+            🔧 {sec.repair_stats.swap_repairs} swap{sec.repair_stats.swap_repairs !== 1 ? "s" : ""} · {sec.repair_stats.substitute_repairs} substitute{sec.repair_stats.substitute_repairs !== 1 ? "s" : ""}
+          </div>
+        ) : null}
         {sec.warnings?.length > 0 && (
           <div className="text-xs text-status-warning" data-testid={`sec-warn-${sec.class_id}-${sec.section}`}>
             ⚠ {sec.warnings.length} warning(s)
           </div>
         )}
-        <div className="text-[11px] text-ink-muted ml-auto">💡 Click a cell to lock a specific teacher; re-generate to apply.</div>
+        <div className="text-[11px] text-ink-muted ml-auto">💡 Click an unfilled cell → "Find substitute"; click any cell → "Lock…"</div>
       </div>
       <div className="overflow-x-auto">
         <table className="table">
@@ -622,12 +665,16 @@ function SectionGrid({ sec, subjectMap, teacherMap, teachers, subjects, locks, s
                   const unfilled = !sl.teacher_id;
                   const lockKey = `${sec.class_id}|${sec.section}|${d}|${p}`;
                   const isLocked = sl.is_locked || !!locks[lockKey];
+                  const isSubstitute = sl.is_substitute;
+                  const cellKey = `${d}|${p}`;
                   const bgClass = sl.is_class_teacher_pin
                     ? "bg-status-info/10 border-l-2 border-status-info"
                     : isLocked
                     ? "bg-primary-light/40 border-l-2 border-primary"
                     : unfilled
                     ? "bg-status-danger/10 border-l-2 border-status-danger"
+                    : isSubstitute
+                    ? "bg-status-warning/10 border-l-2 border-status-warning"
                     : "";
                   return (
                     <td key={p} className={"td align-top " + bgClass}
@@ -635,11 +682,57 @@ function SectionGrid({ sec, subjectMap, teacherMap, teachers, subjects, locks, s
                       <div className="font-medium text-xs">
                         {subj?.name || (sl.is_class_teacher_pin ? sl.class_teacher_label : "—")}
                         {isLocked && <span className="ml-1 text-[9px] text-primary">🔒</span>}
+                        {isSubstitute && <span className="ml-1 text-[9px] text-status-warning" title="Substitute teacher">🔄</span>}
                       </div>
                       <div className={"text-[10px] " + (unfilled ? "text-status-danger uppercase tracking-wider font-semibold" : "text-ink-muted")}>
-                        {unfilled ? "Unfilled — assign sub" : (t?.name || "—")}
+                        {unfilled ? "Unfilled" : (t?.name || "—")}
                       </div>
-                      {!sl.is_class_teacher_pin && (
+
+                      {/* Substitute auto-fill — only for unfilled cells */}
+                      {unfilled && (
+                        <details className="mt-1" data-testid={`sub-${sec.class_id}-${sec.section}-${d}-${p}`}>
+                          <summary className="text-[10px] text-status-danger cursor-pointer font-semibold">
+                            Find substitute
+                          </summary>
+                          <div className="mt-1 space-y-1">
+                            {!subSuggestions[cellKey] ? (
+                              <button
+                                onClick={() => fetchSuggestions(d, p, sl.subject_id)}
+                                disabled={subBusyKey === cellKey}
+                                className="text-[10px] text-primary underline"
+                                data-testid={`sub-fetch-${sec.class_id}-${sec.section}-${d}-${p}`}
+                              >
+                                {subBusyKey === cellKey ? "Loading…" : "Show free teachers"}
+                              </button>
+                            ) : subSuggestions[cellKey].length === 0 ? (
+                              <div className="text-[10px] text-ink-muted">No free teachers at this slot.</div>
+                            ) : (
+                              <div className="space-y-1">
+                                {subSuggestions[cellKey].slice(0, 5).map((s) => (
+                                  <div key={s.teacher_id} className="flex items-center justify-between gap-1">
+                                    <div className="text-[10px]">
+                                      {s.teaches_subject && <span title="Teaches this subject">⭐</span>}
+                                      {s.on_leave_today && <span title="On leave today">🌴</span>}
+                                      <span className={s.on_leave_today ? "line-through" : ""}>{s.teacher_name}</span>
+                                      <span className="text-ink-muted ml-1">({s.daily_load})</span>
+                                    </div>
+                                    <button
+                                      onClick={() => applySub(d, p, sl.subject_id, s.teacher_id)}
+                                      disabled={s.on_leave_today}
+                                      className="text-[10px] text-primary font-medium"
+                                      data-testid={`sub-apply-${sec.class_id}-${sec.section}-${d}-${p}-${s.teacher_id}`}
+                                    >
+                                      Apply
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </details>
+                      )}
+
+                      {!sl.is_class_teacher_pin && !unfilled && (
                         <details className="mt-1" data-testid={`lock-${sec.class_id}-${sec.section}-${d}-${p}`}>
                           <summary className="text-[10px] text-ink-muted cursor-pointer hover:text-primary">Lock…</summary>
                           <div className="mt-1 space-y-1">

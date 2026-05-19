@@ -154,9 +154,14 @@ export default function TimetablePage() {
                         const isTintRow = d === tintDayKey;
                         const onLeave = isTintRow && teachersOnLeave.has(slot.teacher_id);
                         const status = isTintRow ? (onLeave ? "leave" : (teacherStatus[slot.teacher_id] || "unmarked")) : null;
-                        const tint = status && STATUS_TINT[status]
-                          ? STATUS_TINT[status]
-                          : (isTintRow ? "border-dashed" : "");
+                        const isUnfilled = !slot.teacher_id;
+                        const isSubstitute = slot.is_substitute;
+                        // Cell tint priority: unfilled > teacher status > substitute
+                        let tint;
+                        if (isUnfilled) tint = "bg-status-danger/10 border-l-2 border-status-danger";
+                        else if (status && STATUS_TINT[status]) tint = STATUS_TINT[status];
+                        else if (isSubstitute) tint = "bg-status-warning/10 border-l-2 border-status-warning";
+                        else tint = isTintRow ? "border-dashed" : "";
                         return (
                           <td
                             key={p}
@@ -164,10 +169,25 @@ export default function TimetablePage() {
                             data-testid={`tt-cell-${d}-${p}`}
                             data-status={status || ""}
                             data-on-leave={onLeave ? "1" : "0"}
-                            title={isTintRow && t ? `${t.name} — ${onLeave ? "On leave (find substitute)" : (STATUS_LABEL[status] || "Not marked yet")}` : undefined}
+                            data-unfilled={isUnfilled ? "1" : "0"}
+                            data-substitute={isSubstitute ? "1" : "0"}
+                            title={
+                              isUnfilled
+                                ? "Unfilled slot — assign a substitute from the Timetable Builder"
+                                : isTintRow && t
+                                ? `${t.name} — ${onLeave ? "On leave (find substitute)" : (STATUS_LABEL[status] || "Not marked yet")}`
+                                : undefined
+                            }
                           >
-                            <div className="font-medium">{subjects.find((s) => s.id === slot.subject_id)?.name || "—"}</div>
-                            <div className="text-xs text-ink-muted">{t?.name || "—"}</div>
+                            <div className="font-medium">
+                              {subjects.find((s) => s.id === slot.subject_id)?.name || (isUnfilled ? <span className="text-status-danger">UNFILLED</span> : "—")}
+                              {isSubstitute && !isUnfilled && (
+                                <span className="ml-1 text-[9px] text-status-warning" title="Substitute teacher">🔄</span>
+                              )}
+                            </div>
+                            <div className={"text-xs " + (isUnfilled ? "text-status-danger uppercase tracking-wider font-semibold" : "text-ink-muted")}>
+                              {isUnfilled ? "Find substitute" : (t?.name || "—")}
+                            </div>
                             <div className="text-[10px] text-ink-muted">{slot.start_time}–{slot.end_time}</div>
                             {onLeave ? (
                               <div

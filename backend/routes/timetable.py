@@ -805,6 +805,120 @@ def _generate_section_schedule(
                 busy.add((day, period, chosen["id"]))
                 teacher_day_load[(chosen["id"], day)] = teacher_day_load.get((chosen["id"], day), 0) + 1
 
+    # ---- Repair pass: try to fill every unfilled cell ----
+    # Step 1: intra-section swap — for each unfilled (day, period, subject) S, look
+    #         for another teaching slot (day', period') in THIS section whose subject S'
+    #         can be taught at (day, period) (teacher of S' free here) AND whose teacher
+    #         for S' could move (teacher of S free at day', period'). Swap them.
+    # Step 2: cross-subject substitute — if still unfilled, pick ANY teacher who is free
+    #         at (day, period) and not over the daily cap. Mark slot as is_substitute=True.
+    def _is_free(tid: str, d: str, p: int) -> bool:
+        if (d, p, tid) in busy:
+            return False
+        if tid in teachers_on_leave_per_day.get(d, set()):
+            return False
+        if max_ppd_teacher and teacher_day_load.get((tid, d), 0) >= max_ppd_teacher:
+            return False
+        return True
+
+    def _free_teacher_for_subject(sid: str, d: str, p: int) -> Optional[dict]:
+        for t in (subject_to_teachers.get(sid) or []):
+            if _is_free(t["id"], d, p):
+                return t
+        return None
+
+    repair_attempts = 0
+    swap_repairs = 0
+    sub_repairs = 0
+    unfilled_indexes = [i for i, sl in enumerate(slots) if (
+        not sl.get("is_break") and not sl.get("is_class_teacher_pin") and not sl.get("is_locked")
+        and sl.get("subject_id") and not sl.get("teacher_id")
+    )]
+    for idx in unfilled_indexes:
+        sl = slots[idx]
+        sid = sl["subject_id"]
+        day, period = sl["day"], sl["period"]
+        repair_attempts += 1
+
+        # Try intra-section swap: find another teaching slot (j) whose teacher could move here
+        # and whose own subject could be taught here by sid's teacher pool.
+        swap_done = False
+        for j, other in enumerate(slots):
+            if j == idx:
+                continue
+            if other.get("is_break") or other.get("is_class_teacher_pin") or other.get("is_locked"):
+                continue
+            o_tid = other.get("teacher_id")
+            o_sid = other.get("subject_id")
+            o_day, o_period = other["day"], other["period"]
+            if not o_tid or not o_sid or o_sid == sid:
+                continue
+            # Will moving (o_tid, o_sid) to (day, period) work?
+            #   need o_tid to be free at (day, period)
+            if not _is_free(o_tid, day, period):
+                continue
+            #   o_tid must actually teach sid OR we allow a cross-subject move?
+            #   For a clean swap, o_tid teaches o_sid (already true). We're moving o_sid to (day, period).
+            #   For (day, period) to host o_sid, allowed_periods must permit it.
+            if o_sid in allowed_periods and period not in allowed_periods[o_sid]:
+                continue
+            # Now we need a teacher of `sid` to be free at (o_day, o_period)
+            sub_for_sid = _free_teacher_for_subject(sid, o_day, o_period)
+            # Also ok if a teacher of o_sid's pool can host sid at (day, period)... actually we
+            # need sid hosted at (o_day, o_period); ensure allowed_periods for sid allows o_period
+            if sid in allowed_periods and o_period not in allowed_periods[sid]:
+                continue
+            if sub_for_sid is None:
+                continue
+            # Perform the swap. Release o_tid from (o_day, o_period); update busy + loads.
+            busy.discard((o_day, o_period, o_tid))
+            teacher_day_load[(o_tid, o_day)] = max(0, teacher_day_load.get((o_tid, o_day), 1) - 1)
+            # Place sid + sub_for_sid at (o_day, o_period)
+            slots[j] = {
+                **other,
+                "subject_id": sid,
+                "teacher_id": sub_for_sid["id"],
+            }
+            busy.add((o_day, o_period, sub_for_sid["id"]))
+            teacher_day_load[(sub_for_sid["id"], o_day)] = teacher_day_load.get((sub_for_sid["id"], o_day), 0) + 1
+            # Place o_sid + o_tid at (day, period)
+            slots[idx] = {
+                **sl,
+                "subject_id": o_sid,
+                "teacher_id": o_tid,
+                "swapped_from": {"day": o_day, "period": o_period},
+            }
+            busy.add((day, period, o_tid))
+            teacher_day_load[(o_tid, day)] = teacher_day_load.get((o_tid, day), 0) + 1
+            swap_repairs += 1
+            swap_done = True
+            warnings_set.add(
+                f"[{cls.get('name')}·{section}] Repair: swapped {day.upper()} P{period} ↔ {o_day.upper()} P{o_period} to fill an empty cell."
+            )
+            break
+
+        if swap_done:
+            continue
+
+        # Step 2: cross-subject substitute — any free teacher (any subject) fills this slot.
+        # Pick teacher with the lowest daily load to balance.
+        any_teachers = {t["id"]: t for tlist in subject_to_teachers.values() for t in tlist}
+        candidates = [t for t in any_teachers.values() if _is_free(t["id"], day, period)]
+        if candidates:
+            candidates.sort(key=lambda t: (teacher_day_load.get((t["id"], day), 0), t.get("name", "")))
+            sub = candidates[0]
+            slots[idx] = {
+                **sl,
+                "teacher_id": sub["id"],
+                "is_substitute": True,
+            }
+            busy.add((day, period, sub["id"]))
+            teacher_day_load[(sub["id"], day)] = teacher_day_load.get((sub["id"], day), 0) + 1
+            sub_repairs += 1
+            warnings_set.add(
+                f"[{cls.get('name')}·{section}] {sub.get('name')} marked as SUBSTITUTE for '{next((s['name'] for s in subjects if s['id']==sid), sid)}' on {day.upper()} P{period}."
+            )
+
     # Re-sort slots in canonical day/period order (locks were skipped during assignment)
     day_idx = {d: i for i, d in enumerate(DAYS_ORDER)}
     slots.sort(key=lambda s: (day_idx.get(s["day"], 99), s["period"]))
@@ -820,6 +934,11 @@ def _generate_section_schedule(
         "periods_per_day": periods_per_day,
         "total_teaching_slots": total_slots,
         "break_periods": [{"period": p, "label": lbl} for p, lbl in sorted(break_periods.items())],
+        "repair_stats": {
+            "attempts": repair_attempts,
+            "swap_repairs": swap_repairs,
+            "substitute_repairs": sub_repairs,
+        },
     }
 
 
@@ -1250,8 +1369,9 @@ async def save_timetable_batch(
         for s in sec.slots:
             if s.get("is_break"):
                 continue
-            if not s.get("teacher_id"):
-                continue
+            # Persist UNFILLED (teacher_id="") slots too so admins can see gaps and
+            # the sidebar badge / coverage report can count them.
+            tid = s.get("teacher_id") or ""
             docs.append({
                 "id": new_id(),
                 "school_id": user["school_id"],
@@ -1260,18 +1380,22 @@ async def save_timetable_batch(
                 "day": s["day"],
                 "period": s["period"],
                 "subject_id": s.get("subject_id") or "",
-                "teacher_id": s["teacher_id"],
+                "teacher_id": tid,
                 "start_time": s.get("start_time"),
                 "end_time": s.get("end_time"),
+                "is_substitute": bool(s.get("is_substitute")),
+                "is_locked": bool(s.get("is_locked")),
                 "created_at": utc_now(),
             })
         if docs:
             await tdb.timetable.insert_many(docs)
-            inserted_total += len(docs)
+            inserted_total += sum(1 for d in docs if d["teacher_id"])
             notified_total += len({d["teacher_id"] for d in docs if d.get("teacher_id")})
             try:
+                # Only notify teachers actually assigned (skip unfilled rows)
+                notified_docs = [d for d in docs if d["teacher_id"]]
                 await _notify_teachers_of_timetable_change(
-                    user["school_id"], sec.class_id, sec.section.upper(), docs, user,
+                    user["school_id"], sec.class_id, sec.section.upper(), notified_docs, user,
                 )
             except Exception:
                 pass
@@ -1510,6 +1634,206 @@ async def download_section_pdf(
         media_type="application/pdf",
         headers={"Content-Disposition": f"inline; filename={fname}"},
     )
+
+
+# ---------------- v43: Coverage report + substitute fill ----------------
+
+@router.get("/coverage")
+async def coverage_report(user: dict = Depends(get_current_user)):
+    """Aggregate how many (class·section)s have unfilled slots, plus the total
+    unfilled cell count. Used by the sidebar badge.
+    """
+    if user["role"] not in ("school_admin", "teacher"):
+        return {"sections_with_unfilled": 0, "total_unfilled": 0, "details": []}
+    tdb = await tenant_db(user["school_id"])
+    rows = await tdb.timetable.aggregate([
+        {"$match": {"school_id": user["school_id"], "$or": [{"teacher_id": ""}, {"teacher_id": None}]}},
+        {"$group": {
+            "_id": {"class_id": "$class_id", "section": "$section"},
+            "unfilled": {"$sum": 1},
+        }},
+    ]).to_list(2000)
+    total = sum(r["unfilled"] for r in rows)
+    details = [{"class_id": r["_id"]["class_id"], "section": r["_id"]["section"], "unfilled": r["unfilled"]} for r in rows]
+    return {"sections_with_unfilled": len(details), "total_unfilled": total, "details": details}
+
+
+class SubstituteSuggestRequest(BaseModel):
+    class_id: str
+    section: str
+    day: Literal["mon", "tue", "wed", "thu", "fri", "sat"]
+    period: int = Field(..., ge=1, le=12)
+    prefer_subject_id: Optional[str] = None
+
+
+@router.post("/substitute-suggest")
+async def substitute_suggest(
+    payload: SubstituteSuggestRequest,
+    user: dict = Depends(require_roles("school_admin")),
+):
+    """For an unfilled slot, return a ranked list of teachers free at (day, period).
+    Teachers of `prefer_subject_id` rank highest; then any free teacher."""
+    from core.db import get_db as _root_db
+    tdb = await tenant_db(user["school_id"])
+    rdb = _root_db()
+
+    teachers = await rdb.users.find(
+        {"school_id": user["school_id"], "role": "teacher", "is_active": True},
+        {"_id": 0, "id": 1, "name": 1, "subjects": 1},
+    ).to_list(2000)
+    if not teachers:
+        return {"suggestions": []}
+
+    occupied = await tdb.timetable.find(
+        {"school_id": user["school_id"], "day": payload.day, "period": payload.period,
+         "teacher_id": {"$nin": ["", None]}},
+        {"_id": 0, "teacher_id": 1, "class_id": 1, "section": 1},
+    ).to_list(2000)
+    busy_ids = {o["teacher_id"] for o in occupied}
+
+    same_day = await tdb.timetable.find(
+        {"school_id": user["school_id"], "day": payload.day, "teacher_id": {"$nin": ["", None]}},
+        {"_id": 0, "teacher_id": 1},
+    ).to_list(20000)
+    load: dict = {}
+    for s in same_day:
+        load[s["teacher_id"]] = load.get(s["teacher_id"], 0) + 1
+
+    from datetime import date as _date
+    today = _date.today().isoformat()
+    leaves = await tdb.teacher_leaves.find(
+        {"school_id": user["school_id"], "status": "approved",
+         "start_date": {"$lte": today}, "end_date": {"$gte": today}},
+        {"_id": 0, "teacher_id": 1},
+    ).to_list(2000)
+    on_leave_now = {lv["teacher_id"] for lv in leaves}
+
+    suggestions = []
+    for t in teachers:
+        if t["id"] in busy_ids:
+            continue
+        teaches_subject = bool(payload.prefer_subject_id and payload.prefer_subject_id in (t.get("subjects") or []))
+        suggestions.append({
+            "teacher_id": t["id"],
+            "teacher_name": t.get("name"),
+            "teaches_subject": teaches_subject,
+            "daily_load": load.get(t["id"], 0),
+            "on_leave_today": t["id"] in on_leave_now,
+        })
+    suggestions.sort(key=lambda s: (not s["teaches_subject"], s["on_leave_today"], s["daily_load"], s["teacher_name"] or ""))
+    return {"suggestions": suggestions[:20]}
+
+
+class SubstituteApplyRequest(BaseModel):
+    class_id: str
+    section: str
+    day: Literal["mon", "tue", "wed", "thu", "fri", "sat"]
+    period: int = Field(..., ge=1, le=12)
+    teacher_id: str
+    subject_id: Optional[str] = None
+    notify: bool = True
+
+
+@router.post("/substitute-apply")
+async def substitute_apply(
+    payload: SubstituteApplyRequest,
+    user: dict = Depends(require_roles("school_admin")),
+):
+    """Apply a substitute teacher to a specific slot. Returns 409 if the teacher
+    is already booked at that (day, period) elsewhere. Notifies the teacher."""
+    from core.db import get_db as _root_db
+    from core.telegram_sender import send_telegram
+    tdb = await tenant_db(user["school_id"])
+    rdb = _root_db()
+
+    conflict = await tdb.timetable.find_one({
+        "school_id": user["school_id"],
+        "day": payload.day, "period": payload.period,
+        "teacher_id": payload.teacher_id,
+        "$nor": [{"class_id": payload.class_id, "section": payload.section.upper()}],
+    })
+    if conflict:
+        raise HTTPException(status_code=409, detail={
+            "error": "teacher_conflict",
+            "message": f"This teacher is already booked at {payload.day.upper()} P{payload.period}.",
+            "conflict_with": {
+                "class_id": conflict["class_id"], "section": conflict["section"],
+                "subject_id": conflict.get("subject_id"),
+            },
+        })
+
+    existing = await tdb.timetable.find_one({
+        "school_id": user["school_id"],
+        "class_id": payload.class_id,
+        "section": payload.section.upper(),
+        "day": payload.day, "period": payload.period,
+    })
+    update = {
+        "teacher_id": payload.teacher_id,
+        "is_substitute": True,
+        "updated_at": utc_now(),
+    }
+    if payload.subject_id:
+        update["subject_id"] = payload.subject_id
+    if existing:
+        await tdb.timetable.update_one({"id": existing["id"]}, {"$set": update})
+        slot_id = existing["id"]
+        subj_id = update.get("subject_id") or existing.get("subject_id") or ""
+    else:
+        doc = {
+            "id": new_id(),
+            "school_id": user["school_id"],
+            "class_id": payload.class_id,
+            "section": payload.section.upper(),
+            "day": payload.day,
+            "period": payload.period,
+            "subject_id": payload.subject_id or "",
+            "teacher_id": payload.teacher_id,
+            "is_substitute": True,
+            "created_at": utc_now(),
+        }
+        await tdb.timetable.insert_one(doc)
+        slot_id = doc["id"]
+        subj_id = doc["subject_id"]
+
+    await log_action(
+        user["id"], user["role"], user["school_id"],
+        "apply_substitute", "timetable_slot", slot_id,
+        meta={"day": payload.day, "period": payload.period, "teacher_id": payload.teacher_id},
+    )
+
+    if payload.notify:
+        try:
+            teacher = await rdb.users.find_one(
+                {"id": payload.teacher_id, "school_id": user["school_id"]},
+                {"_id": 0, "id": 1, "name": 1, "telegram_chat_id": 1, "phone": 1},
+            )
+            cls = await tdb.classes.find_one({"id": payload.class_id}, {"_id": 0, "name": 1})
+            subj = await tdb.subjects.find_one({"id": subj_id}, {"_id": 0, "name": 1}) if subj_id else None
+            msg = (
+                f"📌 You've been assigned as substitute for "
+                f"{(cls or {}).get('name', 'a class')}·{payload.section.upper()}: "
+                f"{payload.day.upper()} period {payload.period}"
+                + (f" ({(subj or {}).get('name')})" if subj else "")
+            )
+            if teacher and teacher.get("telegram_chat_id"):
+                send_telegram(teacher["telegram_chat_id"], msg)
+            await queue_notification(
+                school_id=user["school_id"],
+                recipient_type="teacher",
+                recipient_id=payload.teacher_id,
+                phone=(teacher or {}).get("phone"),
+                channel="in_app",
+                template="substitute_assigned",
+                message=msg,
+                context={"class_id": payload.class_id, "section": payload.section.upper(),
+                         "day": payload.day, "period": payload.period},
+            )
+        except Exception:
+            pass
+
+    return {"ok": True, "slot_id": slot_id}
+
 
 
 # end of timetable router
