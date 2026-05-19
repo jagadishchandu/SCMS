@@ -28,7 +28,7 @@
     "/messages/{id}/smart-action (L1774) is idempotent via the smart_action_done stamp + 409. Uses upsert for attendance ($setOnInsert id/created_at) so re-runs against an existing day still write the new note/status. WS event 'smart_action_done' fans to all conv participants so the parent can also see the outcome in real-time.",
     "_send_followup_to_parent (L1732) reuses _upsert_conversation + _trim_conversation_history so the payment-link / extension / acknowledge follow-up messages behave exactly like normal 1-1 messages (unread counter increment + WS fan-out). No duplicate plumbing.",
     "ChatPage.jsx renders the orange dashed 'Suggested actions' row (chat-smart-actions / chat-smart-action / chat-smart-action-done css classes), collapses to a single ✅ outcome line once an action is taken, has a WS 'smart_action_done' listener that mutates state in place. Excellent testability with chat-smart-action-{msgid}-{action} data-testids.",
-    "Note: send_payment_link uses a hard-coded preview URL 'https://classroom-messenger-1.preview.emergentagent.com/parent/fees' (L1854). Acceptable for the demo but should ideally come from an env var so prod deploys don't ship the preview hostname."
+    "Note: send_payment_link uses a hard-coded preview URL 'https://case-insensitive-id.preview.emergentagent.com/parent/fees' (L1854). Acceptable for the demo but should ideally come from an env var so prod deploys don't ship the preview hostname."
   ],
   "updated_files": [
     "/app/backend/tests/test_iter34_contacts_smart_actions.py (new — 15 tests)",

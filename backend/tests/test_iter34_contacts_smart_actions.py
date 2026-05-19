@@ -42,7 +42,7 @@ def _arun(coro):
 
 
 BASE_URL = (os.environ.get("REACT_APP_BACKEND_URL")
-            or "https://classroom-messenger-1.preview.emergentagent.com").rstrip("/")
+            or "https://case-insensitive-id.preview.emergentagent.com").rstrip("/")
 API = f"{BASE_URL}/api"
 SYSTEM_PEER = "system::school-notifications"
 

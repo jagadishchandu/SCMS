@@ -14,7 +14,7 @@ import pytest
 import requests
 import websockets
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://classroom-messenger-1.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://case-insensitive-id.preview.emergentagent.com").rstrip("/")
 API = f"{BASE_URL}/api"
 
 PRINCIPAL = ("principal@sunrise.edu", "School@123", "school_admin")
