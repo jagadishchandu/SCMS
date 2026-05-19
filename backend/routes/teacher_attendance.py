@@ -157,6 +157,7 @@ async def list_absentees(
     - week -> students with any absence in the Mon-Sun week of the picked date
               (count of absent + sick days, and total days they had records)
     - month-> same as week but for the picked month + attendance percentage
+              + comparison block with prior month stats and per-student deltas
 
     Implementation: Mongo aggregation pipeline ($group on student_id with
     conditional sums per status, then $match to keep only students with at
@@ -179,50 +180,19 @@ async def list_absentees(
         month_key = base.strftime("%Y-%m")
         date_match = {"date": {"$regex": f"^{month_key}-"}}
 
-    match_stage: dict = {"school_id": user["school_id"], **date_match}
-    if class_id:
-        match_stage["class_id"] = class_id
-    if section:
-        match_stage["section"] = section
-
-    # Build the $group expression: one counter per status using $sum + $cond.
-    def _sum_when(status_val: str) -> dict:
-        return {"$sum": {"$cond": [{"$eq": ["$status", status_val]}, 1, 0]}}
-
-    pipeline = [
-        {"$match": match_stage},
-        {"$group": {
-            "_id": "$student_id",
-            "absent_days": _sum_when("absent"),
-            "sick_days": _sum_when("sick"),
-            "present_days": _sum_when("present"),
-            "late_days": _sum_when("late"),
-            "half_day_days": _sum_when("half_day"),
-            "excused_days": _sum_when("excused"),
-            "total_days": {"$sum": 1},
-            # Last absent/sick date — pick the max date when status is absent|sick.
-            "last_absent_date": {"$max": {
-                "$cond": [
-                    {"$in": ["$status", ["absent", "sick"]]},
-                    "$date",
-                    None,
-                ],
-            }},
-        }},
-        # Keep only students with at least one absent/sick day.
-        {"$match": {"$expr": {"$gt": [{"$add": ["$absent_days", "$sick_days"]}, 0]}}},
-        # Order so the worst absentees are at the top (most absences first).
-        {"$sort": {"absent_days": -1, "sick_days": -1}},
-    ]
-
-    rows = await tdb.attendance.aggregate(pipeline).to_list(20000)
+    rows = await _aggregate_absentees(
+        tdb, user["school_id"], date_match, class_id, section, only_absentees=True,
+    )
     if not rows:
-        return {
+        empty = {
             "period": period,
             "date": base.isoformat(),
             "absentees": [],
             "summary": {"students": 0, "total_absent_days": 0, "total_sick_days": 0},
         }
+        if period == "month":
+            empty["comparison"] = _empty_comparison(base)
+        return empty
 
     absentee_ids = [r["_id"] for r in rows]
     students = await tdb.students.find(
@@ -233,6 +203,31 @@ async def list_absentees(
     ).to_list(500)
     class_map = {c["id"]: c["name"] for c in classes}
     s_map = {s["id"]: s for s in students}
+
+    # For month period, also run the same pipeline for the previous month so we
+    # can attach per-student deltas + an aggregate prev_summary. We include ALL
+    # students in the prior month (not just absentees) so the delta is correct
+    # for students who were absent last month but present this month, and vice
+    # versa.
+    prev_by_id: dict[str, dict] = {}
+    prev_month_key: Optional[str] = None
+    prev_summary: dict = {"students": 0, "total_absent_days": 0, "total_sick_days": 0}
+    if period == "month":
+        prev_month_first = (base.replace(day=1) - timedelta(days=1)).replace(day=1)
+        prev_month_key = prev_month_first.strftime("%Y-%m")
+        prev_rows = await _aggregate_absentees(
+            tdb,
+            user["school_id"],
+            {"date": {"$regex": f"^{prev_month_key}-"}},
+            class_id, section,
+            only_absentees=False,
+        )
+        prev_by_id = {r["_id"]: r for r in prev_rows}
+        prev_summary = {
+            "students": sum(1 for r in prev_rows if (r.get("absent_days", 0) + r.get("sick_days", 0)) > 0),
+            "total_absent_days": sum(r.get("absent_days", 0) for r in prev_rows),
+            "total_sick_days": sum(r.get("sick_days", 0) for r in prev_rows),
+        }
 
     # Need the last-absent status (absent vs sick) — one extra targeted lookup
     # per matched student. Keeps the aggregation simple while preserving the row.
@@ -253,7 +248,7 @@ async def list_absentees(
             )
             if last_rec:
                 last_status = last_rec.get("status")
-        absentees.append({
+        row = {
             "student_id": sid,
             "absent_days": r.get("absent_days", 0),
             "sick_days": r.get("sick_days", 0),
@@ -271,15 +266,107 @@ async def list_absentees(
             "section": stu.get("section"),
             "parent_phone": (stu.get("parent") or {}).get("phone"),
             "attendance_percentage": pct,
-        })
+        }
+        if period == "month":
+            prev = prev_by_id.get(sid) or {}
+            prev_absent = prev.get("absent_days", 0)
+            prev_sick = prev.get("sick_days", 0)
+            prev_total = prev.get("total_days", 0)
+            prev_present_like = (
+                prev.get("present_days", 0)
+                + prev.get("late_days", 0)
+                + prev.get("half_day_days", 0)
+            )
+            prev_pct = round((prev_present_like / prev_total) * 100, 1) if prev_total else None
+            row["prev_absent_days"] = prev_absent
+            row["prev_sick_days"] = prev_sick
+            row["prev_total_days"] = prev_total
+            row["prev_attendance_percentage"] = prev_pct
+            row["delta_absent_days"] = row["absent_days"] - prev_absent
+            row["delta_total_absences"] = (row["absent_days"] + row["sick_days"]) - (prev_absent + prev_sick)
+            row["delta_attendance_percentage"] = (
+                round(pct - prev_pct, 1) if prev_pct is not None else None
+            )
+        absentees.append(row)
     summary = {
         "students": len(absentees),
         "total_absent_days": sum(a["absent_days"] for a in absentees),
         "total_sick_days": sum(a["sick_days"] for a in absentees),
     }
-    return {
+    response: dict = {
         "period": period,
         "date": base.isoformat(),
         "absentees": absentees,
         "summary": summary,
     }
+    if period == "month":
+        response["comparison"] = {
+            "prev_month": prev_month_key,
+            "prev_summary": prev_summary,
+            "delta_students": summary["students"] - prev_summary["students"],
+            "delta_absent_days": summary["total_absent_days"] - prev_summary["total_absent_days"],
+            "delta_sick_days": summary["total_sick_days"] - prev_summary["total_sick_days"],
+        }
+    return response
+
+
+def _empty_comparison(base: date_cls) -> dict:
+    prev_first = (base.replace(day=1) - timedelta(days=1)).replace(day=1)
+    return {
+        "prev_month": prev_first.strftime("%Y-%m"),
+        "prev_summary": {"students": 0, "total_absent_days": 0, "total_sick_days": 0},
+        "delta_students": 0,
+        "delta_absent_days": 0,
+        "delta_sick_days": 0,
+    }
+
+
+async def _aggregate_absentees(
+    tdb,
+    school_id: str,
+    date_match: dict,
+    class_id: Optional[str],
+    section: Optional[str],
+    only_absentees: bool,
+) -> list[dict]:
+    """Run the per-student attendance aggregation for a date window.
+    When `only_absentees` is True, the result is filtered to students with
+    at least one absent or sick day (used for the main list). When False,
+    every student with any row in the window is returned (used to compute
+    deltas for last month even if they were present every day).
+    """
+    match_stage: dict = {"school_id": school_id, **date_match}
+    if class_id:
+        match_stage["class_id"] = class_id
+    if section:
+        match_stage["section"] = section
+
+    def _sum_when(status_val: str) -> dict:
+        return {"$sum": {"$cond": [{"$eq": ["$status", status_val]}, 1, 0]}}
+
+    pipeline: list[dict] = [
+        {"$match": match_stage},
+        {"$group": {
+            "_id": "$student_id",
+            "absent_days": _sum_when("absent"),
+            "sick_days": _sum_when("sick"),
+            "present_days": _sum_when("present"),
+            "late_days": _sum_when("late"),
+            "half_day_days": _sum_when("half_day"),
+            "excused_days": _sum_when("excused"),
+            "total_days": {"$sum": 1},
+            "last_absent_date": {"$max": {
+                "$cond": [
+                    {"$in": ["$status", ["absent", "sick"]]},
+                    "$date",
+                    None,
+                ],
+            }},
+        }},
+    ]
+    if only_absentees:
+        pipeline.append(
+            {"$match": {"$expr": {"$gt": [{"$add": ["$absent_days", "$sick_days"]}, 0]}}}
+        )
+        pipeline.append({"$sort": {"absent_days": -1, "sick_days": -1}})
+    return await tdb.attendance.aggregate(pipeline).to_list(20000)

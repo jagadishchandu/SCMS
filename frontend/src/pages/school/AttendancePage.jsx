@@ -238,6 +238,10 @@ function AbsenteesTab() {
         <KPI label="Total sick days" value={summary.total_sick_days || 0} accent="info" testId="kpi-sick-days" />
       </div>
 
+      {period === "month" && data?.comparison && (
+        <CompareRibbon current={summary} comparison={data.comparison} />
+      )}
+
       <Section title={`Absentees (${absentees.length})`} subtitle={loading ? "Loading…" : `Sorted by total absences. Period: ${period}.`}>
         {absentees.length === 0 ? (
           <Empty title="Nobody absent" message={`No absences recorded for the selected ${period}.`} />
@@ -253,6 +257,7 @@ function AbsenteesTab() {
                   <th className="text-right p-3">Sick</th>
                   {period !== "day" && <th className="text-right p-3">Total days</th>}
                   {period === "month" && <th className="text-right p-3">% attendance</th>}
+                  {period === "month" && <th className="text-right p-3">vs last month</th>}
                   <th className="text-left p-3">Last absent</th>
                   <th className="text-left p-3">Parent phone</th>
                 </tr>
@@ -271,6 +276,11 @@ function AbsenteesTab() {
                         {a.attendance_percentage}%
                       </td>
                     )}
+                    {period === "month" && (
+                      <td className="p-3 text-right" data-testid={`absentee-delta-${a.student_uid}`}>
+                        <DeltaChip value={a.delta_total_absences} pctValue={a.delta_attendance_percentage} />
+                      </td>
+                    )}
                     <td className="p-3 text-ink-soft text-xs">
                       {a.last_absent_date}
                       {a.last_absent_status === "sick" && <span className="ml-1 badge bg-status-info/10 text-status-info">sick</span>}
@@ -284,6 +294,94 @@ function AbsenteesTab() {
         )}
       </Section>
     </>
+  );
+}
+
+/* ---------- Comparison ribbon (month view) ---------- */
+function CompareRibbon({ current, comparison }) {
+  const prevLabel = useMemo(() => {
+    if (!comparison?.prev_month) return "";
+    const [y, m] = comparison.prev_month.split("-");
+    return new Date(Number(y), Number(m) - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  }, [comparison?.prev_month]);
+
+  // For school health: fewer absent + sick days = improvement (green).
+  const dAbs = comparison?.delta_absent_days ?? 0;
+  const dSick = comparison?.delta_sick_days ?? 0;
+  const dStu = comparison?.delta_students ?? 0;
+  const dTotalDays = dAbs + dSick;
+  const improving = dTotalDays < 0;
+  const flat = dTotalDays === 0;
+  const tone = flat
+    ? "border-line bg-bg-subtle"
+    : improving
+      ? "border-status-success/40 bg-status-success/5"
+      : "border-status-danger/40 bg-status-danger/10";
+  const headline = flat
+    ? "No change vs last month"
+    : improving
+      ? `Improving — ${Math.abs(dTotalDays)} fewer absences than last month`
+      : `Sliding — ${dTotalDays} more absences than last month`;
+
+  return (
+    <div className={"rounded-lg border p-4 mb-6 " + tone} data-testid="absentees-compare-ribbon">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <div className="text-xs uppercase tracking-wider text-ink-muted" data-testid="compare-ribbon-prev-label">
+            vs {prevLabel || "last month"}
+          </div>
+          <div className="font-display text-lg font-medium mt-0.5" data-testid="compare-ribbon-headline">{headline}</div>
+        </div>
+        <div className="flex flex-wrap gap-3 text-xs">
+          <CompareTile label="Students with absences" current={current.students} prev={comparison.prev_summary?.students} delta={dStu} reverseColor />
+          <CompareTile label="Absent days" current={current.total_absent_days} prev={comparison.prev_summary?.total_absent_days} delta={dAbs} reverseColor />
+          <CompareTile label="Sick days" current={current.total_sick_days} prev={comparison.prev_summary?.total_sick_days} delta={dSick} reverseColor />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CompareTile({ label, current, prev, delta, reverseColor = false }) {
+  // reverseColor=true means "down is good" (fewer absences = green).
+  const isImproved = reverseColor ? (delta < 0) : (delta > 0);
+  const isWorsened = reverseColor ? (delta > 0) : (delta < 0);
+  const sign = delta > 0 ? "+" : "";
+  const cls = delta === 0
+    ? "text-ink-muted"
+    : isImproved ? "text-status-success" : isWorsened ? "text-status-danger" : "text-ink-muted";
+  return (
+    <div className="rounded-md border border-line bg-bg-surface px-3 py-2 min-w-[8rem]">
+      <div className="text-[10px] uppercase tracking-wider text-ink-muted">{label}</div>
+      <div className="flex items-baseline gap-2 mt-0.5">
+        <span className="font-display text-base font-medium leading-none">{current}</span>
+        <span className="text-[11px] text-ink-muted">from {prev}</span>
+      </div>
+      <div className={"text-[11px] font-medium mt-0.5 " + cls}>{sign}{delta}</div>
+    </div>
+  );
+}
+
+function DeltaChip({ value, pctValue }) {
+  // value is "absent+sick" delta; pctValue is attendance% delta.
+  // Fewer absences is good (green). A higher attendance% is also good.
+  if (value === null || value === undefined) return <span className="text-ink-muted">—</span>;
+  const sign = value > 0 ? "+" : "";
+  const tone = value === 0
+    ? "text-ink-muted"
+    : value < 0
+      ? "text-status-success"
+      : "text-status-danger";
+  const arrow = value === 0 ? "→" : value < 0 ? "▼" : "▲";
+  return (
+    <div className={"inline-flex flex-col items-end " + tone}>
+      <span className="font-medium">{arrow} {sign}{value}</span>
+      {pctValue !== null && pctValue !== undefined && (
+        <span className="text-[10px] opacity-80">
+          {pctValue > 0 ? "+" : ""}{pctValue}% attd
+        </span>
+      )}
+    </div>
   );
 }
 
