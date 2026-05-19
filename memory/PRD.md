@@ -16,6 +16,36 @@
 - School Super Admin (per school)
 - Accounts / Teacher / Parent
 
+## Iteration — 2026-01 (current session, v41) — Locks, daily cap, Telegram-publish, ClassesPage parity
+**Original ask:** (1) Publish saved batch timetable as PDF via Telegram to teachers + parents, (2) lock teacher per slot in the builder, (3) migrate ClassesPage suggest modal to /suggest-batch, (4) cap per-teacher periods/day.
+
+**Backend**
+- `SuggestTimetableRequest` extended with `locked_assignments[]` (`{day, period, teacher_id, subject_id?}`) and `max_periods_per_day_per_teacher` (int). Both also accepted on `BatchSectionRequest`.
+- `_generate_section_schedule` now:
+  - Excludes locked positions from greedy assignment.
+  - Materialises locks with `is_locked=true` and warns if the locked teacher was already busy.
+  - Enforces `max_periods_per_day_per_teacher` by tracking `(teacher_id, day) → count`; surfaces a “per-day cap” warning when the cap blocks an assignment.
+  - Sorts final slots in canonical day/period order (locks were skipped during the greedy pass).
+- `/suggest-batch` pre-seeds the global `busy` set with every section's locked teachers BEFORE per-section generation, so a lock in section A cannot be overridden by greedy in section B.
+- **New endpoint `POST /api/timetable/publish`** — reads the saved timetable, generates per-teacher PDFs (their own weekly grid) and per-section PDFs (re-used for every child in that section), ships them via Telegram `sendDocument`. Returns a delivery report (`teachers_total/sent/failed`, `parents_total/sent/failed`, `failures[]` capped at 50 with `failures_truncated`).
+- **New endpoint `GET /api/timetable/pdf/section`** — admin preview/download of a single section's PDF.
+- **New helper `core/timetable_pdf.py`** — reportlab generators: `section_pdf`, `teacher_pdf`, `school_pdf` with landscape A4, colour-coded cells (blue = class teacher, purple = locked, yellow = break, red = unfilled).
+- **`core/telegram_sender.py`** gained `send_telegram_document(chat_id, filename, bytes, caption, mime)`.
+- `audit.log_action` is now imported at top of `routes/timetable.py`; publish actions are logged with delivery counts.
+
+**Frontend**
+- `TimetableBuilderPage.jsx`:
+  - New global config field **“Max periods/day per teacher”** (blank = no cap).
+  - Each section grid cell has an expandable **“Lock…”** sub-form: teacher dropdown + optional subject dropdown + clear-lock button. Locked cells render with a primary-tinted left border and a 🔒 icon.
+  - New **“📤 Publish to Telegram”** button appears after the result panel; shows confirm dialog, posts to `/publish`, then renders a delivery-report panel (teachers sent/total, parents sent/total, first 20 failures with reasons).
+- `ClassesPage.jsx` suggest modal: rewired from `/timetable/suggest` to `/timetable/suggest-batch` with a single-section payload; response is projected back into the legacy shape so the existing UI keeps working (no UI change for users).
+
+**Tests**
+- v41 testing subagent → **24/24 tests passed** (11 new + 13 v40 regression). Verified: `locked_assignments` single + cross-section busy priority + `is_locked` + teacher_view propagation; `max_periods_per_day_per_teacher` enforcement + warning; `/publish` shape + class_ids filter + 400 precondition; `/pdf/section` valid PDF binary + 404 path; `/suggest` back-compat; combined regression mixing locks + breaks + class-teacher pin + allowed-periods + heavy cap + day-cap in one call.
+- Demo data: zero `telegram_chat_id`s configured, so the publish-delivery report intentionally shows every recipient as `telegram_not_linked` — exactly the right reporting behavior to verify.
+
+
+
 ## Iteration — 2026-01 (current session, v40) — Multi-section auto-scheduler
 **Original ask:** Generate weekly timetables for multiple grades/sections in one go with these rules: subject frequency, balanced distribution, allowed periods (lab/sports/library), max consecutive heavy subjects, class-teacher period, fixed breaks, no cross-section teacher conflicts, conflict highlights, optimization suggestions. Outputs: per-section grid, teacher-wise grid, conflict summary, suggestions.
 
