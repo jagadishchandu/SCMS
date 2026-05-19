@@ -16,6 +16,33 @@
 - School Super Admin (per school)
 - Accounts / Teacher / Parent
 
+## Iteration — 2026-01 (current session, v44) — Add-teacher inline, class_subjects, HARD same-grade subject uniqueness, in-UI help
+**User asks delivered:**
+1. **"Add Teacher" right inside the Timetable Builder** with optional grade × subject mapping.
+2. **Same-grade-different-section same-time same-subject must NEVER happen** — now a HARD constraint with a cross-section repair pass.
+3. **In-UI help text everywhere** — every field has dynamic helper text that updates as values change.
+
+**Backend**
+- `UserCreate`/`UserUpdate` gained an optional `class_subjects: dict[class_id, list[subject_id]]` field. `/api/users` POST + PATCH persist it.
+- **Scheduler honours `class_subjects`**: new helpers `_build_subject_teacher_index` + `_teachers_for_subject_in_class`. When a teacher has a non-empty `class_subjects`, they can ONLY be assigned to the (class, subject) pairs listed. Legacy teachers without the field continue to use their global `subjects[]`. Tested: a teacher with `class_subjects={Grade5: [Math]}` is never placed in Grade 6 or in any non-Math Grade 5 slot.
+- **HARD same-grade subject uniqueness**: new shared dict `same_grade_slot_subjects: dict[(class_id, day, period), set[subject_id]]` passed through `/suggest-batch`. Greedy filter step 2.5 excludes subjects already used by sibling sections at (day, period); falls back only when literally no alternative exists, with an explicit warning.
+- **Cross-section repair pass** `_repair_same_grade_collisions()` runs after the per-section loop. For every remaining duplicate-subject-at-same-slot it does an intra-section swap, honouring teacher availability, daily cap, leave, no-last-period (using the real last *instructional* period — accounts for end-of-day lunch). Returns `same_grade_collisions_repaired` int on the conflict_summary.
+- Fixed greedy phase bug: `is_last = period == periods_per_day` was wrong when lunch was the last period; now uses computed `last_inst = the actual last instructional period`.
+
+**Frontend**
+- **`AddTeacherModal.jsx`** — invoked from a new "+ Add teacher" button at the top of the Timetable Builder. Captures name, email, password, phone, global subjects, and an optional collapsible **grade × subject matrix** for per-grade restrictions. Creates the user via `POST /api/users` and instantly refreshes the teachers list so they're available for scheduling.
+- **TimetableBuilderPage** got a full UX overhaul:
+  - New **"How this builder works"** quick-guide panel at the top, with a 🛡️ Guarantees line ("no teacher double-booking, no same-subject in same period across sections of same grade, unfilled cells auto-repaired").
+  - Each major panel renamed to **Step 1 / Step 2 / Step 3 / Step 4** with a `subtitle` (new prop on `Section`).
+  - Every input has **dynamic helper text** below it (e.g. "Period 4 is reserved as lunch in every section — no class scheduled", "Lower numbers may leave some slots needing substitutes", "5 working days → 30 teaching slots/week per section"). Hints update live as values change.
+  - Subject matrix table gained a 4-bullet help block describing every column.
+  - Section cards gained a "💡 # students is informational only…" hint line.
+
+**Tests**
+- v44 testing subagent → **46/46 tests passed** (8 v44 main + 3 v44 contract + 35 prior regression). Specifically verified: 0 same-grade subject collisions in the 4-section worst case (1 detected and repaired by the cross-section pass); class_subjects restriction; cap + no-last-period preserved through swap; legacy teachers unaffected.
+
+
+
 ## Iteration — 2026-01 (current session, v43) — 0% unfilled + substitute fill + coverage badge
 **User asks delivered:**
 1. **0% unfilled rate** — generation now fills every slot via a repair pass.

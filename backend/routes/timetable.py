@@ -595,6 +595,11 @@ def _generate_section_schedule(
 
     # Validate subject ids
     valid_sids = {s["id"] for s in subjects}
+    # The actual LAST INSTRUCTIONAL period (may differ from periods_per_day when
+    # the trailing slot is a break, e.g. lunch at the end of the day).
+    last_inst = periods_per_day
+    while last_inst in break_periods and last_inst > 0:
+        last_inst -= 1
     no_last_set = {sid for sid in (payload.no_last_period_subjects or []) if sid in valid_sids}
     day_pins: dict[str, set] = {}
     for sid, pinned in (payload.subject_day_pins or {}).items():
@@ -664,7 +669,7 @@ def _generate_section_schedule(
         return n
 
     for (day, period) in positions:
-        is_last = period == periods_per_day
+        is_last = period == last_inst
         history = last_subjects_per_day[day]
         last_subj = history[-1] if history else None
         consec_heavy = _consecutive_heavy(history)
@@ -1338,6 +1343,7 @@ async def suggest_timetable_batch(
     no_last_set: set[str] = set()
     max_ppd_teacher = None
     max_periods_per_day_overall = 1
+    last_instructional_period = None  # earliest "true last period" across sections
     for sec in payload.sections:
         merged = _merge_section_request(payload.defaults, sec)
         if merged.no_last_period_subjects:
@@ -1347,6 +1353,18 @@ async def suggest_timetable_batch(
         ):
             max_ppd_teacher = merged.max_periods_per_day_per_teacher
         max_periods_per_day_overall = max(max_periods_per_day_overall, merged.periods_per_day)
+        # Compute this section's last INSTRUCTIONAL period (accounting for end-of-day breaks)
+        ppd = merged.periods_per_day
+        end_breaks = set()
+        if merged.lunch_break_period:
+            end_breaks.add(merged.lunch_break_period)
+        for fb in (merged.fixed_breaks or []):
+            end_breaks.add(fb.period)
+        last_inst = ppd
+        while last_inst in end_breaks and last_inst > 0:
+            last_inst -= 1
+        if last_instructional_period is None or last_inst < last_instructional_period:
+            last_instructional_period = last_inst
 
     collisions_fixed = _repair_same_grade_collisions(
         section_results=section_results, subjects=subjects,
@@ -1356,6 +1374,7 @@ async def suggest_timetable_batch(
         max_periods_per_day_per_teacher=max_ppd_teacher,
         no_last_period_subjects=no_last_set,
         periods_per_day=max_periods_per_day_overall,
+        last_instructional_period=last_instructional_period or max_periods_per_day_overall,
     )
     if collisions_fixed:
         # all_slots was a flat copy; rebuild from section_results so downstream views
@@ -1382,6 +1401,7 @@ def _repair_same_grade_collisions(
     max_periods_per_day_per_teacher: Optional[int] = None,
     no_last_period_subjects: Optional[set[str]] = None,
     periods_per_day: int = 12,
+    last_instructional_period: Optional[int] = None,
 ) -> int:
     """Detect cases where two sections of the SAME class_id end up with the same
     subject at the same (day, period). Resolve by intra-section swap.
@@ -1391,6 +1411,10 @@ def _repair_same_grade_collisions(
     """
     fixed = 0
     no_last_period_subjects = no_last_period_subjects or set()
+    # The real "last instructional period" may be earlier than `periods_per_day`
+    # when the trailing slot is a break (e.g. lunch at the end of the day).
+    if last_instructional_period is None:
+        last_instructional_period = periods_per_day
     keyed: dict[tuple, list] = {}
     for ri, res in enumerate(section_results):
         for si, sl in enumerate(res["slots"]):
@@ -1446,11 +1470,12 @@ def _repair_same_grade_collisions(
                     }
                     if o_sid in others_at_dest or subj_id in others_at_src:
                         continue
-                    # Respect "no last period" soft rule: don't place those subjects at the last period
+                    # Respect "no last period" soft rule: don't place those subjects at the last
+                    # INSTRUCTIONAL period (may differ from periods_per_day when lunch is at the end).
                     if no_last_period_subjects:
-                        if o_sid in no_last_period_subjects and period == periods_per_day:
+                        if o_sid in no_last_period_subjects and period == last_instructional_period:
                             continue
-                        if subj_id in no_last_period_subjects and o_period == periods_per_day:
+                        if subj_id in no_last_period_subjects and o_period == last_instructional_period:
                             continue
                     # Teachers must remain valid:
                     #   v_tid moves to (o_day, o_period) — needs to teach o_sid AND be free there
