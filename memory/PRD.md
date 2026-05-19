@@ -16,6 +16,36 @@
 - School Super Admin (per school)
 - Accounts / Teacher / Parent
 
+
+## Iteration — 2026-01 (current session, part 4) — Login id rules + parent-login kill switch
+**Changes implemented (backend + frontend)**
+- Login ids are now case-insensitive and may be plain identifiers (no `@` required).
+  Applies to platform_admin, school_admin, teacher, accounts, parent.
+  - Backend: `LoginRequest.email`, `UserCreate.email`, `ParentInfo.email`,
+    `SchoolCreate.admin_email` are now plain `str` (was `EmailStr`).
+  - Backend: `auth.login` lowercases the incoming id before lookup; brute-force
+    identifier is also lowercased so case-variants can't bypass the lockout.
+  - Frontend `Login.jsx`: input type `email` → `text`, with helper copy.
+- Per-school **Parent-login kill switch** controlled by the Platform Super Admin.
+  - New endpoints: `GET /api/schools/{school_id}/parent-login`,
+    `PATCH /api/schools/{school_id}/parent-login` (platform_admin only).
+  - When `parent_login_enabled=False`, `auth.login` returns 403 to parents in
+    that school; other roles unaffected.
+  - Frontend: new `ParentLoginPanel` inside the Platform Overview school detail
+    drawer with a green/red toggle.
+- Duplicate-id guards (friendlier error messages):
+  - `POST /api/users` 400: `"Login id '<id>' already exists (role: <role>). ..."`.
+  - `POST /api/students` parent block: cannot reuse a non-parent (teacher/admin)
+    login id; cannot reuse a parent id that belongs to another school.
+  - `POST /api/schools` admin_email duplicate returns friendlier message.
+- Other-staff add bug FIX:
+  - Frontend `TeachersPage.jsx` CreateStaffModal sent `driver` / `coach` which
+    aren't in backend `StaffRole` Literal (`bus_driver`, `sports_coach`, ...).
+    Replaced `STAFF_ROLES` with `STAFF_ROLE_OPTIONS` listing the exact backend
+    values + human labels. Fixes the 422 error school admins were seeing.
+- Tests: `backend/tests/test_iter35_login_parent_toggle.py` — 25/25 pass.
+
+
 ## Iteration — 2026-01 (current session, part 3)
 **Unread-count badge on sidebar Notifications link**
 - New endpoints `GET /api/notifications/unread-count` and
