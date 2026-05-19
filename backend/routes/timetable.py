@@ -490,10 +490,12 @@ def _generate_section_schedule(
     busy: set,  # mutated in place
     teachers_on_leave_per_day: dict[str, set[str]],
     rr_index: dict[str, int],  # shared across batch so global load balances
+    cross_load: Optional[dict] = None,  # {(day, period, subject_id): count_so_far} shared across batch
+    teacher_day_load: Optional[dict] = None,  # {(teacher_id, day): count} shared across batch — enforces per-day cap globally
 ) -> dict:
-    """Core per-section greedy generator. Mutates `busy` and `rr_index`.
+    """Core per-section greedy generator. Mutates `busy`, `rr_index`, `cross_load`, and `teacher_day_load`.
 
-    Honours every v40 constraint:
+    Honours every v40+v41+v42 constraint:
       • subject_periods (frequency)
       • subject_day_pins
       • no_last_period_subjects
@@ -502,7 +504,14 @@ def _generate_section_schedule(
       • lunch_break_period + fixed_breaks
       • class_teacher (a daily fixed-period assignment)
       • approved-teacher-leave skip (via busy seeding)
+      • locked_assignments + max_periods_per_day_per_teacher (globally enforced across batch)
+      • cross-section subject staggering: avoids placing the same subject at the
+        same (day, period) in more sections than its teacher pool can serve.
     """
+    if cross_load is None:
+        cross_load = {}
+    if teacher_day_load is None:
+        teacher_day_load = {}
     days = payload.days or DAYS_ORDER[:5]
     days = [d for d in DAYS_ORDER if d in days]
     periods_per_day = payload.periods_per_day
@@ -570,9 +579,9 @@ def _generate_section_schedule(
                 "subject_id": la.subject_id or "",
             }
 
-    # Teacher-per-day load cap (None = unlimited)
+    # Teacher-per-day load cap (None = unlimited). `teacher_day_load` is supplied
+    # by the caller (shared across batch); when None we initialised it above.
     max_ppd_teacher = payload.max_periods_per_day_per_teacher
-    teacher_day_load: dict[tuple[str, str], int] = {}  # (teacher_id, day) -> count
 
     counts = _compute_subject_counts(
         subjects, total_slots, overrides, day_pins, len(days), periods_to_fill_per_day,
@@ -635,16 +644,29 @@ def _generate_section_schedule(
         non_repeat = [sid for sid in cand if sid != last_subj]
         cand = non_repeat if non_repeat else cand
 
+        # 6. cross-section subject staggering (soft):
+        #    If sibling sections already placed this subject at (day, period) as many
+        #    times as the subject has free teachers at that moment, this subject can
+        #    no longer be teacher-filled here — prefer a different subject.
+        def _pool_free_here(sid: str) -> int:
+            pool = subject_to_teachers.get(sid) or []
+            return sum(1 for t in pool if (day, period, t["id"]) not in busy)
+        with_pool = [sid for sid in cand if _pool_free_here(sid) > 0]
+        cand = with_pool if with_pool else cand
+
         if not cand:
             raise HTTPException(status_code=400, detail="Constraint solver failed — relax constraints and retry.")
 
-        # Greedy priority: day-pinned-here > most-remaining > stable
+        # Greedy priority:
+        #   day-pinned-here > allowed-here > less-loaded-at-this-slot > most-remaining > stable
         def _pri(sid: str) -> tuple:
             pin = day_pins.get(sid)
             pinned_here = 0 if (pin and day in pin) else 1
             ap = allowed_periods.get(sid)
             ap_here = 0 if (ap and period in ap) else 1
-            return (pinned_here, ap_here, -remaining[sid], sid)
+            # cross-section load at this exact (day, period): lower is better
+            same_slot_load = cross_load.get((day, period, sid), 0)
+            return (pinned_here, ap_here, same_slot_load, -remaining[sid], sid)
         cand.sort(key=_pri)
         chosen_sid = cand[0]
 
@@ -669,6 +691,8 @@ def _generate_section_schedule(
         assignment.append(chosen_sid)
         remaining[chosen_sid] -= 1
         last_subjects_per_day[day].append(chosen_sid)
+        # Track cross-section placement so sibling sections diverge naturally.
+        cross_load[(day, period, chosen_sid)] = cross_load.get((day, period, chosen_sid), 0) + 1
 
     # Materialise slots
     slots = []
@@ -1081,6 +1105,8 @@ async def suggest_timetable_batch(
                 busy.add((day_key, p, tid))
 
     rr_index: dict[str, int] = {}
+    cross_load: dict = {}
+    teacher_day_load: dict = {}
     # Pre-seed busy with all locked teachers from every section so they get priority.
     for sec in payload.sections:
         merged_locks = sec.locked_assignments or (payload.defaults.locked_assignments if payload.defaults else None) or []
@@ -1099,6 +1125,7 @@ async def suggest_timetable_batch(
             payload=merged, cls=cls, subjects=subjects,
             subject_to_teachers=subject_to_teachers, busy=busy,
             teachers_on_leave_per_day=teachers_on_leave_per_day, rr_index=rr_index,
+            cross_load=cross_load, teacher_day_load=teacher_day_load,
         )
         res["student_count"] = sec.student_count
         section_results.append(res)

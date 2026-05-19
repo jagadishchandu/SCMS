@@ -16,6 +16,27 @@
 - School Super Admin (per school)
 - Accounts / Teacher / Parent
 
+## Iteration — 2026-01 (current session, v42) — Cross-section subject staggering
+**Bug reported:** When generating timetables for all sections of a grade, the engine was placing the **same subject in the same period** across multiple sections (e.g. Math at P2 for both 5A and 5B). With a small teacher pool (one Math teacher), only one section got the teacher — the other was left "Unfilled".
+
+**Root cause**
+- Greedy subject-picking ran independently per section. Each section produced the same canonical day/period subject order, so identical subjects landed at identical slots.
+- `teacher_day_load` (per-teacher daily cap counter) was per-section-local — once section A hit cap, section B started fresh and the same teacher kept being picked, eventually exceeding the global cap (also caught: v41 test `test_cap_enforced_across_batch` was regressing once we had >3 teachers in the school).
+
+**Fix (`routes/timetable.py::_generate_section_schedule`)**
+- Added a 6th candidate filter step: **cross-section subject staggering**. For each (day, period) the engine evaluates `_pool_free_here(sid)` = number of teachers of `sid` whose `(day, period, teacher_id)` is NOT already in the shared `busy` set. Subjects with `0` free teachers at this slot are excluded so a different subject is picked. Falls back to original candidate list only when every option is exhausted (genuine capacity shortage).
+- Greedy priority key extended to deprioritize subjects already placed at the same (day, period) in a sibling section.
+- `cross_load[(day, period, subject_id)]` now passed by `/suggest-batch` and shared across all sections — increments after each pick.
+- `teacher_day_load` lifted from per-section local to a **shared dict across the whole batch**, so the `max_periods_per_day_per_teacher` cap is now enforced globally (not just within a single section).
+
+**Result (demo: 4 teachers, 5 subjects, 4 sections, 5 periods/day)**
+- Same-subject-same-slot occurrences: **29 → 4** (3 of the 4 are filled by different teachers, which is fine).
+- Slots unfilled due to subject clash: **6 → 1** (the 1 remaining is a genuine capacity-shortage edge case).
+- Teacher double-bookings: **0** (unchanged — already enforced).
+- All previous v40+v41 tests still pass (**24/24**).
+
+
+
 ## Iteration — 2026-01 (current session, v41) — Locks, daily cap, Telegram-publish, ClassesPage parity
 **Original ask:** (1) Publish saved batch timetable as PDF via Telegram to teachers + parents, (2) lock teacher per slot in the builder, (3) migrate ClassesPage suggest modal to /suggest-batch, (4) cap per-teacher periods/day.
 
