@@ -16,6 +16,27 @@
 - School Super Admin (per school)
 - Accounts / Teacher / Parent
 
+## Iteration — 2026-01 (current session, part 6) — DatePicker + Mongo aggregation
+**Changes implemented**
+- New `frontend/src/components/DatePicker.jsx` — popover calendar (day + month
+  modes) using Tailwind + lucide icons (no extra deps; shadcn/radix not in
+  this project). Trigger uses the existing `.input` class so it matches every
+  other field.
+- Replaced every browser-native `<input type="date">` on the attendance and
+  timetable pages with `DatePicker`:
+  - `AttendancePage`: Mark students (`att-date`), Absentees (`absentees-date`,
+    flips to month mode when period=month), Teacher attendance (`teacher-att-date`).
+  - `TimetablePage`: tint picker (`timetable-tint-date`).
+- `GET /api/attendance/absentees` rewrites the Python aggregation as a single
+  Mongo pipeline: `$match -> $group` (conditional sums per status) `-> $match
+  $expr -> $sort`. `last_absent_status` is then resolved with one `find_one`
+  per matched absentee. Same JSON shape — drop-in replacement that scales past
+  hundreds of thousands of attendance rows.
+- Tests: `backend/tests/test_iter37_absentees_aggregation.py` (9/9) + iter36
+  (14/14) + iter35 (25/25) = 48/48 pass. Frontend Playwright pass on all 4
+  DatePicker instances.
+
+
 ## Iteration — 2026-01 (current session, part 5) — Absentees panel + Teacher attendance
 **Changes implemented (backend + frontend)**
 - New collection `teacher_attendance` in per-school DB (unique on
