@@ -98,16 +98,24 @@ async def list_students(
 
     flt = {"school_id": user["school_id"]}
     if user["role"] == "teacher":
-        tflt = await _teacher_class_filter(tdb, user)
-        # Build the visible set: either (class, section) is in an assigned pair,
-        # OR the teacher created the student themselves. Without the second
-        # clause, a teacher with no formal class assignment couldn't see any
-        # students they had added.
-        or_clauses: list[dict] = []
-        if tflt and not tflt.get("_blocked_") and tflt.get("$or"):
-            or_clauses.extend(tflt["$or"])
-        or_clauses.append({"created_by_id": user["id"]})
-        flt["$or"] = or_clauses
+        # When a teacher explicitly picks a class (e.g. on the Attendance page
+        # to mark students), they should see EVERY active student in that
+        # class within their school — regardless of who created the student
+        # or whether the school admin has formally assigned that class to
+        # them. This is necessary because attendance must cover the full
+        # class roster, not only the rows the teacher personally added.
+        # The class/section filters below already scope the result to the
+        # selected class, so school-wide leakage isn't possible.
+        if not class_id:
+            # No class picked — fall back to the assignment-scoped visibility
+            # used by the Students listing page: assigned (class, section)
+            # pairs OR students this teacher created.
+            tflt = await _teacher_class_filter(tdb, user)
+            or_clauses: list[dict] = []
+            if tflt and not tflt.get("_blocked_") and tflt.get("$or"):
+                or_clauses.extend(tflt["$or"])
+            or_clauses.append({"created_by_id": user["id"]})
+            flt["$or"] = or_clauses
     if class_id:
         flt["class_id"] = class_id
     if section:

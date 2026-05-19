@@ -1,5 +1,19 @@
 # SCMS — Product Requirements (running log)
 
+## Iteration — 2026-01 (current session) — Teacher attendance: full class roster visibility
+**User ask:** As a teacher, when I select a specific class to take attendance, I should see ALL students of that class — even if those students were not created by me and even if the school admin hasn't formally assigned that class/section to me.
+
+**Fix — `backend/routes/students.py::list_students`:**
+- For role=teacher: when the request carries an explicit `class_id` query param (the case the Attendance page hits every time), the per-teacher `class_teacher_map`/`timetable`/`created_by_id` filter is **bypassed**. The result is scoped strictly to the teacher's `school_id` plus the picked `class_id` (+ optional `section`), so the teacher sees the complete roster for that class.
+- For role=teacher: when **no** `class_id` is provided (the bare Students listing page), the existing assignment-scoped visibility is preserved (assigned class/section pairs OR rows the teacher created). This prevents school-wide leakage in places that aren't taking attendance.
+- Attendance write path (`/attendance/bulk`) was already permissive enough to accept any student_id within the tenant, so marking now works end-to-end for the full roster.
+
+**Verification (live curl against demo school):**
+- `priya@sunrise.edu` is the class teacher of Grade 5-A only. Created a student in Grade 6-A as the school admin. Before fix: Priya saw 0 students for Grade 6-A. After fix: Priya sees the new student and successfully POSTs `/attendance/bulk` for it.
+- Bare `GET /students` for Priya still returns only her 8 Grade 5-A students (no leakage).
+- Existing scope tests (`test_v32_teacher_add_student.py`, `test_iter32_app_regression.py::test_teacher_lists_students`) remain valid — they hit `GET /students` without `class_id`.
+
+
 ## Iteration — 2026-02 (current session, v46) — Rebalance · Save · Publish CTA + Workload-aware substitutes + Per-school rebalance default
 **User asks delivered:**
 1. **One-tap "Rebalance · Save · Publish"** combined CTA in the Workload tab — regenerates with rebalance bias → confirms if unfilled slots remain → saves → optionally publishes Telegram PDFs. ONE summary toast at the end (e.g. "Rebalanced gap → 4 · saved 120 slots · published teachers 12/12, parents 80/85").
