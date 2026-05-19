@@ -135,7 +135,7 @@ TENANT_OPERATIONAL_COLLECTIONS = (
     "timetable", "activities", "activity_enrollments",
     "sick_leaves", "notifications", "bulk_uploads", "receipts",
     "audit_logs", "staff", "expenses", "fee_items", "teacher_duties",
-    "trips", "trip_rsvps",
+    "trips", "trip_rsvps", "teacher_attendance",
 )
 
 
@@ -328,6 +328,13 @@ async def init_school_db(school: dict):
     await sdb.staff.create_index("is_active")
     await sdb.staff.create_index("phone")
 
+    # ---- Teacher attendance (one row per teacher per day) ----
+    await sdb.teacher_attendance.create_index(
+        [("teacher_id", 1), ("date", 1)], unique=True,
+    )
+    await sdb.teacher_attendance.create_index("date")
+    await sdb.teacher_attendance.create_index("status")
+
     # ---- Expenses + teacher reimbursement requests ----
     await sdb.expenses.create_index([("created_at", -1)])
     await sdb.expenses.create_index("status")
@@ -409,6 +416,7 @@ SCHOOL_DB_COLLECTIONS = (
     "sick_leaves", "audit_logs", "password_reset_codes",
     "bulk_uploads", "receipts", "subscription_history",
     "staff", "expenses",
+    "teacher_attendance",
     "meta",
 )
 

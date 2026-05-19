@@ -44,6 +44,7 @@ from routes.teacher_duties import router as teacher_duties_router
 from routes.trips import router as trips_router
 from routes.messaging import router as messaging_router
 from routes.breaks import router as breaks_router
+from routes.teacher_attendance import router as teacher_attendance_router, absentee_router as absentee_router
 from core import scheduler as digest_scheduler
 
 
@@ -523,5 +524,7 @@ api.include_router(teacher_duties_router)
 api.include_router(trips_router)
 api.include_router(messaging_router)
 api.include_router(breaks_router)
+api.include_router(teacher_attendance_router)
+api.include_router(absentee_router)
 
 app.include_router(api)

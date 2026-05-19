@@ -1,0 +1,30 @@
+{
+  "summary": "Iteration 36 — Teacher attendance + Absentees panel. Backend: 14/14 pytest tests passed (auth/RBAC, 4 statuses, idempotent upsert, today roster + counts, role-scoped list, day/week/month aggregation incl. attendance percentage, class+section filter). Iter35 regression still 25/25 green. Frontend: 3 AttendancePage tabs render, period toggle (day/week/month) works, KPI tiles populate, teacher status pills (present/absent/leave/half_day) clickable, Save persists, Absent-today strip appears. TimetablePage colors picked-day cells: marked teacher row shows ABSENT/PRESENT tints with a 'picked' ring on the row; unpicked days remain neutral. Test data restored (all teachers back to 'present').",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "AttendancePage > Teacher tab and TimetablePage", "issues": ["Date input uses the browser-native HTML5 date picker (input[type=date]) instead of the shadcn Calendar component used elsewhere — minor UX inconsistency."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter36_teacher_attendance.py", "/app/test_reports/pytest/iter36_teacher_att.xml"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "teacher_attendance.py upsert is fine, but there is no unique index on (school_id, teacher_id, date) shown in this file — confirm core/db.py declares it (request says it does) to guarantee one-row-per-day under race conditions.",
+    "absentees endpoint loops in Python over up to 20k attendance rows; for large schools/long months consider a Mongo aggregation pipeline. OK at current scale.",
+    "TimetablePage does GET /users?role=teacher which is open to school_admin only — teachers/parents viewing this page would error. Confirm route is school_admin-only (it appears to be in /school/* layout, so fine)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter36_teacher_attendance.py"
+  ],
+  "success_rate": {"backend": "100% (14/14)", "frontend": "100% (all flows verified)"},
+  "test_credentials": "principal@sunrise.edu / School@123 (school_admin), accounts@sunrise.edu / Accounts@123, priya@sunrise.edu / Teacher@123, parent.stu-00001@sunrise.edu / Parent@123",
+  "seed_data_creation": "None. Tests use existing DEMO seed. Cleanup test sets every teacher back to 'present' for today so no stale absent state remains.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Login uses COOKIE auth (POST /api/auth/login with body {email,password}); response is the user object, not a token. Use requests.Session() and reuse it for subsequent calls. The login email input on the UI has placeholder containing 'principal' — selector input[type=\"email\"] does NOT match. Use input[placeholder*=\"principal\"] or a more specific selector. AttendancePage tab data-testids: attendance-tab-mark / -absentees / -teachers. Period buttons: absentees-period-day / -week / -month. Teacher status pills: teacher-att-{teacher_id}-{status}. Timetable cells: tt-cell-{day}-{period} with data-status attribute (only set for picked day's row)."
+}
