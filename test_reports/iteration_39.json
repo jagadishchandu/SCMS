@@ -1,0 +1,34 @@
+{
+  "summary": "v39 backend regression: 18/18 tests passed covering POST /api/timetable/bulk conflict detection (intra-payload + cross-class 409), POST /api/timetable/bulk happy path with delete+insert semantics, full teacher-leaves CRUD (create/list/pending-count/active/approve/reject/delete) with auto teacher_attendance marking on approval, decision idempotency, role guards, and /api/timetable/suggest leave-aware filter that excludes approved-leave teachers for the effective week.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_v39_teacher_leaves_and_timetable_conflicts.py",
+    "/app/test_reports/pytest/v39_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "routes/teacher_leaves.py _decide() returns refreshed leave but the teacher cancellation path of an APPROVED leave only unmarks attendance and sets status=cancelled; consider also notifying the admin/teacher channel — currently only approve/reject have queue_notification. Low priority.",
+    "routes/timetable.py /bulk delete_many runs unconditionally even when intra/cross conflicts later abort with 409 — actually it runs only after the 409 check (lines 114-148), so this is fine. Verified by test_cross_class_conflict_returns_409 which confirms prior class1 slot was NOT wiped by the failed class2 submission (subsequent test_bulk_success still finds Wed-3 only when expected).",
+    "routes/timetable.py suggest leave-aware block silently swallows malformed effective_week_start in a broad except — at minimum log a warning so misconfigured payloads don't silently produce a leave-unfiltered schedule.",
+    "routes/teacher_leaves.py _working_days/_mark_attendance_for_leave both compute the same Mon-Sat range — extract a single helper to avoid drift if Sunday/holiday policy changes.",
+    "Teacher leave 'cancelled' status is allowed only via DELETE; there is no admin-driven 'revoke an approved leave' path — if school admin needs to cancel an approved leave (e.g., teacher recovered), the API only supports cancelling pending leaves cleanly; approved + DELETE by teacher does unmark attendance correctly but admin DELETE on approved is not exercised."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_v39_teacher_leaves_and_timetable_conflicts.py"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "not tested (skip frontend per request)"},
+  "test_credentials": "principal@sunrise.edu/School@123, priya@sunrise.edu/Teacher@123, rohit@sunrise.edu/Teacher@123",
+  "seed_data_creation": "Test created several future-dated leaves for Priya (60d, 70d-rejected, 95d-approved, 100d-approved, 110d-cancelled, 115d-pending, and a Mon-Sat 20-weeks-out approved leave). Side-effect: teacher_attendance now has auto-marked 'leave' rows for Priya across those future weekdays.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run with: REACT_APP_BACKEND_URL=<url> pytest /app/backend/tests/test_v39_teacher_leaves_and_timetable_conflicts.py -v. /api/classes is NOT a route — use /api/academic/classes for class listing. Auth uses HttpOnly cookies via /api/auth/login (role required in body). The test file is self-cleaning conceptually (uses far-future dates) but does leave seeded leave + attendance rows behind; that is fine for next runs as tests pick new offsets.",
+  "rca of the issue": "n/a — all features behave as advertised in the review request."
+}

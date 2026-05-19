@@ -24,6 +24,7 @@ import CalendarPage from "./pages/shared/CalendarPage";
 import AuditLogPage from "./pages/shared/AuditLogPage";
 import SickLeavesPage from "./pages/shared/SickLeavesPage";
 import ChatPage from "./pages/shared/ChatPage";
+import TeacherLeavesPage from "./pages/shared/TeacherLeavesPage";
 
 // School Admin
 import SchoolDashboard from "./pages/school/SchoolDashboard";
@@ -122,6 +123,7 @@ export default function App() {
       <Route path="/school/settings" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(SchoolSettings)}</ProtectedRoute>} />
       <Route path="/school/subscription" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(SchoolSubscription)}</ProtectedRoute>} />
       <Route path="/school/sick-leaves" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(SickLeavesPage)}</ProtectedRoute>} />
+      <Route path="/school/teacher-leaves" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(TeacherLeavesPage)}</ProtectedRoute>} />
       <Route path="/school/trips" element={<ProtectedRoute allow={["school_admin"]}>{withLayout(TripsPage)}</ProtectedRoute>} />
 
       {/* Teacher */}
@@ -136,6 +138,7 @@ export default function App() {
       <Route path="/teacher/duties" element={<ProtectedRoute allow={["teacher"]}>{withLayout(() => <TeacherDutiesPage readOnly />)}</ProtectedRoute>} />
       <Route path="/teacher/uploads" element={<ProtectedRoute allow={["teacher"]}>{withLayout(UploadsPage)}</ProtectedRoute>} />
       <Route path="/teacher/sick-leaves" element={<ProtectedRoute allow={["teacher"]}>{withLayout(SickLeavesPage)}</ProtectedRoute>} />
+      <Route path="/teacher/teacher-leaves" element={<ProtectedRoute allow={["teacher"]}>{withLayout(TeacherLeavesPage)}</ProtectedRoute>} />
       <Route path="/teacher/trips" element={<ProtectedRoute allow={["teacher"]}>{withLayout(TripsViewPage)}</ProtectedRoute>} />
 
       {/* Parent extras */}

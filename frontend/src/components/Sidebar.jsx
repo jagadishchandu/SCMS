@@ -3,6 +3,7 @@ import { NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { ROLE_LABELS } from "../lib/utils";
 import { useSickLeavePending } from "../hooks/useSickLeavePending";
+import { useTeacherLeavePending } from "../hooks/useTeacherLeavePending";
 import { useUnreadNotifications } from "../hooks/useUnreadNotifications";
 import { useUnreadChat } from "../hooks/useUnreadChat";
 import {
@@ -43,6 +44,7 @@ const NAV_BY_ROLE = {
     { to: "/school/activities", label: "Activities", icon: ChartLineUp },
     { to: "/school/trips", label: "Educational Trips", icon: Bus },
     { to: "/school/sick-leaves", label: "Sick Leaves", icon: Heartbeat },
+    { to: "/school/teacher-leaves", label: "Teacher Leaves", icon: Heartbeat },
     { to: "/school/performance", label: "Teacher Performance", icon: ChartLineUp },
     { to: "/school/notifications", label: "Notifications", icon: BellRinging },
     { to: "/school/uploads", label: "Bulk Uploads", icon: UploadSimple },
@@ -63,6 +65,7 @@ const NAV_BY_ROLE = {
     { to: "/teacher/expenses", label: "My Expenses", icon: MoneyWavy },
     { to: "/teacher/uploads", label: "Bulk Uploads", icon: UploadSimple },
     { to: "/teacher/sick-leaves", label: "Sick Leaves", icon: Heartbeat },
+    { to: "/teacher/teacher-leaves", label: "My Leaves", icon: Heartbeat },
     { to: "/teacher/timetable", label: "My Timetable", icon: Calendar },
     { to: "/teacher/duties", label: "My Schedule", icon: Calendar },
     { to: "/teacher/calendar", label: "Calendar", icon: Calendar },
@@ -162,6 +165,7 @@ function Footer() {
 export default function Sidebar({ mobileOpen, onCloseMobile }) {
   const { user } = useAuth();
   const sickPending = useSickLeavePending();
+  const teacherLeavePending = useTeacherLeavePending();
   const { count: unreadNotifs } = useUnreadNotifications();
   const { count: unreadChat } = useUnreadChat();
   if (!user) return null;
@@ -177,6 +181,7 @@ export default function Sidebar({ mobileOpen, onCloseMobile }) {
   const badges = {
     "/school/sick-leaves": user.role === "school_admin" ? sickPending : 0,
     "/teacher/sick-leaves": user.role === "teacher" ? sickPending : 0,
+    "/school/teacher-leaves": user.role === "school_admin" ? teacherLeavePending : 0,
     "/school/notifications": user.role === "school_admin" ? unreadNotifs : 0,
     "/platform/notifications": user.role === "platform_admin" ? unreadNotifs : 0,
     "/chat": ["school_admin", "teacher", "parent"].includes(user.role) ? unreadChat : 0,

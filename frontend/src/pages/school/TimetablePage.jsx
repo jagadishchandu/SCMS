@@ -35,6 +35,7 @@ export default function TimetablePage() {
   // Day to tint timetable cells for. Defaults to today.
   const [tintDate, setTintDate] = useState(TODAY());
   const [teacherStatus, setTeacherStatus] = useState({}); // teacher_id -> status
+  const [teachersOnLeave, setTeachersOnLeave] = useState(new Set()); // teacher_ids approved-on-leave for tintDate
 
   useEffect(() => {
     Promise.all([
@@ -59,6 +60,13 @@ export default function TimetablePage() {
         setTeacherStatus(Object.fromEntries((r.data || []).map((x) => [x.teacher_id, x.status])));
       })
       .catch(() => { if (!cancelled) setTeacherStatus({}); });
+    // Approved teacher leaves overlapping tintDate
+    api.get("/teacher-leaves/active", { params: { date: tintDate } })
+      .then((r) => {
+        if (cancelled) return;
+        setTeachersOnLeave(new Set(r.data?.teacher_ids || []));
+      })
+      .catch(() => { if (!cancelled) setTeachersOnLeave(new Set()); });
     return () => { cancelled = true; };
   }, [tintDate]);
 
@@ -144,7 +152,8 @@ export default function TimetablePage() {
                         if (!slot) return <td key={p} className="td" />;
                         const t = teacherById[slot.teacher_id];
                         const isTintRow = d === tintDayKey;
-                        const status = isTintRow ? (teacherStatus[slot.teacher_id] || "unmarked") : null;
+                        const onLeave = isTintRow && teachersOnLeave.has(slot.teacher_id);
+                        const status = isTintRow ? (onLeave ? "leave" : (teacherStatus[slot.teacher_id] || "unmarked")) : null;
                         const tint = status && STATUS_TINT[status]
                           ? STATUS_TINT[status]
                           : (isTintRow ? "border-dashed" : "");
@@ -154,12 +163,20 @@ export default function TimetablePage() {
                             className={"td align-top border " + tint}
                             data-testid={`tt-cell-${d}-${p}`}
                             data-status={status || ""}
-                            title={isTintRow && t ? `${t.name} — ${STATUS_LABEL[status] || "Not marked yet"}` : undefined}
+                            data-on-leave={onLeave ? "1" : "0"}
+                            title={isTintRow && t ? `${t.name} — ${onLeave ? "On leave (find substitute)" : (STATUS_LABEL[status] || "Not marked yet")}` : undefined}
                           >
                             <div className="font-medium">{subjects.find((s) => s.id === slot.subject_id)?.name || "—"}</div>
                             <div className="text-xs text-ink-muted">{t?.name || "—"}</div>
                             <div className="text-[10px] text-ink-muted">{slot.start_time}–{slot.end_time}</div>
-                            {isTintRow && status && status !== "unmarked" && (
+                            {onLeave ? (
+                              <div
+                                className="mt-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider font-semibold bg-status-warning text-white"
+                                data-testid={`tt-cell-onleave-${d}-${p}`}
+                              >
+                                On leave — find substitute
+                              </div>
+                            ) : isTintRow && status && status !== "unmarked" && (
                               <div className="text-[10px] uppercase tracking-wider mt-1 font-medium">
                                 {STATUS_LABEL[status]}
                               </div>

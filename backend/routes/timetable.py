@@ -61,6 +61,90 @@ async def _notify_teachers_of_timetable_change(
 @router.post("/bulk")
 async def set_timetable(payload: TimetableBulk, user: dict = Depends(require_roles("school_admin"))):
     tdb = await tenant_db(user["school_id"])
+    from core.db import get_db as _root_db
+    rdb = _root_db()
+
+    # ---- Conflict detection (strict) ----
+    # 1) Intra-payload: same teacher in two slots at the same (day, period).
+    # 2) Cross-class: same teacher already booked at (day, period) in a DIFFERENT class/section.
+    intra: dict[tuple, list] = {}
+    for s in payload.slots:
+        if not s.teacher_id:
+            continue
+        intra.setdefault((s.day, s.period, s.teacher_id), []).append(
+            {"class_id": s.class_id, "section": s.section, "subject_id": s.subject_id}
+        )
+    intra_conflicts = [
+        {"day": k[0], "period": k[1], "teacher_id": k[2], "occurrences": v}
+        for k, v in intra.items() if len(v) > 1
+    ]
+
+    teacher_ids = sorted({s.teacher_id for s in payload.slots if s.teacher_id})
+    cross_conflicts: list[dict] = []
+    if teacher_ids:
+        # Pull every existing slot for those teachers in OTHER classes/sections
+        existing = await tdb.timetable.find(
+            {
+                "school_id": user["school_id"],
+                "teacher_id": {"$in": teacher_ids},
+                "$nor": [{"class_id": payload.class_id, "section": payload.section}],
+            },
+            {"_id": 0, "day": 1, "period": 1, "teacher_id": 1, "class_id": 1, "section": 1, "subject_id": 1},
+        ).to_list(20000)
+        busy = {(e["day"], e["period"], e["teacher_id"]): e for e in existing}
+        for s in payload.slots:
+            if not s.teacher_id:
+                continue
+            hit = busy.get((s.day, s.period, s.teacher_id))
+            if hit:
+                cross_conflicts.append({
+                    "day": s.day,
+                    "period": s.period,
+                    "teacher_id": s.teacher_id,
+                    "conflict_with": {
+                        "class_id": hit["class_id"],
+                        "section": hit["section"],
+                        "subject_id": hit.get("subject_id"),
+                    },
+                    "this_class": {
+                        "class_id": s.class_id, "section": s.section, "subject_id": s.subject_id,
+                    },
+                })
+
+    if intra_conflicts or cross_conflicts:
+        # Enrich with friendly names
+        all_tids = sorted({c["teacher_id"] for c in intra_conflicts} | {c["teacher_id"] for c in cross_conflicts})
+        teachers = await rdb.users.find(
+            {"school_id": user["school_id"], "id": {"$in": all_tids}},
+            {"_id": 0, "id": 1, "name": 1},
+        ).to_list(2000)
+        tmap = {t["id"]: t["name"] for t in teachers}
+        classes = await tdb.classes.find(
+            {"school_id": user["school_id"]}, {"_id": 0, "id": 1, "name": 1},
+        ).to_list(500)
+        cmap = {c["id"]: c["name"] for c in classes}
+        subjects = await tdb.subjects.find(
+            {"school_id": user["school_id"]}, {"_id": 0, "id": 1, "name": 1},
+        ).to_list(500)
+        smap = {s["id"]: s["name"] for s in subjects}
+        for c in intra_conflicts:
+            c["teacher_name"] = tmap.get(c["teacher_id"], c["teacher_id"])
+        for c in cross_conflicts:
+            c["teacher_name"] = tmap.get(c["teacher_id"], c["teacher_id"])
+            c["conflict_with"]["class_name"] = cmap.get(c["conflict_with"]["class_id"], c["conflict_with"]["class_id"])
+            c["conflict_with"]["subject_name"] = smap.get(c["conflict_with"].get("subject_id"), None)
+        raise HTTPException(status_code=409, detail={
+            "error": "timetable_conflict",
+            "message": (
+                f"{len(intra_conflicts)} same-class double-booking(s) and "
+                f"{len(cross_conflicts)} cross-class collision(s) detected. "
+                "Resolve them and try again."
+            ),
+            "intra_payload_conflicts": intra_conflicts,
+            "cross_class_conflicts": cross_conflicts,
+        })
+
+    # ---- All clear: replace existing slots for this class/section ----
     await tdb.timetable.delete_many({"school_id": user["school_id"], "class_id": payload.class_id, "section": payload.section})
     docs = []
     for s in payload.slots:
@@ -216,6 +300,10 @@ class SuggestTimetableRequest(BaseModel):
     lunch_break_period: Optional[int] = Field(default=None, ge=1, le=12)  # 1-indexed; that period is left blank every day
     no_last_period_subjects: Optional[List[str]] = None  # subject ids forbidden in the last period
     subject_day_pins: Optional[dict] = None  # {subject_id: [day, day, ...]} — restrict subject to those days only
+    # Optional ISO date (YYYY-MM-DD) of the Monday of the week this timetable is
+    # being generated for. If provided, the engine will skip any teacher that
+    # has an APPROVED leave covering that weekday.
+    effective_week_start: Optional[str] = None
 
 
 def _add_minutes(hhmm: str, mins: int) -> str:
@@ -364,6 +452,44 @@ async def suggest_timetable(
         if sl.get("class_id") == payload.class_id and sl.get("section") == payload.section.upper():
             continue
         busy.add((sl["day"], sl["period"], sl.get("teacher_id")))
+
+    # Block teachers who are on APPROVED leave for the effective week.
+    # We treat the teacher as unavailable for ALL periods of that day.
+    teachers_on_leave_per_day: dict[str, set[str]] = {d: set() for d in DAYS_ORDER}
+    if payload.effective_week_start:
+        try:
+            from datetime import date as _d, datetime as _dt, timedelta as _td
+            ws = _dt.fromisoformat(payload.effective_week_start).date()
+            # Approved leaves overlapping any day Mon..Sat of the week
+            week_end = ws + _td(days=6)
+            leaves = await tdb.teacher_leaves.find(
+                {
+                    "school_id": user["school_id"],
+                    "status": "approved",
+                    "start_date": {"$lte": week_end.isoformat()},
+                    "end_date": {"$gte": ws.isoformat()},
+                },
+                {"_id": 0, "teacher_id": 1, "start_date": 1, "end_date": 1},
+            ).to_list(2000)
+            day_idx_to_key = {0: "mon", 1: "tue", 2: "wed", 3: "thu", 4: "fri", 5: "sat"}
+            for lv in leaves:
+                s_lv = _dt.fromisoformat(lv["start_date"]).date()
+                e_lv = _dt.fromisoformat(lv["end_date"]).date()
+                cur = max(ws, s_lv)
+                stop = min(week_end, e_lv)
+                while cur <= stop:
+                    key = day_idx_to_key.get(cur.weekday())
+                    if key:
+                        teachers_on_leave_per_day[key].add(lv["teacher_id"])
+                    cur += _td(days=1)
+            # Bake into busy map so candidate-pick step naturally skips them
+            for day_key, tids in teachers_on_leave_per_day.items():
+                for tid in tids:
+                    for p in range(1, periods_per_day + 1):
+                        busy.add((day_key, p, tid))
+        except Exception:
+            # Don't fail suggestion on a malformed week date; just skip leave-aware step.
+            pass
 
     # Validate constraints reference real subjects
     valid_sids = {s["id"] for s in subjects}
