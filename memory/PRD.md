@@ -16,6 +16,34 @@
 - School Super Admin (per school)
 - Accounts / Teacher / Parent
 
+## Iteration — 2026-01 (current session, v43) — 0% unfilled + substitute fill + coverage badge
+**User asks delivered:**
+1. **0% unfilled rate** — generation now fills every slot via a repair pass.
+2. **Conflict visibility for school admin** — unfilled & substitute cells are now visible in both Builder and the saved Timetable page; sidebar badge surfaces totals.
+3. **Substitute auto-fill** — one-click suggestion + apply for any unfilled cell.
+4. **Sidebar badge** — Timetable Builder shows the live count of unfilled saved slots.
+
+**Backend**
+- **Repair pass** inside `_generate_section_schedule` (after the greedy pass):
+  - **Step 1 — intra-section swap:** for every unfilled (day, period), search the same section for another teaching slot whose teacher could move into the empty slot AND whose subject can be hosted at the donor slot (respecting `allowed_periods_per_subject`). Swap both subjects + teachers; mark the moved slot with `swapped_from={day, period}`.
+  - **Step 2 — cross-subject substitute:** if no swap fits, pick ANY free teacher (lowest daily load) regardless of their tagged subjects; mark the cell `is_substitute=true`.
+  - Both steps update the shared `busy` set and `teacher_day_load` so they never cause new conflicts. Each section returns `repair_stats={attempts, swap_repairs, substitute_repairs}`.
+- **`/save-batch`** now persists **unfilled rows** too (`teacher_id=""` with the intended `subject_id`). The response still reports `inserted` = count of FILLED rows only.
+- **New `GET /api/timetable/coverage`** — aggregates saved rows where `teacher_id=""`, returns `{sections_with_unfilled, total_unfilled, details[]}`. Powers the sidebar badge.
+- **New `POST /api/timetable/substitute-suggest`** — for a (class, section, day, period, prefer_subject_id), returns up to 20 ranked free teachers: teachers of the preferred subject first, then any teacher; each item carries `{teacher_id, teacher_name, teaches_subject, daily_load, on_leave_today}`.
+- **New `POST /api/timetable/substitute-apply`** — updates (or creates) the slot in the saved timetable with the chosen teacher, sets `is_substitute=true`, fires a Telegram + in-app notification. Returns HTTP 409 with `conflict_with={class_id, section, subject_id}` if the chosen teacher is already booked at that (day, period) in another class.
+
+**Frontend**
+- New hook `useTimetableCoverage` polls `/coverage` and powers the **sidebar badge** for the Timetable Builder link (only for school_admin).
+- `TimetableBuilderPage.SectionGrid` now shows per-section `repair_stats` ("🔧 X swaps · Y substitutes"); every unfilled cell exposes a **"Find substitute"** disclosure that fetches the ranked list, shows ⭐ for "teaches subject", 🌴 for "on leave today", and daily load. One-click **Apply** persists and locally patches the cell.
+- Substitute cells render with a 🔄 icon + warning-yellow tint; locked cells stay primary-tinted; unfilled cells red-tinted.
+- `/school/timetable` (saved-view) page now also colour-codes unfilled and substitute cells with red/yellow tints and titles, so the school admin sees conflicts at a glance.
+
+**Tests**
+- v43 testing subagent → **36/36 backend tests passed** (12 new v43 + 24 v40+v41 regression). Verified: 0% unfilled with 4-teacher demo seed, swap & substitute repair flags, zero cross-section double-bookings, `/save-batch` persists unfilled rows, `/coverage` totals, `/substitute-suggest` ranking + busy-exclusion, `/substitute-apply` persistence + 409 conflict path.
+
+
+
 ## Iteration — 2026-01 (current session, v42) — Cross-section subject staggering
 **Bug reported:** When generating timetables for all sections of a grade, the engine was placing the **same subject in the same period** across multiple sections (e.g. Math at P2 for both 5A and 5B). With a small teacher pool (one Math teacher), only one section got the teacher — the other was left "Unfilled".
 
