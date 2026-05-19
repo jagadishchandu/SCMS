@@ -184,14 +184,21 @@ async def list_absentees(
         tdb, user["school_id"], date_match, class_id, section, only_absentees=True,
     )
     if not rows:
-        empty = {
+        empty: dict = {
             "period": period,
             "date": base.isoformat(),
             "absentees": [],
             "summary": {"students": 0, "total_absent_days": 0, "total_sick_days": 0},
         }
         if period == "month":
-            empty["comparison"] = _empty_comparison(base)
+            # Still run the prior-month aggregation so we can report an honest
+            # "improving / sliding" comparison even when nobody is absent this
+            # month. Without this branch we'd flatten every delta to 0 and miss
+            # the celebratory "10 fewer absences than last month" message.
+            empty["comparison"] = await _build_comparison(
+                tdb, user["school_id"], base, class_id, section,
+                {"students": 0, "total_absent_days": 0, "total_sick_days": 0},
+            )
         return empty
 
     absentee_ids = [r["_id"] for r in rows]
@@ -300,17 +307,54 @@ async def list_absentees(
         "summary": summary,
     }
     if period == "month":
-        response["comparison"] = {
-            "prev_month": prev_month_key,
-            "prev_summary": prev_summary,
-            "delta_students": summary["students"] - prev_summary["students"],
-            "delta_absent_days": summary["total_absent_days"] - prev_summary["total_absent_days"],
-            "delta_sick_days": summary["total_sick_days"] - prev_summary["total_sick_days"],
-        }
+        response["comparison"] = await _build_comparison(
+            tdb, user["school_id"], base, class_id, section, summary,
+            prev_by_id=prev_by_id, prev_summary=prev_summary, prev_month_key=prev_month_key,
+        )
     return response
 
 
+async def _build_comparison(
+    tdb,
+    school_id: str,
+    base: date_cls,
+    class_id: Optional[str],
+    section: Optional[str],
+    summary: dict,
+    *,
+    prev_by_id: Optional[dict] = None,
+    prev_summary: Optional[dict] = None,
+    prev_month_key: Optional[str] = None,
+) -> dict:
+    """Compute the comparison block. If the caller already ran the prior-month
+    aggregation (the common path), pass `prev_summary` + `prev_month_key` to
+    avoid re-running it. The empty-current-month path runs the pipeline fresh
+    so the response still reports an honest negative delta when the school is
+    improving."""
+    if prev_summary is None or prev_month_key is None:
+        prev_month_first = (base.replace(day=1) - timedelta(days=1)).replace(day=1)
+        prev_month_key = prev_month_first.strftime("%Y-%m")
+        prev_rows = await _aggregate_absentees(
+            tdb, school_id,
+            {"date": {"$regex": f"^{prev_month_key}-"}},
+            class_id, section, only_absentees=False,
+        )
+        prev_summary = {
+            "students": sum(1 for r in prev_rows if (r.get("absent_days", 0) + r.get("sick_days", 0)) > 0),
+            "total_absent_days": sum(r.get("absent_days", 0) for r in prev_rows),
+            "total_sick_days": sum(r.get("sick_days", 0) for r in prev_rows),
+        }
+    return {
+        "prev_month": prev_month_key,
+        "prev_summary": prev_summary,
+        "delta_students": summary["students"] - prev_summary["students"],
+        "delta_absent_days": summary["total_absent_days"] - prev_summary["total_absent_days"],
+        "delta_sick_days": summary["total_sick_days"] - prev_summary["total_sick_days"],
+    }
+
+
 def _empty_comparison(base: date_cls) -> dict:
+    """Legacy helper kept for backwards-compat; prefer _build_comparison()."""
     prev_first = (base.replace(day=1) - timedelta(days=1)).replace(day=1)
     return {
         "prev_month": prev_first.strftime("%Y-%m"),
