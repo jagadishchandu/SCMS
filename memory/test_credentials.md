@@ -1,6 +1,6 @@
 # SCMS Test Credentials
 
-Backend: `https://class-roster-77.preview.emergentagent.com/api`
+Backend: `https://class-access-hub.preview.emergentagent.com/api`
 
 ## Platform Super Admin (from backend/.env)
 - email: `jagadishchandu789@gmail.com`
