@@ -124,13 +124,18 @@ export default function Login() {
             </div>
 
             <div>
-              <label className="label">Email</label>
+              <label className="label">Email or Login ID</label>
               <input
-                type="email" autoComplete="email" required
+                type="text" autoComplete="username" required
                 className="input" placeholder={current.placeholder}
                 value={email} onChange={(e) => setEmail(e.target.value)}
                 data-testid="login-email-input"
+                autoCapitalize="none"
+                spellCheck={false}
               />
+              <p className="text-[11px] text-ink-muted mt-1">
+                Use your full email (e.g. principal@school.edu) or the short login id your administrator gave you. Case doesn't matter.
+              </p>
             </div>
             <div>
               <label className="label">Password</label>

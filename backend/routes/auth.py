@@ -25,7 +25,10 @@ RESET_CODE_MAX_VERIFY_ATTEMPTS = 5
 @router.post("/login")
 async def login(payload: LoginRequest, response: Response, request: Request):
     db = get_db()
-    email = payload.email.lower()
+    # Login ids are case-insensitive — normalise to lowercase before lookup.
+    email = (payload.email or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="Login id is required")
     # brute force check
     ip = request.client.host if request.client else "unknown"
     identifier = f"{ip}:{email}"
@@ -63,6 +66,21 @@ async def login(payload: LoginRequest, response: Response, request: Request):
 
     if not user.get("is_active", True):
         raise HTTPException(status_code=403, detail="Account is deactivated")
+
+    # Per-school parent-login kill-switch (Platform Super Admin controlled).
+    # When the school's `parent_login_enabled` flag is set to False, deny ALL
+    # parent logins for that school. Other roles (school_admin / teacher /
+    # accounts) keep working — only `parent` is blocked.
+    if user.get("role") == "parent" and user.get("school_id"):
+        school = await db.schools.find_one(
+            {"id": user["school_id"]}, {"_id": 0, "parent_login_enabled": 1},
+        )
+        if school is not None and school.get("parent_login_enabled") is False:
+            raise HTTPException(
+                status_code=403,
+                detail="Parent login is currently disabled for this school. "
+                       "Please contact your school administrator.",
+            )
 
     await db.login_attempts.delete_one({"identifier": identifier})
     await db.users.update_one({"id": user["id"]}, {"$set": {"last_login_at": utc_now()}})

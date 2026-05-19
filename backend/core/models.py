@@ -17,13 +17,18 @@ def _blank_to_none(v):
 
 # ---------- Auth ----------
 class LoginRequest(BaseModel):
-    email: EmailStr
+    # `email` here is actually a "login id" — it can be a full email
+    # (e.g. principal@sunrise.edu) OR a simple identifier with no '@'
+    # (e.g. principal01). We do NOT use EmailStr so admins can create
+    # short login ids for staff/parents. Case-insensitive (lowercased) lookup
+    # is enforced at the auth router.
+    email: str
     password: str
 
 
 class UserOut(BaseModel):
     id: str
-    email: EmailStr
+    email: str
     name: str
     role: str
     school_id: Optional[str] = None
@@ -40,7 +45,7 @@ class SchoolCreate(BaseModel):
     email: Optional[EmailStr] = None
     academic_year: Optional[str] = "2025-2026"
     admin_name: str
-    admin_email: EmailStr
+    admin_email: str  # login id — can be email-style or a simple id (no '@')
     admin_password: str
     admin_phone: Optional[str] = None
     auto_approve: Optional[bool] = False  # If True, skip approval lockdown (Platform admin pre-approves)
@@ -64,7 +69,9 @@ class SchoolBranding(BaseModel):
 
 # ---------- Users / Teachers ----------
 class UserCreate(BaseModel):
-    email: EmailStr
+    # `email` is a login id — full email OR a simple id (no '@'). Backend
+    # lowercases & enforces uniqueness across all roles in the same school.
+    email: str
     password: str
     name: str
     role: Literal["school_admin", "teacher", "accounts", "parent"]
@@ -108,7 +115,8 @@ class ParentInfo(BaseModel):
     relationship: str = "guardian"
     phone: str
     whatsapp: Optional[str] = None
-    email: Optional[EmailStr] = None
+    # Parent login id — accepts full email OR a simple identifier (no '@').
+    email: Optional[str] = None
 
     @field_validator("email", "whatsapp", mode="before")
     @classmethod

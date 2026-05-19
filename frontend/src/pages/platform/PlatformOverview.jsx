@@ -211,6 +211,8 @@ function SchoolDetailDrawer({ open, detail, loading, onClose, onChanged }) {
 
               {school?.id && <MandatoryChannelsPanel schoolId={school.id} schoolName={school.name} />}
 
+              {school?.id && <ParentLoginPanel schoolId={school.id} schoolName={school.name} />}
+
               <Section title={`School Super Admin${schoolAdmins.length === 1 ? "" : "s"} (${schoolAdmins.length})`}>
                 {schoolAdmins.length === 0 ? (
                   <Empty title="No school admin" message="This school doesn't have a Super Admin account yet." />
@@ -716,6 +718,84 @@ function MandatoryChannelsPanel({ schoolId, schoolName }) {
           data-testid="mc-save-btn"
         >{busy ? "Saving…" : "Save"}</button>
       </div>
+    </Section>
+  );
+}
+
+
+
+function ParentLoginPanel({ schoolId, schoolName }) {
+  const [enabled, setEnabled] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.get(`/schools/${schoolId}/parent-login`)
+      .then((r) => { if (!cancelled) setEnabled(Boolean(r.data?.enabled)); })
+      .catch((err) => { if (!cancelled) toast.error(formatApiError(err)); });
+    return () => { cancelled = true; };
+  }, [schoolId]);
+
+  if (enabled === null) return null;
+
+  const toggle = async () => {
+    const next = !enabled;
+    if (!next && !window.confirm(
+      `Disable parent login for "${schoolName}"?\n\n` +
+      `All parents in this school will be immediately blocked from logging in. ` +
+      `Teachers, accounts and the school admin will keep working as usual.`,
+    )) return;
+    setSaving(true);
+    try {
+      const { data } = await api.patch(`/schools/${schoolId}/parent-login`, { enabled: next });
+      setEnabled(Boolean(data.enabled));
+      toast.success(
+        data.enabled
+          ? `Parent login re-enabled for ${schoolName}`
+          : `Parent login disabled for ${schoolName}`,
+      );
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <Section title="Parent login">
+      <label
+        className={
+          "flex items-center justify-between gap-3 p-3 rounded-md border cursor-pointer transition " +
+          (enabled ? "border-status-success/40 bg-status-success/5" : "border-status-danger/40 bg-status-danger/10")
+        }
+        data-testid="parent-login-toggle-row"
+      >
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-medium" data-testid="parent-login-toggle-status">
+            {enabled ? "Enabled - parents can sign in" : "Disabled - parent login is blocked"}
+          </div>
+          <div className="text-xs text-ink-muted mt-0.5">
+            Flip this off to immediately block every parent in <strong>{schoolName}</strong> from logging in.
+            Useful when offboarding a school or during maintenance. Other roles are unaffected.
+          </div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={enabled}
+          disabled={saving}
+          onClick={toggle}
+          data-testid="parent-login-toggle-btn"
+          className={
+            "relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-50 " +
+            (enabled ? "bg-status-success" : "bg-status-danger")
+          }
+        >
+          <span
+            className={
+              "inline-block h-5 w-5 transform rounded-full bg-white shadow ring-1 ring-black/10 transition-transform mt-0.5 " +
+              (enabled ? "translate-x-5" : "translate-x-0.5")
+            }
+          />
+        </button>
+      </label>
     </Section>
   );
 }

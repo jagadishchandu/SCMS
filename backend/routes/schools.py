@@ -203,8 +203,11 @@ async def create_school(payload: SchoolCreate, user: dict = Depends(require_role
     # uniqueness
     if await db.schools.find_one({"code": payload.code}):
         raise HTTPException(status_code=400, detail="School code already exists")
-    if await db.users.find_one({"email": payload.admin_email.lower()}):
-        raise HTTPException(status_code=400, detail="Admin email already exists")
+    admin_login_id = (payload.admin_email or "").strip().lower()
+    if not admin_login_id:
+        raise HTTPException(status_code=400, detail="Admin login id is required")
+    if await db.users.find_one({"email": admin_login_id}):
+        raise HTTPException(status_code=400, detail=f"Login id '{admin_login_id}' already exists. Please choose a different one.")
 
     school_id = new_id()
     initial_approval = (
@@ -239,7 +242,7 @@ async def create_school(payload: SchoolCreate, user: dict = Depends(require_role
 
     admin_doc = {
         "id": new_id(),
-        "email": payload.admin_email.lower(),
+        "email": admin_login_id,
         "password_hash": hash_password(payload.admin_password),
         "name": payload.admin_name,
         "phone": payload.admin_phone,
@@ -433,3 +436,54 @@ async def set_mandatory_channels(
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Not found")
     return {"ok": True, "school_id": school_id, "channels": cleaned}
+
+
+
+# ---------- Parent-login per-school kill-switch (Platform Super Admin only) ----------
+
+class ParentLoginPayload(_BaseModel):
+    enabled: bool
+
+
+@router.get("/{school_id}/parent-login")
+async def get_parent_login_flag(school_id: str, user: dict = Depends(get_current_user)):
+    """Returns whether parent login is enabled for this school.
+    Default is True (enabled) for legacy schools without the flag.
+    Visible to platform admin and the school's own school admin.
+    """
+    if user["role"] != "platform_admin" and user.get("school_id") != school_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    db = get_db()
+    s = await db.schools.find_one({"id": school_id}, {"_id": 0, "parent_login_enabled": 1})
+    if s is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {
+        "school_id": school_id,
+        "enabled": s.get("parent_login_enabled", True),
+    }
+
+
+@router.patch("/{school_id}/parent-login")
+async def set_parent_login_flag(
+    school_id: str,
+    payload: ParentLoginPayload,
+    user: dict = Depends(require_roles("platform_admin")),
+):
+    """Platform Super Admin only — toggle parent login for an entire school.
+    When `enabled=False`, every parent in this school is denied login (other
+    roles continue to work). Used to quickly cut off parent access when a school
+    is offboarded or under maintenance.
+    """
+    db = get_db()
+    res = await db.schools.update_one(
+        {"id": school_id},
+        {"$set": {"parent_login_enabled": bool(payload.enabled)}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    await log_action(
+        user["id"], user["role"], school_id,
+        "set_parent_login_enabled", "school", school_id,
+        {"enabled": bool(payload.enabled)},
+    )
+    return {"ok": True, "school_id": school_id, "enabled": bool(payload.enabled)}

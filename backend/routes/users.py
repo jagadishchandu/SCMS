@@ -74,9 +74,15 @@ async def create_user(payload: UserCreate, user: dict = Depends(require_roles("s
     school_id = user.get("school_id")
     if not school_id and user["role"] == "platform_admin":
         raise HTTPException(status_code=400, detail="Platform admin must specify school context — please use School Admin login.")
-    email = payload.email.lower()
-    if await db.users.find_one({"email": email}):
-        raise HTTPException(status_code=400, detail="Email already exists")
+    email = (payload.email or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="Login id is required")
+    existing = await db.users.find_one({"email": email})
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Login id '{email}' already exists (role: {existing.get('role')}). Please choose a different one.",
+        )
     # Teachers MUST have at least one subject. Non-teaching staff (cleaners,
     # drivers, sports coaches, etc.) should be created via /api/staff instead.
     if payload.role == "teacher" and not (payload.subjects and len(payload.subjects) > 0):

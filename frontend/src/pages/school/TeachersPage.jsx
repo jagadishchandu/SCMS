@@ -635,7 +635,19 @@ function ResetPasswordModal({ target, onClose }) {
 
 // ----------------- Other Staff (cleaner/driver/coach/etc.) -----------------
 
-const STAFF_ROLES = ["other", "cleaner", "driver", "coach", "security", "nurse"];
+// MUST stay in sync with backend `StaffRole` Literal in routes/staff.py.
+const STAFF_ROLE_OPTIONS = [
+  { value: "other", label: "Other" },
+  { value: "cleaner", label: "Cleaner" },
+  { value: "bus_driver", label: "Bus driver" },
+  { value: "sports_coach", label: "Sports coach" },
+  { value: "security", label: "Security" },
+  { value: "nurse", label: "Nurse" },
+  { value: "cook", label: "Cook" },
+  { value: "librarian", label: "Librarian" },
+  { value: "lab_assistant", label: "Lab assistant" },
+  { value: "office_assistant", label: "Office assistant" },
+];
 
 function StaffSection({ staff, canSeeSalary, onAdd, onEdit, onChanged }) {
   const [showInactive, setShowInactive] = useState(true);
@@ -751,7 +763,7 @@ function CreateStaffModal({ open, onClose, onCreated }) {
           <select className="input" value={form.role}
                   onChange={(e) => setForm({ ...form, role: e.target.value })}
                   data-testid="new-staff-role">
-            {STAFF_ROLES.map((r) => <option key={r} value={r} className="capitalize">{r}</option>)}
+            {STAFF_ROLE_OPTIONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
           </select>
         </div>
         <div><label className="label">Joining date</label>
@@ -826,7 +838,7 @@ function EditStaffModal({ target, onClose, onSaved }) {
         <div><label className="label">Role</label>
           <select className="input" value={form.role}
                   onChange={(e) => setForm({ ...form, role: e.target.value })}>
-            {STAFF_ROLES.map((r) => <option key={r} value={r} className="capitalize">{r}</option>)}
+            {STAFF_ROLE_OPTIONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
           </select>
         </div>
         <div><label className="label">Joining date</label>

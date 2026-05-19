@@ -202,11 +202,27 @@ async def create_student(payload: StudentCreate, user: dict = Depends(require_ro
         raise HTTPException(status_code=400, detail="Student UID already exists")
 
     parent_email = payload.parent.email or f"parent.{uid.lower()}@{user['school_id'][:6]}.school"
-    parent_email = parent_email.lower()
+    parent_email = parent_email.strip().lower()
     existing_parent = await db.users.find_one({"email": parent_email})
     DEFAULT_PARENT_PWD = "Parent@123"
     parent_is_new = False
     if existing_parent:
+        # If the login id is taken by a non-parent user (teacher / admin /
+        # accounts) we refuse — re-using staff credentials as a parent account
+        # would be confusing and a security risk.
+        if existing_parent.get("role") != "parent":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Login id '{parent_email}' is already used by a "
+                    f"{existing_parent.get('role')} account. Please use a different parent email/id."
+                ),
+            )
+        if existing_parent.get("school_id") and existing_parent["school_id"] != user["school_id"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Login id '{parent_email}' is already used by a parent in another school. Please use a different id.",
+            )
         parent_user_id = existing_parent["id"]
     else:
         from core.auth import hash_password

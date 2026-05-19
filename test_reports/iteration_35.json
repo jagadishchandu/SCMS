@@ -1,0 +1,35 @@
+{
+  "summary": "Backend-only deep coverage for iteration 35 (case-insensitive login, simple non-@ login ids, per-school parent-login kill switch, staff role regression, school-create + duplicate-id rules, parent-email-to-teacher collision and parent reuse). 25/25 pytest tests passed against the live preview backend + MongoDB.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter35_login_parent_toggle.py",
+    "/app/test_reports/pytest/iter35.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "auth.py login() lowercases email before brute-force lookup AND before user lookup — good. Brute-force identifier is `ip:email_lower` so case-variants no longer evade the lockout.",
+    "schools.py PATCH /parent-login is platform_admin only; GET is visible to platform_admin OR the school's own school_admin (intentional, matches PRD).",
+    "students.py blocks reusing a non-parent user's login id (incl. teacher) AND a parent from another school — both verified.",
+    "users.py duplicate detection uses the lowercased email so case-variants are caught — verified.",
+    "Recommendation (non-blocking): consider adding a Mongo unique index on users.email so duplicate inserts are caught even under race conditions. Today the duplicate check is read-then-write."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter35_login_parent_toggle.py",
+    "/app/test_reports/pytest/iter35.xml"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "not_tested"},
+  "test_credentials": "Platform admin / school admin / teacher / parent / accounts — as listed in /app/memory/test_credentials.md (used as-is, no changes).",
+  "seed_data_creation": "Tests create resources tagged with TEST_ prefix + a 6-char run id: one teacher with simple id, one teacher used for collision check, two students with TEST_ parent, two staff (bus_driver + sports_coach), and one extra school with TEST code. Cleanup step (`test_zz_cleanup`) soft-deletes the TEST_-named users and staff and re-enables parent login. The TEST school itself is left behind (no delete endpoint exposed) — main agent can ignore or wipe via Mongo.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run `pytest backend/tests/test_iter35_login_parent_toggle.py -v` from /app to regress all 25 cases. Each run uses a fresh uuid suffix so reruns won't collide. The test relies on the seeded DEMO school (code='DEMO', principal@sunrise.edu). If parent-login left disabled by a failed run, the cleanup step re-enables it; if even that fails, hit PATCH /api/schools/{demo_id}/parent-login {enabled:true} as platform_admin.",
+  "rca of the issue": "N/A — no bugs found. All review-request features behave as specified."
+}
