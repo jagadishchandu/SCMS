@@ -16,6 +16,31 @@
 - School Super Admin (per school)
 - Accounts / Teacher / Parent
 
+## Iteration — 2026-01 (current session, part 5) — Absentees panel + Teacher attendance
+**Changes implemented (backend + frontend)**
+- New collection `teacher_attendance` in per-school DB (unique on
+  `teacher_id+date`, statuses `present|absent|leave|half_day`).
+- New API: `routes/teacher_attendance.py`
+  - `POST /api/teacher-attendance/bulk` — school_admin + accounts; idempotent upsert.
+  - `GET /api/teacher-attendance/today` — every active teacher + status (or
+    `unmarked`) + aggregate counts. Used by the timetable to tint cells.
+  - `GET /api/teacher-attendance?date=…|month=…` — role-scoped list (teachers
+    see only their own rows).
+  - `GET /api/attendance/absentees?period=day|week|month` — students absent
+    in the picked period with counts, last-absent-date and (for month)
+    attendance percentage. Optional `class_id` + `section` filter.
+- `AttendancePage` rewritten with three tabs: **Mark students**, **Absentees**,
+  **Teacher attendance**. Absentees tab has Day/Week/Month segmented control +
+  KPI tiles. Teacher tab has a date picker, mark-all buttons, status pills, an
+  Absent-today strip and a roster table.
+- `TimetablePage` now has a "Color cells for" date picker. The matching weekday
+  row is highlighted (`picked` ring) and each period cell is tinted green
+  (present), red (absent), amber (leave), blue (half-day), or dashed (unmarked)
+  based on the teacher's status for the picked date.
+- Tests: `backend/tests/test_iter36_teacher_attendance.py` (14/14 pass) + iter35
+  regression (25/25 pass).
+
+
 
 ## Iteration — 2026-01 (current session, part 4) — Login id rules + parent-login kill switch
 **Changes implemented (backend + frontend)**
