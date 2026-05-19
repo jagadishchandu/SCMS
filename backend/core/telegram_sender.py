@@ -50,6 +50,35 @@ def send_telegram(chat_id: int | str, body: str) -> tuple[bool, str | None]:
         return False, str(e)
 
 
+def send_telegram_document(
+    chat_id: int | str,
+    filename: str,
+    content: bytes,
+    caption: str | None = None,
+    mime_type: str = "application/pdf",
+) -> tuple[bool, str | None]:
+    """Send a binary file (e.g. PDF) via Telegram sendDocument. Returns (sent, message_id_or_error)."""
+    if not _enabled():
+        return False, None
+    if not chat_id:
+        return False, "no_chat_id"
+    url = f"{TELEGRAM_API}/bot{_token()}/sendDocument"
+    try:
+        files = {"document": (filename, content, mime_type)}
+        data = {"chat_id": str(chat_id)}
+        if caption:
+            data["caption"] = caption[:1024]
+        r = requests.post(url, data=data, files=files, timeout=30)
+        j = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+        if r.status_code >= 400 or not j.get("ok"):
+            log.warning("Telegram sendDocument %s → %s: %s", chat_id, r.status_code, j)
+            return False, j.get("description") or f"http_{r.status_code}"
+        return True, str(j.get("result", {}).get("message_id", "telegram_ok"))
+    except Exception as e:
+        log.warning("Telegram sendDocument failed: %s", e)
+        return False, str(e)
+
+
 def set_webhook(public_url: str) -> tuple[bool, dict]:
     """Point Telegram at our webhook. `public_url` should be the full https URL
     ending in /api/webhooks/telegram (no trailing slash)."""

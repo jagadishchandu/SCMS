@@ -1,0 +1,37 @@
+{
+  "summary": "v41 timetable backend testing — 11/11 new pytest tests + 13/13 v40 regression all pass (24/24). Verified locked_assignments (single slot + cross-section busy priority + is_locked flag + teacher_view propagation), max_periods_per_day_per_teacher cap enforcement across full batch + 'per-day cap' warning when cap is intentionally too low, /publish delivery report shape (teachers_total/sent/failed + parents_total/sent/failed + failures[]), /publish 400 precondition when no saved timetable, /publish class_ids filter, /pdf/section returns valid application/pdf binary starting with %PDF + Content-Disposition (and 404 when section has no slots), /suggest back-compat shape unchanged, and a combined regression that mixes locked_assignments + fixed_breaks + lunch + max_consecutive_heavy + allowed_periods_per_subject + class_teacher pin + max_periods_per_day_per_teacher in one /suggest-batch call.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/timetable/publish", "issue": "When ALL recipients lack telegram_chat_id (the demo state), teachers_sent and parents_sent are 0 — this is correct behavior, but the failure reason 'telegram_not_linked' is the only signal; consider also returning a top-level boolean delivery_attempted or note in response so the UI can show a clearer banner. Non-blocking."},
+      {"endpoint": "/api/timetable/publish", "issue": "publish endpoint loops every active student to look up parents — for very large schools (>10k students) this could be slow. Consider batching the parent lookup by (class,section) once instead. Non-blocking for current scale."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_v41_timetable_locks_publish.py",
+    "/app/backend/tests/test_v40_timetable_batch.py",
+    "/app/test_reports/pytest/v41_timetable.xml"
+  ],
+  "action_items": [
+    "(Optional) Split /app/backend/routes/timetable.py (now ~1488 lines) into timetable_suggest.py / timetable_save.py / timetable_publish.py / timetable_pdf_routes.py to comply with <700-line guideline.",
+    "(Optional) Publish failures list is capped at 50 with 'failures_truncated' counter — document this in API docs for FE consumers."
+  ],
+  "critical_code_review_comments": [
+    "/app/backend/routes/timetable.py is now 1488 lines — well past the 700-line threshold from code-review guidelines. High priority refactor candidate.",
+    "publish_timetable() loops every active student (line ~1392) and fetches parent_map once — OK for hundreds, watch perf if >10k students per school. Consider grouping by (class_id, section) and fetching only parents whose children fall in payload.class_ids filter.",
+    "Locked assignment is *pre-seeded* into the global busy set BEFORE per-section generation (suggest-batch line ~1085). This is correct and prevents cross-section collision, but note that an admin-supplied lock that conflicts with an already-saved timetable in a non-regenerated section is silently allowed (busy is reset by reset_existing=True). Document this priority order.",
+    "In _generate_section_schedule, the comment at lines 555-562 says CT-subject periods are deducted from frequency target — that branch does exist for `existing_target` overrides, but if the user does NOT pass subject_periods for ct_subject_id, the auto-balanced count is NOT reduced. Carry-over from v40; not a v41 regression.",
+    "PDF generation uses synchronous reportlab calls inside an async endpoint — for many recipients this can block the event loop. Consider offloading via run_in_executor or returning publish as a background job for >100 recipients."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_v41_timetable_locks_publish.py (new, 11 tests)"
+  ],
+  "success_rate": {"backend": "100% (24/24 combined v40+v41)", "frontend": "n/a (skipped per request)"},
+  "test_credentials": "principal@sunrise.edu / School@123 (school_admin). Same demo school seed (Grade 5/6 + sections A/B, 5 subjects, 3 teachers).",
+  "seed_data_creation": "Tests call /suggest-batch then /save-batch to persist 4-section timetables before /publish — this is required because /publish reads from saved DB. Each test run REPLACES the saved timetable for Grade5/6 A/B; safe to re-run.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "test_v41_timetable_locks_publish.py is the canonical v41 regression file. Demo school has zero telegram_chat_id configured, so /publish always reports every recipient with reason='telegram_not_linked' — this is expected and asserted. To assert real Telegram delivery in a future iteration, seed users[].telegram_chat_id in MongoDB before publish. PDF binary check uses content[:4] == b'%PDF'. /publish endpoint reads class_ids filter and 400s when no slots match — we use a non-existent class_id to force the empty-state path safely. Saved timetable persists across test classes within the module due to module-scoped session fixture, but /save-batch is idempotent (delete_many then insert_many).",
+  "rca of the issue": "No bugs found in v41 features. All locked_assignment / max_ppd_teacher / publish / pdf functionality works as specified. The pre-seed of locked teachers into the global busy map (timetable.py line ~1085) correctly enforces cross-section lock priority. The 'per-day cap' warning is emitted from _generate_section_schedule when all teachers of a subject have hit the cap (line ~758)."
+}

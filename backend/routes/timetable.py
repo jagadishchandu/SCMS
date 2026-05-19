@@ -7,6 +7,7 @@ from core.auth import require_roles, get_current_user
 from core.db import get_db, tenant_db
 from core.utils import new_id, utc_now
 from core.notify import queue_notification
+from core.audit import log_action
 
 router = APIRouter(prefix="/timetable", tags=["timetable"])
 
@@ -304,6 +305,16 @@ class ClassTeacherPin(BaseModel):
     label: str = "Class Teacher"
 
 
+class LockedAssignment(BaseModel):
+    """Force a specific teacher (and optional subject) to a specific slot for
+    this section. Generator places it before greedy filling; if the teacher is
+    busy elsewhere, a warning is surfaced but the lock still wins."""
+    day: Literal["mon", "tue", "wed", "thu", "fri", "sat"]
+    period: int = Field(..., ge=1, le=12)
+    teacher_id: str
+    subject_id: Optional[str] = None
+
+
 class SuggestTimetableRequest(BaseModel):
     class_id: str
     section: str
@@ -317,11 +328,14 @@ class SuggestTimetableRequest(BaseModel):
     fixed_breaks: Optional[List[FixedBreak]] = None  # additional fixed breaks (e.g. morning assembly, snack)
     no_last_period_subjects: Optional[List[str]] = None  # subject ids forbidden in the last period
     subject_day_pins: Optional[dict] = None  # {subject_id: [day, day, ...]} — restrict subject to those days only
-    # New v40 constraints
+    # v40 constraints
     subject_categories: Optional[dict] = None  # {subject_id: "heavy"|"light"|"lab"|"sports"|"library"|"regular"}
     allowed_periods_per_subject: Optional[dict] = None  # {subject_id: [period, period, ...]} — restrict subject to those periods only
     max_consecutive_heavy: int = Field(2, ge=1, le=8)  # cap heavy subjects placed back-to-back in a day
     class_teacher: Optional[ClassTeacherPin] = None  # daily class-teacher period
+    # v41 constraints
+    max_periods_per_day_per_teacher: Optional[int] = Field(default=None, ge=1, le=12)
+    locked_assignments: Optional[List[LockedAssignment]] = None
     # Optional ISO date (YYYY-MM-DD) of the Monday of the week this timetable is
     # being generated for. If provided, the engine will skip any teacher that
     # has an APPROVED leave covering that weekday.
@@ -538,24 +552,41 @@ def _generate_section_schedule(
         if sid in valid_sids and periods:
             allowed_periods[sid] = {int(p) for p in periods if 1 <= int(p) <= periods_per_day}
 
-    # If class-teacher pin includes a subject, deduct one period of that subject per day from the frequency target
+    # If class-teacher pin includes a subject, deduct one period of that subject
+    # per day from the frequency target so we don't overshoot.
     ct_subject_id = ct.subject_id if (ct and ct.subject_id) else None
     overrides = dict(payload.subject_periods or {})
     if ct_subject_id and ct_subject_id in valid_sids:
-        # the class teacher will cover ct_subject_id daily already
-        pass  # we'll account for it after counts are computed by subtracting len(days)
+        existing_target = overrides.get(ct_subject_id)
+        if existing_target is not None:
+            overrides[ct_subject_id] = max(0, int(existing_target) - len(days))
+
+    # Locked assignments — admin force-picks a teacher (and optionally a subject) for specific slots.
+    locks_by_slot: dict[tuple[str, int], dict] = {}
+    for la in (payload.locked_assignments or []):
+        if la.day in DAYS_ORDER and 1 <= la.period <= periods_per_day:
+            locks_by_slot[(la.day, la.period)] = {
+                "teacher_id": la.teacher_id,
+                "subject_id": la.subject_id or "",
+            }
+
+    # Teacher-per-day load cap (None = unlimited)
+    max_ppd_teacher = payload.max_periods_per_day_per_teacher
+    teacher_day_load: dict[tuple[str, str], int] = {}  # (teacher_id, day) -> count
 
     counts = _compute_subject_counts(
         subjects, total_slots, overrides, day_pins, len(days), periods_to_fill_per_day,
     )
 
-    # Build positions list (excluding lunch + fixed breaks AND class-teacher pinned period)
+    # Build positions list (excluding lunch + fixed breaks AND class-teacher pinned period AND locked slots)
     positions: list[tuple[str, int]] = []
     for day in days:
         for period in range(1, periods_per_day + 1):
             if period in break_periods:
                 continue
             if ct_period and period == ct_period:
+                continue
+            if (day, period) in locks_by_slot:
                 continue
             positions.append((day, period))
 
@@ -662,6 +693,10 @@ def _generate_section_schedule(
                     warnings_set.add(
                         f"[{cls.get('name')}·{section}] Class teacher is double-booked at {day.upper()} period {period}."
                     )
+                if max_ppd_teacher and teacher_day_load.get((ct.teacher_id, day), 0) >= max_ppd_teacher:
+                    warnings_set.add(
+                        f"[{cls.get('name')}·{section}] Class teacher exceeds max-per-day cap ({max_ppd_teacher}) on {day.upper()}."
+                    )
                 slots.append({
                     "day": day, "period": period,
                     "subject_id": ct.subject_id or "",
@@ -673,6 +708,27 @@ def _generate_section_schedule(
                 })
                 if not ct_busy:
                     busy.add((day, period, ct.teacher_id))
+                teacher_day_load[(ct.teacher_id, day)] = teacher_day_load.get((ct.teacher_id, day), 0) + 1
+                continue
+            # Locked assignment — admin override
+            if (day, period) in locks_by_slot:
+                lk = locks_by_slot[(day, period)]
+                lock_busy = (day, period, lk["teacher_id"]) in busy
+                if lock_busy:
+                    warnings_set.add(
+                        f"[{cls.get('name')}·{section}] Locked teacher is already booked elsewhere at {day.upper()} period {period}."
+                    )
+                slots.append({
+                    "day": day, "period": period,
+                    "subject_id": lk["subject_id"],
+                    "teacher_id": lk["teacher_id"],
+                    "class_id": payload.class_id, "section": section,
+                    "start_time": slot_start, "end_time": slot_end,
+                    "is_locked": True,
+                })
+                if not lock_busy:
+                    busy.add((day, period, lk["teacher_id"]))
+                teacher_day_load[(lk["teacher_id"], day)] = teacher_day_load.get((lk["teacher_id"], day), 0) + 1
                 continue
             sid = assignment[pos_idx]
             pos_idx += 1
@@ -686,12 +742,22 @@ def _generate_section_schedule(
                     t = candidates_t[idx]
                     if (day, period, t["id"]) in busy:
                         continue
+                    # Enforce per-teacher daily cap
+                    if max_ppd_teacher and teacher_day_load.get((t["id"], day), 0) >= max_ppd_teacher:
+                        continue
                     chosen = t
                     rr_index[sid] = (idx + 1) % n
                     break
                 if chosen is None:
                     on_leave_here = any(t["id"] in teachers_on_leave_per_day.get(day, set()) for t in candidates_t)
-                    if on_leave_here:
+                    capped = max_ppd_teacher and all(
+                        teacher_day_load.get((t["id"], day), 0) >= max_ppd_teacher for t in candidates_t
+                    )
+                    if capped:
+                        warnings_set.add(
+                            f"[{cls.get('name')}·{section}] All teachers of '{next((s['name'] for s in subjects if s['id']==sid), sid)}' have hit the per-day cap ({max_ppd_teacher}) on {day.upper()}."
+                        )
+                    elif on_leave_here:
                         warnings_set.add(
                             f"[{cls.get('name')}·{section}] All teachers of '{next((s['name'] for s in subjects if s['id']==sid), sid)}' are on leave or busy at {day.upper()} period {period}."
                         )
@@ -713,6 +779,11 @@ def _generate_section_schedule(
             })
             if chosen:
                 busy.add((day, period, chosen["id"]))
+                teacher_day_load[(chosen["id"], day)] = teacher_day_load.get((chosen["id"], day), 0) + 1
+
+    # Re-sort slots in canonical day/period order (locks were skipped during assignment)
+    day_idx = {d: i for i, d in enumerate(DAYS_ORDER)}
+    slots.sort(key=lambda s: (day_idx.get(s["day"], 99), s["period"]))
 
     return {
         "class_id": payload.class_id,
@@ -799,6 +870,8 @@ class BatchSectionRequest(BaseModel):
     allowed_periods_per_subject: Optional[dict] = None
     max_consecutive_heavy: Optional[int] = None
     class_teacher: Optional[ClassTeacherPin] = None
+    max_periods_per_day_per_teacher: Optional[int] = None
+    locked_assignments: Optional[List[LockedAssignment]] = None
     student_count: Optional[int] = None  # informational; surfaced in conflict summary
 
 
@@ -1008,6 +1081,11 @@ async def suggest_timetable_batch(
                 busy.add((day_key, p, tid))
 
     rr_index: dict[str, int] = {}
+    # Pre-seed busy with all locked teachers from every section so they get priority.
+    for sec in payload.sections:
+        merged_locks = sec.locked_assignments or (payload.defaults.locked_assignments if payload.defaults else None) or []
+        for la in merged_locks:
+            busy.add((la.day, la.period, la.teacher_id))
     section_results: list[dict] = []
     all_slots: list[dict] = []
     for sec in payload.sections:
@@ -1171,3 +1249,240 @@ async def save_timetable_batch(
             except Exception:
                 pass
     return {"inserted": inserted_total, "notified_teachers": notified_total, "sections_saved": len(payload.sections)}
+
+
+
+# ---------------- v41: Publish (PDF via Telegram) ----------------
+
+class PublishRequest(BaseModel):
+    class_ids: Optional[List[str]] = None  # if omitted, publish ALL classes that have a timetable
+    audiences: List[Literal["teachers", "parents"]] = ["teachers", "parents"]
+    custom_message: Optional[str] = None
+
+
+@router.post("/publish")
+async def publish_timetable(
+    payload: PublishRequest,
+    user: dict = Depends(require_roles("school_admin")),
+):
+    """Build PDF timetables and ship them to teachers + parents over Telegram.
+
+    - Teachers get their PERSONAL weekly grid (only the periods they teach).
+    - Parents get the timetable for THEIR child's class+section.
+    Returns counts so the UI can render a delivery report.
+    """
+    from core.db import get_db as _root_db
+    from core.telegram_sender import send_telegram_document
+    from core import timetable_pdf as pdfgen
+
+    tdb = await tenant_db(user["school_id"])
+    rdb = _root_db()
+
+    school = await rdb.schools.find_one({"id": user["school_id"]}, {"_id": 0})
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+    school_name = school.get("name") or "School"
+    academic_year = school.get("academic_year")
+
+    classes = await tdb.classes.find({"school_id": user["school_id"]}, {"_id": 0}).to_list(500)
+    subjects = await tdb.subjects.find({"school_id": user["school_id"]}, {"_id": 0}).to_list(500)
+    teachers = await rdb.users.find(
+        {"school_id": user["school_id"], "role": "teacher", "is_active": True},
+        {"_id": 0, "id": 1, "name": 1, "telegram_chat_id": 1, "phone": 1, "subjects": 1},
+    ).to_list(2000)
+
+    class_filter = {"school_id": user["school_id"]}
+    if payload.class_ids:
+        class_filter["class_id"] = {"$in": payload.class_ids}
+    slots = await tdb.timetable.find(class_filter, {"_id": 0}).to_list(50000)
+    if not slots:
+        raise HTTPException(status_code=400, detail="No timetable saved yet — generate and save before publishing.")
+
+    # Derive periods_per_day per (class, section)
+    section_periods: dict[tuple[str, str], int] = {}
+    by_section: dict[tuple[str, str], list[dict]] = {}
+    for s in slots:
+        key = (s["class_id"], s.get("section") or "")
+        by_section.setdefault(key, []).append(s)
+        section_periods[key] = max(section_periods.get(key, 0), int(s.get("period") or 1))
+
+    class_map = {c["id"]: c for c in classes}
+
+    delivery = {
+        "teachers_total": 0, "teachers_sent": 0, "teachers_failed": 0,
+        "parents_total": 0, "parents_sent": 0, "parents_failed": 0,
+        "failures": [],
+    }
+    actor = user.get("name") or user.get("email") or "School admin"
+
+    # ---- Teacher PDFs ----
+    if "teachers" in payload.audiences:
+        teacher_slots: dict[str, list[dict]] = {}
+        max_ppd = max(section_periods.values()) if section_periods else 6
+        for s in slots:
+            tid = s.get("teacher_id")
+            if tid:
+                teacher_slots.setdefault(tid, []).append(s)
+        for t in teachers:
+            slots_for = teacher_slots.get(t["id"]) or []
+            if not slots_for:
+                continue  # no schedule, skip
+            delivery["teachers_total"] += 1
+            chat_id = t.get("telegram_chat_id")
+            if not chat_id:
+                delivery["teachers_failed"] += 1
+                delivery["failures"].append({"teacher_id": t["id"], "name": t.get("name"), "reason": "telegram_not_linked"})
+                continue
+            try:
+                pdf_bytes = pdfgen.teacher_pdf(
+                    school_name=school_name, teacher_name=t.get("name") or "Teacher",
+                    slots=slots_for, subjects=subjects, classes=classes,
+                    periods_per_day=max_ppd, academic_year=academic_year,
+                )
+                caption = (payload.custom_message or "").strip() or (
+                    f"📅 Your weekly timetable for {academic_year or 'this term'} is attached.\n"
+                    f"— Published by {actor}"
+                )
+                ok, err = send_telegram_document(
+                    chat_id=chat_id,
+                    filename=f"timetable_{(t.get('name') or 'teacher').replace(' ', '_')}.pdf",
+                    content=pdf_bytes,
+                    caption=caption,
+                )
+                if ok:
+                    delivery["teachers_sent"] += 1
+                else:
+                    delivery["teachers_failed"] += 1
+                    delivery["failures"].append({"teacher_id": t["id"], "name": t.get("name"), "reason": err or "telegram_error"})
+            except Exception as e:
+                delivery["teachers_failed"] += 1
+                delivery["failures"].append({"teacher_id": t["id"], "name": t.get("name"), "reason": f"pdf_error:{e}"})
+
+    # ---- Parent PDFs (per-section, reused for every child in that section) ----
+    if "parents" in payload.audiences:
+        # Pre-render one PDF per (class_id, section) so we don't re-render for every child
+        section_pdfs: dict[tuple[str, str], bytes] = {}
+        for (cid, sec), sec_slots in by_section.items():
+            cls = class_map.get(cid)
+            if not cls:
+                continue
+            try:
+                section_pdfs[(cid, sec)] = pdfgen.section_pdf(
+                    school_name=school_name, class_name=cls.get("name") or "Class",
+                    section=sec, slots=sec_slots, subjects=subjects, teachers=teachers,
+                    periods_per_day=section_periods[(cid, sec)] or 6,
+                    academic_year=academic_year,
+                )
+            except Exception:
+                section_pdfs[(cid, sec)] = None  # type: ignore
+
+        # Iterate all students; ship to their parent if telegram-linked
+        students = await tdb.students.find(
+            {"school_id": user["school_id"], "status": "active"},
+            {"_id": 0, "id": 1, "name": 1, "class_id": 1, "section": 1, "parent_user_id": 1, "student_uid": 1},
+        ).to_list(20000)
+        parent_ids = sorted({s["parent_user_id"] for s in students if s.get("parent_user_id")})
+        if parent_ids:
+            parents = await rdb.users.find(
+                {"id": {"$in": parent_ids}}, {"_id": 0, "id": 1, "name": 1, "telegram_chat_id": 1, "phone": 1},
+            ).to_list(20000)
+            parent_map = {p["id"]: p for p in parents}
+        else:
+            parent_map = {}
+        for stu in students:
+            pid = stu.get("parent_user_id")
+            if not pid:
+                continue
+            parent = parent_map.get(pid)
+            if not parent:
+                continue
+            delivery["parents_total"] += 1
+            chat_id = parent.get("telegram_chat_id")
+            if not chat_id:
+                delivery["parents_failed"] += 1
+                delivery["failures"].append({"parent_id": pid, "name": parent.get("name"), "student_uid": stu.get("student_uid"), "reason": "telegram_not_linked"})
+                continue
+            key = (stu["class_id"], (stu.get("section") or "").upper())
+            pdf_bytes = section_pdfs.get(key)
+            if not pdf_bytes:
+                delivery["parents_failed"] += 1
+                delivery["failures"].append({"parent_id": pid, "name": parent.get("name"), "student_uid": stu.get("student_uid"), "reason": "no_section_timetable"})
+                continue
+            cls = class_map.get(stu["class_id"])
+            caption = (payload.custom_message or "").strip() or (
+                f"📅 Weekly timetable for {stu.get('name','your child')} "
+                f"({(cls or {}).get('name','')} · {stu.get('section')}).\n— {actor}"
+            )
+            try:
+                ok, err = send_telegram_document(
+                    chat_id=chat_id,
+                    filename=f"timetable_{stu.get('student_uid','child')}.pdf",
+                    content=pdf_bytes,
+                    caption=caption,
+                )
+                if ok:
+                    delivery["parents_sent"] += 1
+                else:
+                    delivery["parents_failed"] += 1
+                    delivery["failures"].append({"parent_id": pid, "name": parent.get("name"), "student_uid": stu.get("student_uid"), "reason": err or "telegram_error"})
+            except Exception as e:
+                delivery["parents_failed"] += 1
+                delivery["failures"].append({"parent_id": pid, "name": parent.get("name"), "student_uid": stu.get("student_uid"), "reason": f"send_error:{e}"})
+
+    await log_action(
+        user["id"], user["role"], user["school_id"],
+        "publish_timetable", "timetable", "publish",
+        meta={k: v for k, v in delivery.items() if k != "failures"},
+    )
+    # Cap failures list for response size
+    if len(delivery["failures"]) > 50:
+        delivery["failures_truncated"] = len(delivery["failures"]) - 50
+        delivery["failures"] = delivery["failures"][:50]
+    return delivery
+
+
+@router.get("/pdf/section")
+async def download_section_pdf(
+    class_id: str,
+    section: str,
+    user: dict = Depends(require_roles("school_admin")),
+):
+    """Download a single section's timetable as PDF (admin preview)."""
+    from fastapi.responses import Response
+    from core.db import get_db as _root_db
+    from core import timetable_pdf as pdfgen
+
+    tdb = await tenant_db(user["school_id"])
+    rdb = _root_db()
+    school = await rdb.schools.find_one({"id": user["school_id"]}, {"_id": 0}) or {}
+    cls = await tdb.classes.find_one({"id": class_id}, {"_id": 0})
+    if not cls:
+        raise HTTPException(status_code=404, detail="Class not found")
+    subjects = await tdb.subjects.find({"school_id": user["school_id"]}, {"_id": 0}).to_list(500)
+    teachers = await rdb.users.find(
+        {"school_id": user["school_id"], "role": "teacher"},
+        {"_id": 0, "id": 1, "name": 1},
+    ).to_list(2000)
+    slots = await tdb.timetable.find(
+        {"school_id": user["school_id"], "class_id": class_id, "section": section.upper()},
+        {"_id": 0},
+    ).to_list(2000)
+    if not slots:
+        raise HTTPException(status_code=404, detail="No timetable for this section.")
+    periods_per_day = max(int(s.get("period") or 1) for s in slots)
+    pdf_bytes = pdfgen.section_pdf(
+        school_name=school.get("name") or "School",
+        class_name=cls.get("name") or "Class",
+        section=section.upper(),
+        slots=slots, subjects=subjects, teachers=teachers,
+        periods_per_day=periods_per_day, academic_year=school.get("academic_year"),
+    )
+    fname = f"timetable_{(cls.get('name') or 'class').replace(' ', '_')}_{section.upper()}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"inline; filename={fname}"},
+    )
+
+
+# end of timetable router

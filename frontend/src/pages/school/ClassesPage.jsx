@@ -705,8 +705,29 @@ function SuggestTimetableModal({ target, subjects, teachers, onClose, onSaved })
         Object.entries(cfg.subject_day_pins).filter(([, v]) => Array.isArray(v) && v.length > 0)
       );
       if (Object.keys(pins).length > 0) body.subject_day_pins = pins;
-      const { data } = await api.post("/timetable/suggest", body);
-      setResult(data);
+      const { data } = await api.post("/timetable/suggest-batch", {
+        defaults: body,
+        sections: [{ class_id: target.class_id, section: target.section }],
+      });
+      // /suggest-batch returns a multi-section response; project the single-section result
+      // back into the shape that this modal expects (slots/warnings/subject_distribution).
+      const sec = (data.sections && data.sections[0]) || null;
+      const projected = sec
+        ? {
+            slots: sec.slots,
+            warnings: [
+              ...(sec.warnings || []),
+              ...(data.optimization_suggestions || []).filter((s) => !/^All sections scheduled cleanly/.test(s)),
+            ],
+            subject_distribution: sec.subject_distribution,
+            days: sec.days,
+            periods_per_day: sec.periods_per_day,
+            total_slots: sec.total_teaching_slots,
+            break_periods: sec.break_periods,
+            conflict_summary: data.conflict_summary,
+          }
+        : data;
+      setResult(projected);
     } catch (err) { toast.error(formatApiError(err)); }
     finally { setLoading(false); }
   };

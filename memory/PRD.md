@@ -16,6 +16,34 @@
 - School Super Admin (per school)
 - Accounts / Teacher / Parent
 
+## Iteration — 2026-01 (current session, v40) — Multi-section auto-scheduler
+**Original ask:** Generate weekly timetables for multiple grades/sections in one go with these rules: subject frequency, balanced distribution, allowed periods (lab/sports/library), max consecutive heavy subjects, class-teacher period, fixed breaks, no cross-section teacher conflicts, conflict highlights, optimization suggestions. Outputs: per-section grid, teacher-wise grid, conflict summary, suggestions.
+
+**Backend (`routes/timetable.py`)**
+- `SuggestTimetableRequest` extended with: `fixed_breaks[]`, `subject_categories{}`, `allowed_periods_per_subject{}`, `max_consecutive_heavy`, `class_teacher{teacher_id, period, subject_id?, label}`.
+- Refactored greedy engine into `_generate_section_schedule(...)` which respects every constraint and **mutates a shared `busy` set + `rr_index`** so the same engine can be called in a loop for batch generation without cross-section conflicts.
+- **New endpoint `POST /api/timetable/suggest-batch`** — takes `defaults` (constraints applied to every section) + `sections[]` (per-section overrides incl. `student_count`, per-section `class_teacher`). Returns:
+  - `sections[]` — per-section grid (slots, warnings, subject_distribution, break_periods).
+  - `teacher_view` — teacher-wise weekly grid grouped by day/period + min/max workload.
+  - `conflict_summary` — cross-section `double_bookings`, `unfilled_slots` with class/section/day/period/subject/reason, plus collated warnings.
+  - `optimization_suggestions[]` — actionable English hints (e.g. "Add 1 more teacher for 'Science' …").
+- **New endpoint `POST /api/timetable/save-batch`** — persists every section atomically. Validates intra-payload + cross-class conflicts (HTTP 409 with the same detail shape as `/bulk`). Replaces each (class_id, section) in one shot, fires teacher Telegram notifications.
+- Existing `/api/timetable/suggest` and `/api/timetable/bulk` continue to work (back-compat verified).
+
+**Frontend (`pages/school/TimetableBuilderPage.jsx`)**
+- New "Timetable Builder" admin page at `/school/timetable-builder` with sidebar nav.
+- Global config panel: periods/day, start time, period length, lunch period, max-heavy-in-a-row, working-days toggles, **add-multiple-fixed-breaks** inline form.
+- Subject constraints matrix table: per-subject **category dropdown** (heavy / light / lab / sports / library / regular), **periods/week** input, **allowed-periods** toggle grid, **avoid-last-period** checkbox.
+- Sections panel: every class lists its sections as toggle chips; each selected section gets a row with `student_count` input + optional class-teacher teacher/period selectors.
+- Result panel with 3 tabs: **Sections** (one weekly grid per section, unfilled slots flagged in red), **Teacher view** (per-teacher weekly grid with class·section badges), **Conflicts** (optimization suggestions, unfilled-slots table, warnings).
+- "Save all sections" button posts to `/save-batch` and surfaces server-side 409 conflicts via the same `formatApiError`.
+
+**Tests**
+- v40 testing subagent → **13/13 backend tests passed**. Covered: `/suggest-batch` (4 sections), cross-section teacher uniqueness, fixed_breaks, allowed_periods_per_subject, max_consecutive_heavy, class_teacher pin propagation to teacher_view, subject_periods frequency, no_last_period_subjects, conflict_summary.unfilled_slots, optimization_suggestions, `/save-batch` persistence + atomic 409, `/bulk` & `/suggest` back-compat.
+- Minor code-review item fixed: CT-subject frequency now correctly deducts `len(days)` when CT covers a subject, so `subject_periods` no longer overshoots.
+
+
+
 ## Iteration — 2026-01 (current session, v39) — Timetable conflict-free + Teacher leaves
 **Original ask:** No collision of same teacher across grades/classes/sections when filling the timetable, even with multiple teachers per subject and 7+ classes. Time-table must also respect teacher leaves. Add a teacher-leave request page (teacher submits, school admin approves).
 

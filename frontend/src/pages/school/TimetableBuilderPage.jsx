@@ -43,12 +43,18 @@ export default function TimetableBuilderPage() {
     lunch_break_period: 4,
     fixed_breaks: [],
     max_consecutive_heavy: 2,
+    max_periods_per_day_per_teacher: "", // empty = unlimited
     no_last_period_subjects: [],
     subject_categories: {},          // {sid: "heavy"|...}
     allowed_periods_per_subject: {}, // {sid: [periods]}
     subject_periods: {},             // {sid: int}
     subject_day_pins: {},            // {sid: [days]}
   });
+
+  // locked_assignments per section: { [`${class_id}|${section}|${day}|${period}`]: {teacher_id, subject_id} }
+  const [locks, setLocks] = useState({});
+  const [publishing, setPublishing] = useState(false);
+  const [publishResult, setPublishResult] = useState(null);
 
   // Section list (each row: {class_id, section, student_count, class_teacher: {teacher_id, period}})
   const [sections, setSections] = useState([]);
@@ -134,6 +140,10 @@ export default function TimetableBuilderPage() {
       lunch_break_period: cfg.lunch_break_period || null,
       fixed_breaks: fixed_breaks.length ? fixed_breaks : undefined,
       max_consecutive_heavy: cfg.max_consecutive_heavy,
+      max_periods_per_day_per_teacher:
+        cfg.max_periods_per_day_per_teacher !== "" && cfg.max_periods_per_day_per_teacher != null
+          ? Number(cfg.max_periods_per_day_per_teacher)
+          : undefined,
       no_last_period_subjects: cfg.no_last_period_subjects.length ? cfg.no_last_period_subjects : undefined,
       subject_categories: Object.keys(cfg.subject_categories).length ? cfg.subject_categories : undefined,
       allowed_periods_per_subject:
@@ -159,6 +169,15 @@ export default function TimetableBuilderPage() {
           label: "Class Teacher",
         };
       }
+      // Per-section locks
+      const secLocks = Object.entries(locks)
+        .filter(([k]) => k.startsWith(`${s.class_id}|${s.section}|`))
+        .map(([k, v]) => {
+          const [, , day, period] = k.split("|");
+          return { day, period: Number(period), teacher_id: v.teacher_id, subject_id: v.subject_id || undefined };
+        })
+        .filter((l) => l.teacher_id);
+      if (secLocks.length) out.locked_assignments = secLocks;
       return out;
     });
     return { defaults, sections: sectionPayload, reset_existing: true };
@@ -201,6 +220,38 @@ export default function TimetableBuilderPage() {
     }
   };
 
+  const publishToTelegram = async () => {
+    if (!window.confirm("Publish the saved timetable as a PDF to teachers and parents via Telegram?")) return;
+    setPublishing(true);
+    setPublishResult(null);
+    try {
+      const class_ids = Array.from(new Set(sections.map((s) => s.class_id)));
+      const { data } = await api.post("/timetable/publish", { class_ids, audiences: ["teachers", "parents"] });
+      setPublishResult(data);
+      const ts = data.teachers_sent || 0, tt = data.teachers_total || 0;
+      const ps = data.parents_sent || 0, pt = data.parents_total || 0;
+      toast.success(`Published — teachers ${ts}/${tt}, parents ${ps}/${pt}`);
+    } catch (err) {
+      toast.error(formatApiError(err));
+    } finally {
+      setPublishing(false);
+    }
+  };
+
+  const setLockForSlot = (class_id, section, day, period, teacher_id, subject_id) => {
+    const key = `${class_id}|${section}|${day}|${period}`;
+    setLocks((prev) => {
+      const next = { ...prev };
+      if (!teacher_id) {
+        delete next[key];
+      } else {
+        next[key] = { teacher_id, subject_id: subject_id || "" };
+      }
+      return next;
+    });
+  };
+  const clearLock = (class_id, section, day, period) => setLockForSlot(class_id, section, day, period, null);
+
   return (
     <div data-testid="timetable-builder-page">
       <PageHeader
@@ -215,6 +266,12 @@ export default function TimetableBuilderPage() {
             {result && (
               <button onClick={saveAll} disabled={saving} className="btn-secondary" data-testid="builder-save-btn">
                 {saving ? "Saving…" : "Save all sections"}
+              </button>
+            )}
+            {result && (
+              <button onClick={publishToTelegram} disabled={publishing} className="btn-ghost"
+                data-testid="builder-publish-btn">
+                {publishing ? "Publishing…" : "📤 Publish to Telegram"}
               </button>
             )}
           </>
@@ -253,6 +310,13 @@ export default function TimetableBuilderPage() {
             <label className="label">Max heavy in a row</label>
             <input type="number" min={1} max={8} className="input" value={cfg.max_consecutive_heavy}
               onChange={(e) => setCfg({ ...cfg, max_consecutive_heavy: Number(e.target.value) || 2 })} data-testid="cfg-heavy-cap" />
+          </div>
+          <div>
+            <label className="label">Max periods/day per teacher</label>
+            <input type="number" min={1} max={12} className="input" placeholder="No cap"
+              value={cfg.max_periods_per_day_per_teacher}
+              onChange={(e) => setCfg({ ...cfg, max_periods_per_day_per_teacher: e.target.value })}
+              data-testid="cfg-max-ppd-teacher" />
           </div>
           <div className="md:col-span-3">
             <label className="label">Working days</label>
@@ -433,7 +497,17 @@ export default function TimetableBuilderPage() {
           {view === "sections" && (
             <div className="space-y-6">
               {result.sections.map((s) => (
-                <SectionGrid key={`${s.class_id}-${s.section}`} sec={s} subjectMap={subjectMap} teacherMap={teacherMap} />
+                <SectionGrid
+                  key={`${s.class_id}-${s.section}`}
+                  sec={s}
+                  subjectMap={subjectMap}
+                  teacherMap={teacherMap}
+                  teachers={teachers}
+                  subjects={subjects}
+                  locks={locks}
+                  setLock={setLockForSlot}
+                  clearLock={clearLock}
+                />
               ))}
             </div>
           )}
@@ -442,6 +516,40 @@ export default function TimetableBuilderPage() {
           )}
           {view === "conflicts" && (
             <ConflictPanel summary={result.conflict_summary} suggestions={result.optimization_suggestions} />
+          )}
+        </Section>
+      )}
+      {publishResult && (
+        <Section title="Publish report">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3" data-testid="publish-report">
+            <div className="border border-line rounded-md p-3">
+              <div className="overline mb-1">Teachers</div>
+              <div className="text-2xl font-display">{publishResult.teachers_sent}/{publishResult.teachers_total}</div>
+              <div className="text-xs text-ink-muted">sent · {publishResult.teachers_failed} failed</div>
+            </div>
+            <div className="border border-line rounded-md p-3">
+              <div className="overline mb-1">Parents</div>
+              <div className="text-2xl font-display">{publishResult.parents_sent}/{publishResult.parents_total}</div>
+              <div className="text-xs text-ink-muted">sent · {publishResult.parents_failed} failed</div>
+            </div>
+          </div>
+          {publishResult.failures?.length > 0 && (
+            <div className="text-xs">
+              <div className="overline mb-1">Failures (first {publishResult.failures.length}{publishResult.failures_truncated ? ` of ${publishResult.failures.length + publishResult.failures_truncated}` : ""})</div>
+              <ul className="space-y-1 text-ink-soft" data-testid="publish-failures">
+                {publishResult.failures.slice(0, 20).map((f, i) => (
+                  <li key={i}>
+                    • {f.name || f.teacher_id || f.parent_id}
+                    {f.student_uid ? ` (${f.student_uid})` : ""} — <span className="italic">{f.reason}</span>
+                  </li>
+                ))}
+              </ul>
+              {publishResult.failures.some((f) => f.reason === "telegram_not_linked") && (
+                <div className="mt-2 text-[11px] text-ink-muted">
+                  Tip: ask recipients to link Telegram from their profile page so they receive their PDFs automatically.
+                </div>
+              )}
+            </div>
           )}
         </Section>
       )}
@@ -467,15 +575,17 @@ function FixedBreakAdder({ onAdd, maxPeriod }) {
   );
 }
 
-function SectionGrid({ sec, subjectMap, teacherMap }) {
+function SectionGrid({ sec, subjectMap, teacherMap, teachers, subjects, locks, setLock, clearLock }) {
   // Group by day -> period -> slot
-  const days = Array.from(new Set(sec.slots.map((s) => s.day)));
   const periods = Array.from(new Set(sec.slots.map((s) => s.period))).sort((a, b) => a - b);
   const grid = {};
   for (const sl of sec.slots) {
     grid[sl.day] = grid[sl.day] || {};
     grid[sl.day][sl.period] = sl;
   }
+  const days = Object.keys(grid);
+  const dayOrder = ["mon", "tue", "wed", "thu", "fri", "sat"];
+  const orderedDays = dayOrder.filter((d) => days.includes(d));
   return (
     <div data-testid={`section-grid-${sec.class_id}-${sec.section}`}>
       <div className="flex items-baseline gap-3 mb-2">
@@ -487,6 +597,7 @@ function SectionGrid({ sec, subjectMap, teacherMap }) {
             ⚠ {sec.warnings.length} warning(s)
           </div>
         )}
+        <div className="text-[11px] text-ink-muted ml-auto">💡 Click a cell to lock a specific teacher; re-generate to apply.</div>
       </div>
       <div className="overflow-x-auto">
         <table className="table">
@@ -497,7 +608,7 @@ function SectionGrid({ sec, subjectMap, teacherMap }) {
             </tr>
           </thead>
           <tbody>
-            {days.map((d) => (
+            {orderedDays.map((d) => (
               <tr key={d} className="table-row">
                 <td className="td font-medium uppercase">{d}</td>
                 {periods.map((p) => {
@@ -509,13 +620,61 @@ function SectionGrid({ sec, subjectMap, teacherMap }) {
                   const subj = subjectMap[sl.subject_id];
                   const t = teacherMap[sl.teacher_id];
                   const unfilled = !sl.teacher_id;
+                  const lockKey = `${sec.class_id}|${sec.section}|${d}|${p}`;
+                  const isLocked = sl.is_locked || !!locks[lockKey];
+                  const bgClass = sl.is_class_teacher_pin
+                    ? "bg-status-info/10 border-l-2 border-status-info"
+                    : isLocked
+                    ? "bg-primary-light/40 border-l-2 border-primary"
+                    : unfilled
+                    ? "bg-status-danger/10 border-l-2 border-status-danger"
+                    : "";
                   return (
-                    <td key={p} className={"td align-top " + (unfilled ? "bg-status-danger/10 border-l-2 border-status-danger" : "")}
+                    <td key={p} className={"td align-top " + bgClass}
                       data-testid={`grid-${sec.class_id}-${sec.section}-${d}-${p}`}>
-                      <div className="font-medium text-xs">{subj?.name || (sl.is_class_teacher_pin ? sl.class_teacher_label : "—")}</div>
+                      <div className="font-medium text-xs">
+                        {subj?.name || (sl.is_class_teacher_pin ? sl.class_teacher_label : "—")}
+                        {isLocked && <span className="ml-1 text-[9px] text-primary">🔒</span>}
+                      </div>
                       <div className={"text-[10px] " + (unfilled ? "text-status-danger uppercase tracking-wider font-semibold" : "text-ink-muted")}>
                         {unfilled ? "Unfilled — assign sub" : (t?.name || "—")}
                       </div>
+                      {!sl.is_class_teacher_pin && (
+                        <details className="mt-1" data-testid={`lock-${sec.class_id}-${sec.section}-${d}-${p}`}>
+                          <summary className="text-[10px] text-ink-muted cursor-pointer hover:text-primary">Lock…</summary>
+                          <div className="mt-1 space-y-1">
+                            <select
+                              className="input text-[10px] w-full"
+                              value={locks[lockKey]?.teacher_id || ""}
+                              onChange={(e) => setLock(sec.class_id, sec.section, d, p, e.target.value, locks[lockKey]?.subject_id || sl.subject_id)}
+                              data-testid={`lock-teacher-${sec.class_id}-${sec.section}-${d}-${p}`}
+                            >
+                              <option value="">— Pick teacher —</option>
+                              {teachers.map((tc) => <option key={tc.id} value={tc.id}>{tc.name}</option>)}
+                            </select>
+                            {locks[lockKey] && (
+                              <select
+                                className="input text-[10px] w-full"
+                                value={locks[lockKey]?.subject_id || sl.subject_id || ""}
+                                onChange={(e) => setLock(sec.class_id, sec.section, d, p, locks[lockKey]?.teacher_id, e.target.value)}
+                                data-testid={`lock-subject-${sec.class_id}-${sec.section}-${d}-${p}`}
+                              >
+                                <option value="">— Any subject —</option>
+                                {subjects.map((sj) => <option key={sj.id} value={sj.id}>{sj.name}</option>)}
+                              </select>
+                            )}
+                            {locks[lockKey] && (
+                              <button
+                                onClick={() => clearLock(sec.class_id, sec.section, d, p)}
+                                className="text-[10px] text-status-danger underline"
+                                data-testid={`unlock-${sec.class_id}-${sec.section}-${d}-${p}`}
+                              >
+                                Clear lock
+                              </button>
+                            )}
+                          </div>
+                        </details>
+                      )}
                     </td>
                   );
                 })}
