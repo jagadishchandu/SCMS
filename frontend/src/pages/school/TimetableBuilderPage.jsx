@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api, formatApiError } from "../../lib/api";
 import { PageHeader, Section, Empty } from "../../components/Primitives";
-import AddTeacherModal from "../../components/AddTeacherModal";
+import AssignTeacherModal from "../../components/AssignTeacherModal";
 import toast from "react-hot-toast";
 
 const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat"];
@@ -57,6 +57,7 @@ export default function TimetableBuilderPage() {
   const [publishing, setPublishing] = useState(false);
   const [publishResult, setPublishResult] = useState(null);
   const [addTeacherOpen, setAddTeacherOpen] = useState(false);
+  const [rebalancing, setRebalancing] = useState(false);
 
   const refreshTeachers = () =>
     api.get("/users", { params: { role: "teacher" } }).then((r) => setTeachers(r.data || [])).catch(() => {});
@@ -205,6 +206,42 @@ export default function TimetableBuilderPage() {
     }
   };
 
+  const rebalance = async () => {
+    if (sections.length === 0) return;
+    setRebalancing(true);
+    try {
+      // Re-run generate with a stricter per-day cap derived from the current
+      // workload max-1, so the engine is forced to redistribute toward under-loaded teachers.
+      const wv = result?.teacher_view;
+      const currentMax = wv?.workload_max || 0;
+      const currentMin = wv?.workload_min || 0;
+      const totalDays = cfg.days.length || 5;
+      // Target avg load per day after rebalance ≈ existing avg, but lower max ceiling.
+      const targetAvgPerDay = Math.max(1, Math.ceil((currentMax + currentMin) / (2 * totalDays)));
+      const tightenedCap = Math.max(
+        1,
+        Math.min(
+          cfg.max_periods_per_day_per_teacher
+            ? Number(cfg.max_periods_per_day_per_teacher) - 1
+            : targetAvgPerDay,
+          targetAvgPerDay + 1,
+        ),
+      );
+      const body = buildPayload();
+      body.defaults.max_periods_per_day_per_teacher = tightenedCap;
+      const { data } = await api.post("/timetable/suggest-batch", body);
+      setResult(data);
+      const nw = data?.teacher_view;
+      toast.success(
+        `Rebalanced — workload range ${nw?.workload_min}–${nw?.workload_max} (was ${currentMin}–${currentMax}). Daily cap set to ${tightenedCap}.`,
+      );
+    } catch (err) {
+      toast.error(formatApiError(err));
+    } finally {
+      setRebalancing(false);
+    }
+  };
+
   const saveAll = async () => {
     if (!result) return;
     setSaving(true);
@@ -265,20 +302,24 @@ export default function TimetableBuilderPage() {
         subtitle="Build conflict-free weekly timetables for every grade and section in one shot. Configure the rules below, click Generate to preview, then Save. Hover over any field for help."
         actions={
           <>
-            <button onClick={() => setAddTeacherOpen(true)} className="btn-ghost" data-testid="open-add-teacher">
-              + Add teacher
+            <button onClick={() => setAddTeacherOpen(true)} className="btn-ghost" data-testid="open-add-teacher"
+              title="Assign an existing teacher to grades and subjects. To onboard a new teacher, use Staff & Roles.">
+              + Assign teacher to grade/subject
             </button>
-            <button onClick={generate} disabled={loading} className="btn-primary" data-testid="builder-generate-btn">
+            <button onClick={generate} disabled={loading} className="btn-primary" data-testid="builder-generate-btn"
+              title="Run the auto-scheduler with the configured constraints and show a preview below.">
               {loading ? "Generating…" : "Generate timetable"}
             </button>
             {result && (
-              <button onClick={saveAll} disabled={saving} className="btn-secondary" data-testid="builder-save-btn">
+              <button onClick={saveAll} disabled={saving} className="btn-secondary" data-testid="builder-save-btn"
+                title="Replace the current saved timetable for the selected sections with the previewed result.">
                 {saving ? "Saving…" : "Save all sections"}
               </button>
             )}
             {result && (
               <button onClick={publishToTelegram} disabled={publishing} className="btn-ghost"
-                data-testid="builder-publish-btn">
+                data-testid="builder-publish-btn"
+                title="Send each teacher their personal weekly PDF and each parent their child's section PDF via Telegram.">
                 {publishing ? "Publishing…" : "📤 Publish to Telegram"}
               </button>
             )}
@@ -286,12 +327,13 @@ export default function TimetableBuilderPage() {
         }
       />
 
-      <AddTeacherModal
+      <AssignTeacherModal
         open={addTeacherOpen}
         onClose={() => setAddTeacherOpen(false)}
-        onCreated={(t) => { setTeachers((arr) => [...arr, t]); refreshTeachers(); }}
+        onSaved={() => refreshTeachers()}
         classes={classes}
         subjects={subjects}
+        teachers={teachers}
       />
 
       {/* Quick "how it works" guide */}
@@ -314,7 +356,8 @@ export default function TimetableBuilderPage() {
           <div>
             <label className="label">Periods / day</label>
             <input type="number" min={1} max={12} className="input" value={cfg.periods_per_day}
-              onChange={(e) => setCfg({ ...cfg, periods_per_day: Number(e.target.value) || 1 })} data-testid="cfg-periods" />
+              onChange={(e) => setCfg({ ...cfg, periods_per_day: Number(e.target.value) || 1 })} data-testid="cfg-periods"
+              title="Total slots in a school day, including lunch and any fixed breaks." />
             <div className="text-[10px] text-ink-muted mt-1">
               {cfg.periods_per_day} period{cfg.periods_per_day !== 1 ? "s" : ""} of {cfg.period_minutes} min = {cfg.periods_per_day * cfg.period_minutes} min/day.
               Includes lunch + any fixed breaks.
@@ -323,7 +366,8 @@ export default function TimetableBuilderPage() {
           <div>
             <label className="label">Start time</label>
             <input type="time" className="input" value={cfg.start_time}
-              onChange={(e) => setCfg({ ...cfg, start_time: e.target.value })} data-testid="cfg-start" />
+              onChange={(e) => setCfg({ ...cfg, start_time: e.target.value })} data-testid="cfg-start"
+              title="When Period 1 begins each day. Subsequent periods are computed from this and Period length." />
             <div className="text-[10px] text-ink-muted mt-1">
               First period begins at {cfg.start_time}.
             </div>
@@ -331,7 +375,8 @@ export default function TimetableBuilderPage() {
           <div>
             <label className="label">Period length (min)</label>
             <input type="number" min={15} max={120} className="input" value={cfg.period_minutes}
-              onChange={(e) => setCfg({ ...cfg, period_minutes: Number(e.target.value) || 45 })} data-testid="cfg-duration" />
+              onChange={(e) => setCfg({ ...cfg, period_minutes: Number(e.target.value) || 45 })} data-testid="cfg-duration"
+              title="Duration of one period. Applies to every period including breaks." />
             <div className="text-[10px] text-ink-muted mt-1">
               Every period is {cfg.period_minutes} minutes long.
             </div>
@@ -339,7 +384,8 @@ export default function TimetableBuilderPage() {
           <div>
             <label className="label">Lunch period</label>
             <select className="input" value={cfg.lunch_break_period || ""}
-              onChange={(e) => setCfg({ ...cfg, lunch_break_period: e.target.value ? Number(e.target.value) : null })} data-testid="cfg-lunch">
+              onChange={(e) => setCfg({ ...cfg, lunch_break_period: e.target.value ? Number(e.target.value) : null })} data-testid="cfg-lunch"
+              title="The period number reserved as lunch in every section. No class is scheduled here.">
               <option value="">No lunch</option>
               {Array.from({ length: cfg.periods_per_day }, (_, i) => i + 1).map((p) => (
                 <option key={p} value={p}>Period {p}</option>
@@ -354,7 +400,8 @@ export default function TimetableBuilderPage() {
           <div>
             <label className="label">Max heavy in a row</label>
             <input type="number" min={1} max={8} className="input" value={cfg.max_consecutive_heavy}
-              onChange={(e) => setCfg({ ...cfg, max_consecutive_heavy: Number(e.target.value) || 2 })} data-testid="cfg-heavy-cap" />
+              onChange={(e) => setCfg({ ...cfg, max_consecutive_heavy: Number(e.target.value) || 2 })} data-testid="cfg-heavy-cap"
+              title="Prevents fatigue: caps how many ‘heavy’ subjects (Math/Sci) can run back-to-back in one day." />
             <div className="text-[10px] text-ink-muted mt-1">
               No more than <strong>{cfg.max_consecutive_heavy}</strong> back-to-back ‘heavy’ subjects (Math, Sci) on the same day.
             </div>
@@ -364,7 +411,8 @@ export default function TimetableBuilderPage() {
             <input type="number" min={1} max={12} className="input" placeholder="No cap"
               value={cfg.max_periods_per_day_per_teacher}
               onChange={(e) => setCfg({ ...cfg, max_periods_per_day_per_teacher: e.target.value })}
-              data-testid="cfg-max-ppd-teacher" />
+              data-testid="cfg-max-ppd-teacher"
+              title="Daily teaching cap for every teacher. Lower numbers smooth the load but may need more substitutes." />
             <div className="text-[10px] text-ink-muted mt-1">
               {cfg.max_periods_per_day_per_teacher
                 ? `Each teacher will teach at most ${cfg.max_periods_per_day_per_teacher} period(s) per day. Lower numbers may leave some slots needing substitutes.`
@@ -441,14 +489,16 @@ export default function TimetableBuilderPage() {
                     <td className="td font-medium">{s.name}</td>
                     <td className="td">
                       <select className={"input text-xs " + (CAT_TINT[cat] || "")} value={cat}
-                        onChange={(e) => setSubjectCategory(s.id, e.target.value)} data-testid={`subj-cat-${s.id}`}>
+                        onChange={(e) => setSubjectCategory(s.id, e.target.value)} data-testid={`subj-cat-${s.id}`}
+                        title="How this subject behaves: Heavy respects the in-a-row cap; Lab/Sports/Library usually pair with Allowed periods; Light/Regular = no special handling.">
                         {CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
                       </select>
                     </td>
                     <td className="td">
                       <input type="number" min={0} className="input w-20" value={freq}
                         onChange={(e) => setSubjectFrequency(s.id, e.target.value)}
-                        placeholder="auto" data-testid={`subj-freq-${s.id}`} />
+                        placeholder="auto" data-testid={`subj-freq-${s.id}`}
+                        title="How many slots per week per section. Leave blank to auto-distribute evenly across remaining slots." />
                     </td>
                     <td className="td">
                       <div className="flex flex-wrap gap-1">
@@ -566,15 +616,31 @@ export default function TimetableBuilderPage() {
           title="Step 4 — Review & save"
           subtitle="Switch tabs to inspect per-section grids, teacher loads, and conflicts. Lock specific teachers per slot if needed, then Save."
           action={
-            <div className="flex gap-2">
-              {["sections", "teachers", "conflicts"].map((v) => (
+            <div className="flex gap-2 flex-wrap items-center">
+              {["sections", "teachers", "workload", "conflicts"].map((v) => (
                 <button key={v} onClick={() => setView(v)}
                   className={"text-xs px-3 py-1 rounded-md border " +
                     (view === v ? "bg-primary text-primary-foreground border-primary" : "border-line text-ink-soft")}
-                  data-testid={`view-${v}`}>
-                  {v === "sections" ? "Sections" : v === "teachers" ? "Teacher view" : `Conflicts (${(result.conflict_summary.unfilled_slots.length || 0) + (result.conflict_summary.double_bookings.length || 0)})`}
+                  data-testid={`view-${v}`}
+                  title={
+                    v === "sections" ? "One weekly grid per section. Click any cell for Lock / Find substitute."
+                    : v === "teachers" ? "Per-teacher weekly grid showing which class·section + subject they teach each period."
+                    : v === "workload" ? "Bar-chart view of each teacher's weekly load by day. Use 'Rebalance' to prefer under-loaded teachers."
+                    : "Unfilled slots, same-grade collisions repaired, optimization suggestions."
+                  }>
+                  {v === "sections" ? "Sections"
+                    : v === "teachers" ? "Teacher view"
+                    : v === "workload" ? "Workload"
+                    : `Conflicts (${(result.conflict_summary.unfilled_slots.length || 0) + (result.conflict_summary.double_bookings.length || 0)})`}
                 </button>
               ))}
+              {view === "workload" && (
+                <button onClick={rebalance} disabled={rebalancing} className="btn-ghost text-xs px-3 py-1"
+                  data-testid="builder-rebalance-btn"
+                  title="Re-run the engine biased to prefer the under-loaded teachers, smoothing the workload gap.">
+                  {rebalancing ? "Rebalancing…" : "⚖ Rebalance"}
+                </button>
+              )}
             </div>
           }
         >
@@ -597,6 +663,9 @@ export default function TimetableBuilderPage() {
           )}
           {view === "teachers" && (
             <TeacherView teacher_view={result.teacher_view} subjectMap={subjectMap} classMap={classMap} days={cfg.days} periodsPerDay={cfg.periods_per_day} />
+          )}
+          {view === "workload" && (
+            <WorkloadView teacher_view={result.teacher_view} days={cfg.days} />
           )}
           {view === "conflicts" && (
             <ConflictPanel summary={result.conflict_summary} suggestions={result.optimization_suggestions} />
@@ -641,6 +710,89 @@ export default function TimetableBuilderPage() {
         <Empty title="Configure the steps above, then click ‘Generate timetable’"
                message="The engine will produce a timetable per section, plus a teacher-wise view and a conflict report. You can review and tweak before saving." />
       )}
+    </div>
+  );
+}
+
+function WorkloadView({ teacher_view, days }) {
+  const dayList = days || ["mon", "tue", "wed", "thu", "fri"];
+  const dayLabel = { mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat" };
+  const teachers = (teacher_view.teachers || []).slice().sort((a, b) => b.total_periods - a.total_periods);
+  const max = teacher_view.workload_max || 1;
+  const min = teacher_view.workload_min || 0;
+  const avg = teachers.length ? Math.round(teachers.reduce((s, t) => s + t.total_periods, 0) / teachers.length) : 0;
+  // Compute per-teacher per-day counts
+  const rows = teachers.map((t) => {
+    const perDay = dayList.map((d) => Object.keys(t.by_day?.[d] || {}).length);
+    const peak = perDay.length ? Math.max(...perDay) : 0;
+    const dayMax = peak || 1;
+    return { ...t, perDay, peak, dayMax };
+  });
+  const gap = max - min;
+  return (
+    <div data-testid="workload-view" className="space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-2">
+        <Stat label="Teachers" value={teachers.length} hint="In this week's schedule" />
+        <Stat label="Avg load" value={`${avg}/wk`} hint="Average periods/week per teacher" />
+        <Stat label="Min – Max" value={`${min} – ${max}`} hint="Lowest and highest weekly loads" tone={gap > 8 ? "warning" : "default"} />
+        <Stat label="Range gap" value={gap} hint={gap === 0 ? "Perfectly balanced ⚖" : gap <= 4 ? "Well balanced" : gap <= 8 ? "Some imbalance" : "Significant imbalance — try Rebalance"} tone={gap > 8 ? "warning" : gap === 0 ? "success" : "default"} />
+      </div>
+      <div className="text-xs text-ink-muted">
+        💡 The bar shows each teacher's load per day. A taller bar = busier day. The number on each bar = periods that day.
+        Use the <strong>Rebalance</strong> button to ask the engine to even out the load by tightening the daily cap.
+      </div>
+      <div className="space-y-2">
+        {rows.map((t) => (
+          <div key={t.teacher_id} className="border border-line rounded-md p-3 flex items-center gap-3" data-testid={`wl-row-${t.teacher_id}`}>
+            <div className="min-w-[160px]">
+              <div className="font-medium text-sm">{t.teacher_name}</div>
+              <div className="text-[10px] text-ink-muted">
+                {t.total_periods} period{t.total_periods !== 1 ? "s" : ""}/week · peak {t.peak}/day
+              </div>
+            </div>
+            <div className="flex-1 flex items-end gap-2 h-16">
+              {t.perDay.map((n, i) => {
+                const h = Math.round((n / Math.max(1, t.dayMax)) * 56) + 4;
+                const tone = t.dayMax >= 6 ? "bg-status-danger"
+                  : t.dayMax >= 4 ? "bg-status-warning"
+                  : "bg-primary";
+                return (
+                  <div key={i} className="flex flex-col items-center justify-end h-full" style={{ minWidth: 40 }}
+                    data-testid={`wl-bar-${t.teacher_id}-${dayList[i]}`}>
+                    <div className={"w-full rounded-t text-center text-[9px] text-white font-medium " + tone} style={{ height: h + "px" }}>
+                      {n > 0 ? n : ""}
+                    </div>
+                    <div className="text-[10px] text-ink-muted uppercase mt-1">{dayLabel[dayList[i]] || dayList[i]}</div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="min-w-[60px] text-right">
+              <div className={"text-lg font-display " + (t.total_periods === max && gap > 4 ? "text-status-warning" : t.total_periods === min ? "text-ink-muted" : "")}>
+                {t.total_periods}
+              </div>
+              <div className="text-[10px] text-ink-muted">total</div>
+            </div>
+          </div>
+        ))}
+        {rows.length === 0 && (
+          <div className="text-sm text-ink-muted text-center py-6">No teacher assignments yet.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Stat({ label, value, hint, tone = "default" }) {
+  const toneClass =
+    tone === "warning" ? "border-status-warning/40 bg-status-warning/5"
+    : tone === "success" ? "border-status-success/40 bg-status-success/5"
+    : "border-line bg-bg-subtle";
+  return (
+    <div className={"rounded-md border p-3 " + toneClass}>
+      <div className="overline mb-1">{label}</div>
+      <div className="text-2xl font-display">{value}</div>
+      {hint && <div className="text-[10px] text-ink-muted mt-0.5">{hint}</div>}
     </div>
   );
 }
