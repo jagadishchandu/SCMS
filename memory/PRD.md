@@ -16,6 +16,42 @@
 - School Super Admin (per school)
 - Accounts / Teacher / Parent
 
+## Iteration — 2026-01 (current session, v39) — Timetable conflict-free + Teacher leaves
+**Original ask:** No collision of same teacher across grades/classes/sections when filling the timetable, even with multiple teachers per subject and 7+ classes. Time-table must also respect teacher leaves. Add a teacher-leave request page (teacher submits, school admin approves).
+
+**Changes implemented**
+- `POST /api/timetable/bulk` now strictly validates:
+  - **Intra-payload conflicts** — same teacher in two slots at the same (day, period) in the submission.
+  - **Cross-class collisions** — same teacher already booked at the same (day, period) in any OTHER class/section.
+  - On any conflict the save is rejected with **HTTP 409** and a structured detail (`{error, message, intra_payload_conflicts, cross_class_conflicts}`) including human-friendly `teacher_name`, `class_name`, `subject_name`. The existing class/section's prior timetable is NOT touched until validation passes.
+- `POST /api/timetable/suggest` is now leave-aware:
+  - New optional payload field `effective_week_start` (ISO Monday). When supplied, every teacher with an **approved** `teacher_leaves` row that covers a weekday inside that week is excluded for those days. The greedy assigner picks an alternate teacher of the same subject when available, else returns the slot with `teacher_id=""` and a warning so the admin can pencil-in a substitute.
+- **New `routes/teacher_leaves.py`** (mounted on `/api/teacher-leaves`):
+  - `POST /` — teacher creates leave (`leave_type`, `start_date`, `end_date`, `reason`).
+  - `GET /` — list (teacher sees own; admin sees all in school) with `?status=` filter.
+  - `GET /pending-count` — admin sidebar badge.
+  - `GET /active?date=YYYY-MM-DD` — approved leaves covering the date (returns `teacher_ids` list for the timetable UI).
+  - `POST /{id}/approve` — admin only. Sets status=`approved` AND auto-upserts `teacher_attendance` rows status=`leave` for each weekday (Mon-Sat) inside the range, stamped with `auto_from_leave_id`. Fires an in-app notification to the teacher.
+  - `POST /{id}/reject` — admin only, with optional decision note.
+  - `DELETE /{id}` — teacher cancels their own pending leave; admin can cancel any. Approved leave DELETE rolls back the auto-marked attendance rows.
+- **Frontend**:
+  - New `pages/shared/TeacherLeavesPage.jsx` (used by both teacher and admin routes).
+    - Teacher: create form (leave type, dates with `DatePicker`, reason) + filterable history (pending/approved/rejected/cancelled).
+    - Admin: pending queue first; one-click Approve / Reject; filterable history.
+  - `TimetablePage.jsx`: queries `/api/teacher-leaves/active?date=…` and overlays an **"ON LEAVE — find substitute"** badge on every cell whose teacher is on approved leave for the picked date. Cell also tints warning (`status=leave`) for visibility.
+  - `App.js`: new routes `/school/teacher-leaves` (admin) and `/teacher/teacher-leaves` (teacher).
+  - `Sidebar.jsx`: nav items added for both roles; admin gets a live red pending-count badge fed by new `useTeacherLeavePending` hook (polls `/api/teacher-leaves/pending-count`).
+  - `lib/api.js`: `formatApiError` now also unwraps `detail.message` so the 409 conflict message renders nicely in toasts.
+
+**Tests**
+- v39 testing subagent: **18/18 backend tests passed** (timetable conflict 409 paths, happy-path replace semantics, full teacher-leaves CRUD with auto attendance marking, decision idempotency, role guards, leave-aware suggest).
+- Smoke-tested via curl: cross-class collision returns rich 409 detail; suggest with `effective_week_start=2026-06-01` correctly excludes Priya (approved leave Jun 1-3) from Mon/Tue/Wed assignments.
+
+**Test credentials touched**
+- No auth changes. Existing demo creds still valid (see `test_credentials.md`).
+
+
+
 ## Iteration — 2026-01 (current session, part 6) — DatePicker + Mongo aggregation
 **Changes implemented**
 - New `frontend/src/components/DatePicker.jsx` — popover calendar (day + month
