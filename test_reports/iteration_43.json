@@ -1,0 +1,46 @@
+{
+  "summary": "v44 backend tests for class_subjects + same-grade subject uniqueness — 6/8 v44 tests PASS and 36/36 v40+v41+v43 regression PASS. Two v44 tests FAIL reproducibly (100% repro across 5 runs) — both exposing the SAME real bug: the HARD same-grade subject uniqueness constraint leaks at the tail of the greedy schedule even though 5 distinct subjects exist for 2 sections (so capacity is NOT short).",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "/api/timetable/suggest-batch",
+        "issue": "HARD same-grade subject uniqueness violated at the END of the greedy pass. Reproducible 5/5 runs: at FRI period 5 of Grade-5 sections A and B, BOTH end up with the SAME subject_id (e.g. 'd128ae799f864f03b77ec373'). With 5 subjects > 2 sections per grade, this should NEVER happen and the 'Same-grade uniqueness relaxed' warning should also NEVER fire in this configuration. Root cause: when section B reaches its last positions, `remaining` (subject quota) has narrowed to ONE subject that was already placed in section A at the same (day, period). The HARD filter at line ~686-697 detects `unique_here = []` and falls back to `cand` with a warning, but the fallback shouldn't be needed because globally there were free alternatives — the greedy painted itself into a corner. Suggested fix: balance per-(day,period) subject choices across sections by using a section-aware quota tracker, OR do a final repair pass that detects same-grade collisions and rotates the conflicting subject with a non-conflicting one from another period in the SAME section.",
+        "priority": "HIGH"
+      },
+      {
+        "endpoint": "/api/timetable/suggest-batch (repair pass)",
+        "issue": "Test test_repair_swap_preserves_same_grade_uniqueness also fails 100% — same root cause: the collision originates in the greedy pass, and the repair pass does NOT detect/fix existing same-grade subject collisions (it only fixes empty teacher_id slots). When max_periods_per_day_per_teacher=4 forces some repairs, the underlying same-grade collision from the greedy stage remains.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": []
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_v44_class_subjects_same_grade_unique.py",
+    "/app/test_reports/pytest/v44_class_subjects.xml",
+    "/app/test_reports/pytest/v44_regression.xml"
+  ],
+  "action_items": [
+    "FIX: prevent same-grade subject collision in the greedy assignment when capacity is sufficient. The current contract says 'with 5 distinct subjects and at most 2 sections per grade, ZERO same-grade duplicates'. Reproducible failure: Grade 5 sections A and B both get subject 'd128ae...' at FRI period 5 across 5/5 runs.",
+    "Optionally: add a post-greedy same-grade-collision repair step that rotates duplicate subjects with non-conflicting slots in the same section.",
+    "Re-run /app/backend/tests/test_v44_class_subjects_same_grade_unique.py after fix — all 8 tests must pass."
+  ],
+  "critical_code_review_comments": [
+    "/app/backend/routes/timetable.py _generate_section_schedule line ~672-697: the HARD same-grade uniqueness filter correctly checks `same_grade_slot_subjects` BUT it accepts a fallback (`elif cand: warnings_set.add(...relaxed...)`) which is the source of the bug — capacity-driven relaxation is reasonable, but greedy-corner-driven relaxation is NOT. Distinguish the two cases: count distinct subjects feasible at (day, period) globally; only allow fallback if that count < num_sections_in_grade.",
+    "Repair pass (line ~876-1001) cleans empty teacher slots via swap+substitute, but never re-examines same-grade subject placement. Adding a post-repair pass: for every (class_id, day, period) with a duplicate subject across sections, attempt intra-section subject swap with a sibling section's non-conflicting subject would close the contract.",
+    "POST /api/users now returns class_subjects ({}) by default — verified by test_post_user_persists_class_subjects. GOOD. PATCH also persists — GOOD.",
+    "_teachers_for_subject_in_class (line 463-485) correctly narrows by class_subjects when non-empty, falls back to global subjects[] otherwise — verified by both test_constrained_teacher_only_in_allowed_pairs and test_backward_compat_legacy_teachers_eligible.",
+    "Cross-section teacher uniqueness still holds (verified) — no teacher double-booking across sections."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_v44_class_subjects_same_grade_unique.py (NEW, 8 pytest tests)"
+  ],
+  "success_rate": {"backend": "v44: 75% (6/8). Regression v40+v41+v43: 100% (36/36)", "frontend": "n/a"},
+  "test_credentials": "principal@sunrise.edu / School@123. Uses Anita Sharma seed (anita@sunrise.edu / Teacher@123) created idempotently by fixture, plus 2 ephemeral v44-* teachers per test run.",
+  "seed_data_creation": "Each test_post_user / test_patch_user / constrained_teacher creates a fresh teacher with unique uuid-based email (v44-XXXX@sunrise.edu, v44p-XXXX@sunrise.edu, v44c-XXXX@sunrise.edu). These accumulate across runs but do NOT interfere because they are class-restricted/subject-limited.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "test_v44_class_subjects_same_grade_unique.py is the canonical v44 suite. The two failing tests both expose the SAME root-cause bug — fixing the greedy same-grade fallback should green both. Reproducer: POST /api/timetable/suggest-batch with the default 4-section payload (`_typical_batch_payload` analog) returns conflict in Grade-5 sections A and B at FRI P5 with the SAME subject_id. The legacy regression suite (test_v40 + test_v41 + test_v43, 36 tests) still passes 100% — v44 changes are non-breaking. Per-run accumulated v44-* teachers do NOT break determinism because they are class-restricted.",
+  "rca of the issue": "Root cause: greedy scheduler in _generate_section_schedule (timetable.py line ~666-737) iterates positions sequentially and shrinks each subject's `remaining` count after assignment. When section B reaches its tail positions (e.g. FRI P5), the only subjects with remaining>0 in B may coincide with the subject section A already placed at that exact (day, period). The HARD same-grade filter (line 686-697) then sees `unique_here = []` and relaxes to the full candidate list, picking the duplicate. Reproduction: 5/5 runs, identical violation slot. Mitigation: (a) cross-section per-(day,period) subject load balancing during quota computation, OR (b) post-pass that detects same-grade subject collisions and rotates with another period in the same section. Workaround for users: not currently possible via API knobs — the constraint must be fixed inside the engine."
+}

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api, formatApiError } from "../../lib/api";
 import { PageHeader, Section, Empty } from "../../components/Primitives";
+import AddTeacherModal from "../../components/AddTeacherModal";
 import toast from "react-hot-toast";
 
 const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat"];
@@ -55,6 +56,10 @@ export default function TimetableBuilderPage() {
   const [locks, setLocks] = useState({});
   const [publishing, setPublishing] = useState(false);
   const [publishResult, setPublishResult] = useState(null);
+  const [addTeacherOpen, setAddTeacherOpen] = useState(false);
+
+  const refreshTeachers = () =>
+    api.get("/users", { params: { role: "teacher" } }).then((r) => setTeachers(r.data || [])).catch(() => {});
 
   // Section list (each row: {class_id, section, student_count, class_teacher: {teacher_id, period}})
   const [sections, setSections] = useState([]);
@@ -257,9 +262,12 @@ export default function TimetableBuilderPage() {
       <PageHeader
         eyebrow="Auto-scheduler"
         title="Weekly timetable builder"
-        subtitle="Generate conflict-free timetables across multiple grades and sections in one shot. Configure constraints, then save when satisfied."
+        subtitle="Build conflict-free weekly timetables for every grade and section in one shot. Configure the rules below, click Generate to preview, then Save. Hover over any field for help."
         actions={
           <>
+            <button onClick={() => setAddTeacherOpen(true)} className="btn-ghost" data-testid="open-add-teacher">
+              + Add teacher
+            </button>
             <button onClick={generate} disabled={loading} className="btn-primary" data-testid="builder-generate-btn">
               {loading ? "Generating…" : "Generate timetable"}
             </button>
@@ -278,38 +286,78 @@ export default function TimetableBuilderPage() {
         }
       />
 
+      <AddTeacherModal
+        open={addTeacherOpen}
+        onClose={() => setAddTeacherOpen(false)}
+        onCreated={(t) => { setTeachers((arr) => [...arr, t]); refreshTeachers(); }}
+        classes={classes}
+        subjects={subjects}
+      />
+
+      {/* Quick "how it works" guide */}
+      <div className="border border-line rounded-md p-3 bg-bg-subtle mb-4 text-xs space-y-1" data-testid="builder-help-panel">
+        <div className="font-medium text-ink-strong">How this builder works (quick guide):</div>
+        <ol className="list-decimal ml-4 space-y-0.5 text-ink-soft">
+          <li><strong>Step 1 — Global configuration:</strong> set how the day is structured (periods, lunch, working days).</li>
+          <li><strong>Step 2 — Subject constraints:</strong> tell the engine which subjects are heavy, lab-only, sports-only, etc.</li>
+          <li><strong>Step 3 — Sections:</strong> toggle the grades + sections to generate (one row per section). Optionally pin a Class Teacher per section.</li>
+          <li><strong>Step 4 — Generate → review (Sections / Teacher view / Conflicts) → Save → optionally Publish.</strong></li>
+        </ol>
+        <div className="text-ink-muted">
+          🛡️ Guarantees: no teacher will be double-booked across sections; the same subject won't repeat in the same period across sections of the same grade; unfilled cells are auto-repaired via swap or substitute.
+        </div>
+      </div>
+
       {/* Configuration */}
-      <Section title="Global configuration">
+      <Section title="Step 1 — Global configuration" subtitle="These rules apply to every section unless overridden later.">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
           <div>
             <label className="label">Periods / day</label>
             <input type="number" min={1} max={12} className="input" value={cfg.periods_per_day}
               onChange={(e) => setCfg({ ...cfg, periods_per_day: Number(e.target.value) || 1 })} data-testid="cfg-periods" />
+            <div className="text-[10px] text-ink-muted mt-1">
+              {cfg.periods_per_day} period{cfg.periods_per_day !== 1 ? "s" : ""} of {cfg.period_minutes} min = {cfg.periods_per_day * cfg.period_minutes} min/day.
+              Includes lunch + any fixed breaks.
+            </div>
           </div>
           <div>
             <label className="label">Start time</label>
             <input type="time" className="input" value={cfg.start_time}
               onChange={(e) => setCfg({ ...cfg, start_time: e.target.value })} data-testid="cfg-start" />
+            <div className="text-[10px] text-ink-muted mt-1">
+              First period begins at {cfg.start_time}.
+            </div>
           </div>
           <div>
             <label className="label">Period length (min)</label>
             <input type="number" min={15} max={120} className="input" value={cfg.period_minutes}
               onChange={(e) => setCfg({ ...cfg, period_minutes: Number(e.target.value) || 45 })} data-testid="cfg-duration" />
+            <div className="text-[10px] text-ink-muted mt-1">
+              Every period is {cfg.period_minutes} minutes long.
+            </div>
           </div>
           <div>
             <label className="label">Lunch period</label>
             <select className="input" value={cfg.lunch_break_period || ""}
               onChange={(e) => setCfg({ ...cfg, lunch_break_period: e.target.value ? Number(e.target.value) : null })} data-testid="cfg-lunch">
-              <option value="">None</option>
+              <option value="">No lunch</option>
               {Array.from({ length: cfg.periods_per_day }, (_, i) => i + 1).map((p) => (
                 <option key={p} value={p}>Period {p}</option>
               ))}
             </select>
+            <div className="text-[10px] text-ink-muted mt-1">
+              {cfg.lunch_break_period
+                ? `Period ${cfg.lunch_break_period} is reserved as lunch in every section — no class scheduled.`
+                : "No lunch — every period is a teaching slot."}
+            </div>
           </div>
           <div>
             <label className="label">Max heavy in a row</label>
             <input type="number" min={1} max={8} className="input" value={cfg.max_consecutive_heavy}
               onChange={(e) => setCfg({ ...cfg, max_consecutive_heavy: Number(e.target.value) || 2 })} data-testid="cfg-heavy-cap" />
+            <div className="text-[10px] text-ink-muted mt-1">
+              No more than <strong>{cfg.max_consecutive_heavy}</strong> back-to-back ‘heavy’ subjects (Math, Sci) on the same day.
+            </div>
           </div>
           <div>
             <label className="label">Max periods/day per teacher</label>
@@ -317,8 +365,13 @@ export default function TimetableBuilderPage() {
               value={cfg.max_periods_per_day_per_teacher}
               onChange={(e) => setCfg({ ...cfg, max_periods_per_day_per_teacher: e.target.value })}
               data-testid="cfg-max-ppd-teacher" />
+            <div className="text-[10px] text-ink-muted mt-1">
+              {cfg.max_periods_per_day_per_teacher
+                ? `Each teacher will teach at most ${cfg.max_periods_per_day_per_teacher} period(s) per day. Lower numbers may leave some slots needing substitutes.`
+                : "No daily cap — a teacher can be assigned to every period of the day if needed."}
+            </div>
           </div>
-          <div className="md:col-span-3">
+          <div className="md:col-span-2">
             <label className="label">Working days</label>
             <div className="flex flex-wrap gap-2">
               {DAYS.map((d) => (
@@ -330,12 +383,20 @@ export default function TimetableBuilderPage() {
                 </button>
               ))}
             </div>
+            <div className="text-[10px] text-ink-muted mt-1">
+              {cfg.days.length} working day{cfg.days.length !== 1 ? "s" : ""}: <strong>{cfg.days.map((d) => DAY_LABEL[d]).join(", ") || "none"}</strong>.
+              {(() => {
+                const breaks = 1 + cfg.fixed_breaks.length;
+                const teaching = Math.max(0, cfg.periods_per_day - (cfg.lunch_break_period ? breaks : breaks - 1));
+                return ` → ${teaching * cfg.days.length} teaching slots/week per section.`;
+              })()}
+            </div>
           </div>
         </div>
 
         {/* Fixed breaks */}
         <div className="mb-4">
-          <label className="label">Additional fixed breaks (assembly, snack, etc.)</label>
+          <label className="label">Additional fixed breaks (assembly, snack, prayer, etc.)</label>
           <div className="flex flex-wrap items-center gap-2">
             {cfg.fixed_breaks.map((b, i) => (
               <span key={i} className="inline-flex items-center gap-2 px-2 py-1 rounded-md border border-line text-xs"
@@ -346,11 +407,19 @@ export default function TimetableBuilderPage() {
             ))}
             <FixedBreakAdder onAdd={(b) => setCfg({ ...cfg, fixed_breaks: [...cfg.fixed_breaks, b] })} maxPeriod={cfg.periods_per_day} />
           </div>
+          <div className="text-[10px] text-ink-muted mt-1">
+            {cfg.fixed_breaks.length === 0
+              ? "Add periods that are NOT for teaching — e.g. P1 Assembly, P3 Snack break. They appear blank in every section's grid."
+              : `${cfg.fixed_breaks.length} fixed break(s) configured. Type a period + label above, then click + Add.`}
+          </div>
         </div>
       </Section>
 
       {/* Subject constraints matrix */}
-      <Section title="Subject constraints">
+      <Section
+        title="Step 2 — Subject constraints"
+        subtitle="Tell the engine how each subject should behave. Defaults are sensible — only change what you need."
+      >
         <div className="overflow-x-auto">
           <table className="table" data-testid="subject-constraints-table">
             <thead>
@@ -421,13 +490,19 @@ export default function TimetableBuilderPage() {
             </tbody>
           </table>
         </div>
-        <div className="text-[11px] text-ink-muted mt-2">
-          Leave Periods/week blank to auto-distribute. Allowed-periods: click to whitelist (e.g. Sports only in periods 5–6). Heavy subjects respect the “max in a row” cap above.
+        <div className="text-[11px] text-ink-muted mt-2 space-y-0.5">
+          <div>• <strong>Category</strong>: tag the subject. <em>Heavy</em> → respects the “max in a row” cap. <em>Lab/Sports/Library</em> → typically restricted by Allowed periods. <em>Light/Regular</em> → no special handling.</div>
+          <div>• <strong>Periods/week</strong>: how many slots to allocate per section per week. Leave blank to auto-balance evenly across remaining slots.</div>
+          <div>• <strong>Allowed periods</strong>: click period numbers to <strong>whitelist</strong>. Greyed periods are forbidden. Empty = no restriction.</div>
+          <div>• <strong>No last period</strong>: avoid placing this subject in the final period of the day.</div>
         </div>
       </Section>
 
       {/* Sections list */}
-      <Section title={`Sections to generate (${sections.length} selected)`}>
+      <Section
+        title={`Step 3 — Sections to generate (${sections.length} selected)`}
+        subtitle="Pick the grades + sections that should get a fresh timetable. Same-grade sections will automatically get different subjects at the same time slot."
+      >
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
           {classes.map((c) => (
             <div key={c.id} className="border border-line rounded-md p-3" data-testid={`class-card-${c.id}`}>
@@ -453,18 +528,21 @@ export default function TimetableBuilderPage() {
                     <div className="font-medium">Section {s.section}</div>
                     <input type="number" min={0} className="input text-xs" placeholder="# students"
                       value={s.student_count} onChange={(e) => updateSection(idx, { student_count: e.target.value })}
-                      data-testid={`students-${c.id}-${s.section}`} />
+                      data-testid={`students-${c.id}-${s.section}`}
+                      title="Optional. Used only for reporting; doesn't affect scheduling." />
                     <div className="flex gap-1">
                       <select className="input text-xs" value={s.class_teacher_id}
                         onChange={(e) => updateSection(idx, { class_teacher_id: e.target.value })}
-                        data-testid={`ct-teacher-${c.id}-${s.section}`}>
+                        data-testid={`ct-teacher-${c.id}-${s.section}`}
+                        title="Class teacher — a teacher pinned to one period of every working day for this section.">
                         <option value="">CT teacher…</option>
                         {teachers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                       </select>
                       <select className="input text-xs w-16" value={s.class_teacher_period}
                         onChange={(e) => updateSection(idx, { class_teacher_period: e.target.value })}
                         disabled={!s.class_teacher_id}
-                        data-testid={`ct-period-${c.id}-${s.section}`}>
+                        data-testid={`ct-period-${c.id}-${s.section}`}
+                        title="Which period the class teacher takes every day.">
                         <option value="">P…</option>
                         {teachingPeriods.map((p) => <option key={p} value={p}>P{p}</option>)}
                       </select>
@@ -472,6 +550,11 @@ export default function TimetableBuilderPage() {
                   </div>
                 );
               })}
+              {sections.filter((s) => s.class_id === c.id).length > 0 && (
+                <div className="text-[10px] text-ink-muted">
+                  💡 # students is informational only. Class Teacher is optional — pick a teacher AND the daily period they own.
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -480,7 +563,8 @@ export default function TimetableBuilderPage() {
       {/* Result */}
       {result && (
         <Section
-          title="Generated timetable"
+          title="Step 4 — Review & save"
+          subtitle="Switch tabs to inspect per-section grids, teacher loads, and conflicts. Lock specific teachers per slot if needed, then Save."
           action={
             <div className="flex gap-2">
               {["sections", "teachers", "conflicts"].map((v) => (
@@ -554,7 +638,8 @@ export default function TimetableBuilderPage() {
         </Section>
       )}
       {!result && !loading && (
-        <Empty title="Configure constraints and click Generate" message="The engine will produce a timetable per section, plus a teacher-wise view and a conflict report." />
+        <Empty title="Configure the steps above, then click ‘Generate timetable’"
+               message="The engine will produce a timetable per section, plus a teacher-wise view and a conflict report. You can review and tweak before saving." />
       )}
     </div>
   );

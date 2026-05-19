@@ -102,6 +102,7 @@ async def create_user(payload: UserCreate, user: dict = Depends(require_roles("s
         "qualifications": payload.qualifications,
         "joining_date": payload.joining_date,
         "subjects": payload.subjects or [],
+        "class_subjects": payload.class_subjects or {},
         "monthly_salary": payload.monthly_salary,
         "is_active": True,
         "created_at": utc_now(),

@@ -434,17 +434,55 @@ async def _gather_school_resources(school_id: str):
     subjects = await tdb.subjects.find({"school_id": school_id}, {"_id": 0}).sort("name", 1).to_list(500)
     teachers = await rdb.users.find(
         {"school_id": school_id, "role": "teacher", "is_active": True},
-        {"_id": 0, "id": 1, "name": 1, "subjects": 1},
+        {"_id": 0, "id": 1, "name": 1, "subjects": 1, "class_subjects": 1},
     ).to_list(2000)
-    subject_to_teachers: dict[str, list[dict]] = {}
-    for t in teachers:
-        for sid in (t.get("subjects") or []):
-            subject_to_teachers.setdefault(sid, []).append(t)
     existing = await tdb.timetable.find(
         {"school_id": school_id},
         {"_id": 0, "day": 1, "period": 1, "teacher_id": 1, "class_id": 1, "section": 1},
     ).to_list(20000)
-    return tdb, rdb, subjects, teachers, subject_to_teachers, existing
+    # subject_to_teachers built lazily per-class by callers via _subject_teachers_for_class.
+    return tdb, rdb, subjects, teachers, _build_subject_teacher_index(teachers), existing
+
+
+def _build_subject_teacher_index(teachers: list[dict]) -> dict[str, list[dict]]:
+    """Build a global subject -> teachers index using the union of every teacher's
+    `subjects` AND every subject mentioned in their `class_subjects` mapping. The
+    per-class restriction is enforced separately inside `_teachers_for_subject_in_class`.
+    """
+    out: dict[str, list[dict]] = {}
+    for t in teachers:
+        ids = set(t.get("subjects") or [])
+        for sids in (t.get("class_subjects") or {}).values():
+            for sid in (sids or []):
+                ids.add(sid)
+        for sid in ids:
+            out.setdefault(sid, []).append(t)
+    return out
+
+
+def _teachers_for_subject_in_class(
+    subject_id: str, class_id: str, global_index: dict[str, list[dict]],
+) -> list[dict]:
+    """Pool of teachers who can teach `subject_id` to `class_id`.
+
+    Rule:
+      - If the teacher has a non-empty `class_subjects` mapping, they can only
+        teach subjects listed in `class_subjects[class_id]`.
+      - Otherwise (legacy / unrestricted teacher), they can teach any of their
+        globally-listed `subjects` to any class.
+    """
+    pool = global_index.get(subject_id) or []
+    eligible = []
+    for t in pool:
+        cs = t.get("class_subjects") or {}
+        if cs:
+            allowed = set(cs.get(class_id) or [])
+            if subject_id in allowed:
+                eligible.append(t)
+        else:
+            if subject_id in (t.get("subjects") or []):
+                eligible.append(t)
+    return eligible
 
 
 async def _leave_block_map(tdb, school_id: str, effective_week_start: Optional[str]) -> dict[str, set[str]]:
@@ -492,6 +530,7 @@ def _generate_section_schedule(
     rr_index: dict[str, int],  # shared across batch so global load balances
     cross_load: Optional[dict] = None,  # {(day, period, subject_id): count_so_far} shared across batch
     teacher_day_load: Optional[dict] = None,  # {(teacher_id, day): count} shared across batch — enforces per-day cap globally
+    same_grade_slot_subjects: Optional[dict] = None,  # {(class_id, day, period): set[subject_id]} shared across batch — HARD uniqueness for same-grade sections
 ) -> dict:
     """Core per-section greedy generator. Mutates `busy`, `rr_index`, `cross_load`, and `teacher_day_load`.
 
@@ -512,6 +551,16 @@ def _generate_section_schedule(
         cross_load = {}
     if teacher_day_load is None:
         teacher_day_load = {}
+    if same_grade_slot_subjects is None:
+        same_grade_slot_subjects = {}
+
+    # Build the per-class teacher pool. The caller passes the GLOBAL index
+    # (`subject_to_teachers`); we narrow it to teachers eligible for THIS class
+    # so per-class restrictions (`class_subjects`) are honoured.
+    subject_to_teachers = {
+        sid: _teachers_for_subject_in_class(sid, payload.class_id, subject_to_teachers)
+        for sid in {s["id"] for s in subjects}
+    }
     days = payload.days or DAYS_ORDER[:5]
     days = [d for d in DAYS_ORDER if d in days]
     periods_per_day = payload.periods_per_day
@@ -630,6 +679,23 @@ def _generate_section_schedule(
         allowed_here = [sid for sid in cand if (sid not in allowed_periods) or (period in allowed_periods[sid])]
         cand = allowed_here if allowed_here else cand
 
+        # 2.5. SAME-GRADE subject uniqueness (HARD):
+        #      For sibling sections of the SAME class_id, a subject already placed
+        #      at (day, period) cannot repeat. (Different grades may share the same
+        #      subject at the same time — that's fine and often unavoidable.)
+        same_grade_taken = same_grade_slot_subjects.get((payload.class_id, day, period), set())
+        unique_here = [sid for sid in cand if sid not in same_grade_taken]
+        # Hard constraint: if there are ANY alternatives, do NOT fall back.
+        # If no alternative exists (would only happen if subjects < sections), fall
+        # back to the original list and surface a warning later.
+        if unique_here:
+            cand = unique_here
+        elif cand:
+            warnings_set.add(
+                f"[{cls.get('name')}·{section}] Same-grade uniqueness relaxed at {day.upper()} P{period} — "
+                f"add more distinct subjects so each section can have a different one."
+            )
+
         # 3. no-last-period filter (soft)
         if is_last and no_last_set:
             non_last = [sid for sid in cand if sid not in no_last_set]
@@ -693,6 +759,8 @@ def _generate_section_schedule(
         last_subjects_per_day[day].append(chosen_sid)
         # Track cross-section placement so sibling sections diverge naturally.
         cross_load[(day, period, chosen_sid)] = cross_load.get((day, period, chosen_sid), 0) + 1
+        # HARD record for same-grade subject uniqueness across sibling sections.
+        same_grade_slot_subjects.setdefault((payload.class_id, day, period), set()).add(chosen_sid)
 
     # Materialise slots
     slots = []
@@ -870,6 +938,13 @@ def _generate_section_schedule(
                 continue
             if sub_for_sid is None:
                 continue
+            # HARD same-grade uniqueness: after swap, sid lands at (o_day, o_period)
+            # — that slot must not already have sid from a sibling section. Same for
+            # o_sid landing at (day, period).
+            siblings_at_o = same_grade_slot_subjects.get((payload.class_id, o_day, o_period), set()) - {o_sid}
+            siblings_here = same_grade_slot_subjects.get((payload.class_id, day, period), set()) - {sid}
+            if sid in siblings_at_o or o_sid in siblings_here:
+                continue
             # Perform the swap. Release o_tid from (o_day, o_period); update busy + loads.
             busy.discard((o_day, o_period, o_tid))
             teacher_day_load[(o_tid, o_day)] = max(0, teacher_day_load.get((o_tid, o_day), 1) - 1)
@@ -890,6 +965,11 @@ def _generate_section_schedule(
             }
             busy.add((day, period, o_tid))
             teacher_day_load[(o_tid, day)] = teacher_day_load.get((o_tid, day), 0) + 1
+            # Update same-grade subject records to reflect the swap.
+            same_grade_slot_subjects.setdefault((payload.class_id, o_day, o_period), set()).discard(o_sid)
+            same_grade_slot_subjects.setdefault((payload.class_id, o_day, o_period), set()).add(sid)
+            same_grade_slot_subjects.setdefault((payload.class_id, day, period), set()).discard(sid)
+            same_grade_slot_subjects.setdefault((payload.class_id, day, period), set()).add(o_sid)
             swap_repairs += 1
             swap_done = True
             warnings_set.add(
@@ -1226,6 +1306,7 @@ async def suggest_timetable_batch(
     rr_index: dict[str, int] = {}
     cross_load: dict = {}
     teacher_day_load: dict = {}
+    same_grade_slot_subjects: dict = {}
     # Pre-seed busy with all locked teachers from every section so they get priority.
     for sec in payload.sections:
         merged_locks = sec.locked_assignments or (payload.defaults.locked_assignments if payload.defaults else None) or []
@@ -1245,6 +1326,7 @@ async def suggest_timetable_batch(
             subject_to_teachers=subject_to_teachers, busy=busy,
             teachers_on_leave_per_day=teachers_on_leave_per_day, rr_index=rr_index,
             cross_load=cross_load, teacher_day_load=teacher_day_load,
+            same_grade_slot_subjects=same_grade_slot_subjects,
         )
         res["student_count"] = sec.student_count
         section_results.append(res)

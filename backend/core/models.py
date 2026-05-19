@@ -79,7 +79,8 @@ class UserCreate(BaseModel):
     employee_id: Optional[str] = None
     qualifications: Optional[str] = None
     joining_date: Optional[str] = None  # YYYY-MM-DD
-    subjects: Optional[List[str]] = None  # subject ids
+    subjects: Optional[List[str]] = None  # subject ids — global "qualified to teach" list
+    class_subjects: Optional[dict] = None  # {class_id: [subject_id]} — optional per-class restriction; absent => can teach in any class
     monthly_salary: Optional[float] = None  # for teacher/accounts
 
 
@@ -89,6 +90,7 @@ class UserUpdate(BaseModel):
     qualifications: Optional[str] = None
     is_active: Optional[bool] = None
     subjects: Optional[List[str]] = None
+    class_subjects: Optional[dict] = None  # {class_id: [subject_id]} — optional per-class restriction
     monthly_salary: Optional[float] = None
 
 

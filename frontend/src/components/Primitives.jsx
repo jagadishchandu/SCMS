@@ -34,11 +34,14 @@ export function KPI({ label, value, hint, accent = "primary", testId }) {
   );
 }
 
-export function Section({ title, action, children }) {
+export function Section({ title, subtitle, action, children }) {
   return (
     <section className="panel" data-testid={`section-${(title || "").toLowerCase().replace(/\s+/g, "-")}`}>
-      <div className="flex items-center justify-between px-5 py-4 border-b border-line">
-        <h3 className="font-display text-base font-medium">{title}</h3>
+      <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-line">
+        <div className="flex-1 min-w-0">
+          <h3 className="font-display text-base font-medium">{title}</h3>
+          {subtitle ? <p className="text-xs text-ink-muted mt-0.5">{subtitle}</p> : null}
+        </div>
         {action}
       </div>
       <div className="p-5">{children}</div>
